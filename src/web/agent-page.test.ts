@@ -40,6 +40,6 @@ describe("agent page loading", () => {
   it("propagates other failures to the styled error boundary rather than treating them as missing agents", async () => {
     const error = new Error("Database unavailable");
     owned.mockRejectedValue(error);
-    await expect(load()).rejects.toBe(error);
+    await expect(load()).rejects.toMatchObject({ message: "Agent operation failed. Please try again.", status: 500 });
   });
 });

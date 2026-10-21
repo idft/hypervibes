@@ -1,17 +1,18 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { AgentsPage } from "../components/agents-page.js";
-import { listAgents } from "../web/agents.js";
-import { getSetupState } from "../web/setup.js";
+import { useSuspenseQuery } from "@tanstack/react-query";
+import { agentsQueryOptions } from "../web/agent-queries.js";
+import { setupQueryOptions } from "../web/provider-queries.js";
 
 export const Route = createFileRoute("/_authenticated/agents/")({
-  loader: async () => {
-    const [agents, setup] = await Promise.all([listAgents(), getSetupState()]);
-    return { agents, setup };
+  loader: async ({ context }) => {
+    await Promise.all([context.queryClient.ensureQueryData(agentsQueryOptions()), context.queryClient.ensureQueryData(setupQueryOptions())]);
   },
   component: AgentsRoute,
 });
 
 function AgentsRoute() {
-  const { agents, setup } = Route.useLoaderData();
-  return <AgentsPage agents={agents} setup={setup} />;
+  const { data: agents, error } = useSuspenseQuery(agentsQueryOptions());
+  const { data: setup } = useSuspenseQuery(setupQueryOptions());
+  return <>{error && <p role="alert" className="mb-4 text-sm text-red-300">{error.message}</p>}<AgentsPage agents={agents} setup={setup} /></>;
 }

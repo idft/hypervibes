@@ -1,15 +1,17 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { AgentSettingsPage } from "../components/agent-settings-page.js";
-import { getAgentChat } from "../web/agents.js";
-import { getRiskSettings } from "../web/risk.js";
+import { useSuspenseQuery } from "@tanstack/react-query";
+import { agentChatQueryOptions } from "../web/agent-queries.js";
+import { riskQueryOptions } from "../web/risk-queries.js";
 
 export const Route = createFileRoute("/_authenticated/agents/$agentId/settings")({
-  loader: async ({ params }) => ({ chat: await getAgentChat({ data: { id: params.agentId } }), risk: await getRiskSettings({ data: { agentId: params.agentId } }) }),
+  loader: async ({ params, context }) => {
+    await Promise.all([context.queryClient.fetchQuery(agentChatQueryOptions(params.agentId)), context.queryClient.ensureQueryData(riskQueryOptions(params.agentId))]);
+  },
   component: SettingsRoute,
 });
 function SettingsRoute() {
-  const { chat, risk } = Route.useLoaderData();
-  if (!chat.ok) return <p role="alert" className="text-red-300">{chat.error}</p>;
-  if (!risk.ok) return <p role="alert" className="text-red-300">{risk.error}</p>;
-  return <AgentSettingsPage key={chat.data.agent.id} initial={chat.data} risk={risk.data} />;
+  const { agentId } = Route.useParams();
+  const { data: chat } = useSuspenseQuery(agentChatQueryOptions(agentId));
+  return <AgentSettingsPage key={agentId} initial={chat} />;
 }

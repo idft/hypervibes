@@ -1,19 +1,18 @@
 import { useRouter } from "@tanstack/react-router";
 import { useRef, useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { invalidateAgentCollection } from "../web/agent-queries.js";
 import type { AgentRow } from "../db/agent-schema.js";
 import type { TradingAccountChoices } from "../hyperliquid/service.js";
 import { formatMoneyText } from "../hyperliquid/decimal.js";
 import type { ModelChoice } from "../providers/provider-service.js";
 import { ModelPicker, modelKey } from "./model-picker.js";
 
-export interface CreateAgentResult { ok: boolean; error?: string; data?: AgentRow }
-export interface CreateSubaccountResult { ok: boolean; error?: string; data?: { address: string; created: boolean } }
-
 export function CreateAgentPage({ choices, models, create, createSubaccount }: {
   choices: TradingAccountChoices;
   models: ModelChoice[];
-  create: (name: string, requestId: string, accountSelection: string, model: ModelChoice, includeDefaultSubagents: boolean, thinkingLevel: string) => Promise<CreateAgentResult>;
-  createSubaccount: (name: string) => Promise<CreateSubaccountResult>;
+  create: (name: string, requestId: string, accountSelection: string, model: ModelChoice, includeDefaultSubagents: boolean, thinkingLevel: string) => Promise<AgentRow>;
+  createSubaccount: (name: string) => Promise<{ address: string; created: boolean }>;
 }) {
   const router = useRouter();
   const [name, setName] = useState("");
@@ -22,10 +21,25 @@ export function CreateAgentPage({ choices, models, create, createSubaccount }: {
   const [thinkingLevel, setThinkingLevel] = useState("");
   const [includeDefaultSubagents, setIncludeDefaultSubagents] = useState(true);
   const model = models.find((choice) => modelKey(choice) === selectedModel);
-  const [pending, setPending] = useState(false);
-  const [subaccountPending, setSubaccountPending] = useState(false);
-  const [error, setError] = useState("");
-  const [subaccountStatus, setSubaccountStatus] = useState("");
+  const client = useQueryClient();
+  const creation = useMutation({
+    mutationFn: (args: Parameters<typeof create>) => create(...args),
+    onSuccess: async (agent) => {
+      await invalidateAgentCollection(client);
+      await router.navigate({ to: "/agents/$agentId", params: { agentId: agent.id } });
+    },
+  });
+  const subaccount = useMutation({
+    mutationFn: createSubaccount,
+    onSuccess: async (result) => {
+      setSelection(result.address);
+      await invalidateAgentCollection(client);
+    },
+  });
+  const pending = creation.isPending;
+  const subaccountPending = subaccount.isPending;
+  const error = creation.error?.message;
+  const subaccountStatus = subaccount.error?.message ?? (subaccount.data ? subaccount.data.created ? "Sub-account created." : "An existing matching Sub-account was found." : "");
   const request = useRef<{ settings: string; id: string } | null>(null);
   const inFlight = useRef(false);
   const subaccountInFlight = useRef(false);
@@ -36,39 +50,20 @@ export function CreateAgentPage({ choices, models, create, createSubaccount }: {
   async function submit() {
     if (inFlight.current || !trimmed || !model || !accountReady) return;
     inFlight.current = true;
-    setPending(true);
-    setError("");
     try {
       const settings = JSON.stringify([trimmed, selection, selectedModel, includeDefaultSubagents, thinkingLevel]);
       if (request.current?.settings !== settings) request.current = { settings, id: crypto.randomUUID() };
-      const result = await create(trimmed, request.current.id, selection, model, includeDefaultSubagents, thinkingLevel);
-      if (!result.ok || !result.data) { setError(result.error ?? "Unable to create Agent"); return; }
-      window.location.assign(`/agents/${result.data.id}`);
-    } catch {
-      setError("Unable to create Agent. Retry to safely check the same request.");
-    } finally {
-      inFlight.current = false;
-      setPending(false);
-    }
+      await creation.mutateAsync([trimmed, request.current.id, selection, model, includeDefaultSubagents, thinkingLevel]);
+    } catch { /* Query retains the error; preserve the creation request for retries. */ }
+    finally { inFlight.current = false; }
   }
 
   async function newSubaccount() {
     if (subaccountInFlight.current || !trimmed) return;
     subaccountInFlight.current = true;
-    setSubaccountPending(true);
-    setSubaccountStatus("");
-    try {
-      const result = await createSubaccount(trimmed);
-      if (!result.ok || !result.data) throw new Error(result.error ?? "Sub-Account creation failed.");
-      setSelection(result.data.address);
-      setSubaccountStatus(result.data.created ? "Sub-account created." : "An existing matching Sub-account was found.");
-      await router.invalidate();
-    } catch (reason) {
-      setSubaccountStatus(reason instanceof Error ? reason.message : "Sub-Account creation failed.");
-    } finally {
-      subaccountInFlight.current = false;
-      setSubaccountPending(false);
-    }
+    try { await subaccount.mutateAsync(trimmed); }
+    catch { /* Query retains the error. */ }
+    finally { subaccountInFlight.current = false; }
   }
 
   return (

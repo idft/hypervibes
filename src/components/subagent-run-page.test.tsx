@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, type ComponentProps } from "react";
+import { QueryClient, QueryClientProvider, notifyManager } from "@tanstack/react-query";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToString } from "react-dom/server";
@@ -10,7 +11,12 @@ import type { EntryRecord } from "@earendil-works/pi-durable";
 const mocks = vi.hoisted(() => ({ stopSubagentRun: vi.fn() }));
 vi.mock("../web/subagents.js", () => mocks);
 import { SubagentRunHistory } from "./subagent-run-history.js";
-import { SubagentRunPage } from "./subagent-run-page.js";
+import { SubagentRunPage as SubagentRunPageComponent } from "./subagent-run-page.js";
+notifyManager.setScheduler((callback) => { queueMicrotask(callback); return () => {}; });
+let client: QueryClient;
+function SubagentRunPage(props: ComponentProps<typeof SubagentRunPageComponent>) {
+  return <QueryClientProvider client={client}><SubagentRunPageComponent {...props} /></QueryClientProvider>;
+}
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const definition: SubagentRow = { id: "worker:fixture", agentId: "agent-fixture", kind: "worker", name: "Research", description: "", instructions: "Saved worker instructions", provider: "faux", modelId: "faux-1", thinkingLevel: "", tools: [], triggers: { inboxEnabled: false, workerDelegates: [], researchSources: [], fills: false, orderChanges: false }, templateOrigin: null, enabled: true, archived: false, delegatable: true, persistent: true, conversationId: null, schedule: "", delaySeconds: 30, nextRunAt: null, completion: "save", timeoutSeconds: 900, createdAt: 1, updatedAt: 1 };
 const run: SubagentRun = { id: "large-hex-id", agentId: definition.agentId, subagentId: definition.id, requestId: "request", source: "manual", task: "Full assignment prompt", config: definition, status: "completed", taskId: null, conversationId: null, result: "Complete final result", createdAt: Date.now() - 300000, finishedAt: Date.now(), reportedAt: null };
@@ -29,11 +35,11 @@ class RunSource extends EventTarget {
 describe("sub-agent run history and details", () => {
   let root: Root, container: HTMLDivElement;
   const dialogMethods = Object.fromEntries(["showModal", "close"].map((key) => [key, Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, key)]));
-  beforeEach(() => { vi.resetAllMocks(); Object.defineProperties(HTMLDialogElement.prototype, {
+  beforeEach(() => { vi.resetAllMocks(); client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } }); Object.defineProperties(HTMLDialogElement.prototype, {
     showModal: { configurable: true, value(this: HTMLDialogElement) { this.open = true; } },
     close: { configurable: true, value(this: HTMLDialogElement) { this.open = false; } },
   }); RunSource.instances = []; vi.stubGlobal("EventSource", RunSource); container = document.createElement("div"); container.className = "app-shell"; Element.prototype.scrollIntoView = vi.fn(); document.body.append(container); root = createRoot(container); });
-  afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); for (const [key, descriptor] of Object.entries(dialogMethods)) { if (descriptor) Object.defineProperty(HTMLDialogElement.prototype, key, descriptor); else Reflect.deleteProperty(HTMLDialogElement.prototype, key); } });
+  afterEach(async () => { await act(async () => root.unmount()); container.remove(); client.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); for (const [key, descriptor] of Object.entries(dialogMethods)) { if (descriptor) Object.defineProperty(HTMLDialogElement.prototype, key, descriptor); else Reflect.deleteProperty(HTMLDialogElement.prototype, key); } });
   it("renders a table with relative timestamps, accessible status icons, links and isolated Stop actions", async () => {
     const stop = vi.fn();
     await act(async () => root.render(<SubagentRunHistory agentId={run.agentId} runs={[run, { ...run, id: "running-id", status: "running", source: "delegation" }]} pending={false} onStop={stop} />));
@@ -245,7 +251,7 @@ describe("sub-agent run history and details", () => {
   });
   it("stops active work through the live stream without manual refreshes", async () => {
     const active = { ...initial, run: { ...run, status: "running" as const, result: "", finishedAt: null } };
-    mocks.stopSubagentRun.mockResolvedValue({ ok: true });
+    mocks.stopSubagentRun.mockResolvedValue(undefined);
     await act(async () => root.render(<SubagentRunPage initial={active} />));
     const source = RunSource.instances.at(-1)!;
     const cancel = () => [...container.querySelectorAll("button")].find((button) => button.textContent === "Cancel")!;
@@ -254,7 +260,7 @@ describe("sub-agent run history and details", () => {
     await act(async () => source.dispatchEvent(new MessageEvent("run", { data: JSON.stringify({ ...active, run: { ...active.run, status: "cancelled", result: "Stopped by user" } }) })));
     expect(container.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("cancelled");
     expect(container.textContent).not.toContain("Cancel");
-    mocks.stopSubagentRun.mockResolvedValue({ ok: false, error: "Unavailable" });
+    mocks.stopSubagentRun.mockRejectedValue(new Error("Unavailable"));
     await act(async () => source.dispatchEvent(new MessageEvent("run", { data: JSON.stringify(active) })));
     await act(async () => cancel().click());
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("Unavailable");

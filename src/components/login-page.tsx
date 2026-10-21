@@ -2,9 +2,11 @@ import { useRef, useState } from "react";
 import type { EIP1193Provider } from "viem";
 import { authClient } from "../web/auth-client.js";
 import { loginError, walletLogin } from "../web/wallet-login.js";
-import { getLoginDestination } from "../web/providers.js";
+import { useQueryClient } from "@tanstack/react-query";
+import { loginDestinationQueryOptions } from "../web/provider-queries.js";
 
 export function LoginPage() {
+  const client = useQueryClient();
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
@@ -30,7 +32,7 @@ export function LoginPage() {
           if (result.error) throw new Error("Sign-in could not be verified. Please try again.");
         },
       });
-      window.location.assign(await getLoginDestination());
+      window.location.assign(await client.fetchQuery(loginDestinationQueryOptions()));
     } catch (reason) {
       setError(loginError(reason));
       setStatus("");

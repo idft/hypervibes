@@ -1,5 +1,6 @@
-import { useRouter } from "@tanstack/react-router";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
+import { invalidateAgentCollection } from "../web/agent-queries.js";
 import type { AccountView } from "../hyperliquid/service.js";
 import { BUILDER_RECIPIENT } from "../hyperliquid/constants.js";
 import { formatMoneyText, moneyParts } from "../hyperliquid/decimal.js";
@@ -13,13 +14,11 @@ import {
   walletProvider,
 } from "../web/wallet-action.js";
 
-export interface AccountActionResult { ok: boolean; error?: string }
-
 export interface AccountActions {
-  setupApiWallet(source: "generate" | "import", privateKey: string): Promise<{ ok: boolean; error?: string; data?: string }>;
-  approveApiWallet(request: unknown): Promise<AccountActionResult>;
-  approveBuilderFee(request: unknown, feeBps: number): Promise<AccountActionResult>;
-  cancelBuilderFee(request: unknown): Promise<AccountActionResult>;
+  setupApiWallet(source: "generate" | "import", privateKey: string): Promise<string>;
+  approveApiWallet(request: unknown): Promise<void>;
+  approveBuilderFee(request: unknown, feeBps: number): Promise<void>;
+  cancelBuilderFee(request: unknown): Promise<void>;
 }
 
 function ExternalLinkIcon() {
@@ -52,64 +51,64 @@ function Balance({ balance }: { balance: string | null }) {
 }
 
 export function AccountPage({ view, actions, setup }: { view: AccountView; actions: AccountActions; setup: { agentCount: number; providerConnected: boolean } }) {
-  const router = useRouter();
-  const [signerStatus, setSignerStatus] = useState("");
-  const [signerPending, setSignerPending] = useState(false);
+  const client = useQueryClient();
+  const [signerProgress, setSignerStatus] = useState("");
   const [importing, setImporting] = useState(false);
   const [importedKey, setImportedKey] = useState("");
   const [feeBps, setFeeBps] = useState(view.builderFee.feeBps);
-  const [feeStatus, setFeeStatus] = useState("");
-  const [feePending, setFeePending] = useState(false);
+  const [feeProgress, setFeeStatus] = useState("");
   const signerInFlight = useRef(false);
-
-  async function generateAndApprove(source: "generate" | "import", force: boolean) {
-    if (signerInFlight.current) return;
-    signerInFlight.current = true;
-    setSignerPending(true);
-    setSignerStatus("");
-    try {
+  const feeInFlight = useRef(false);
+  const signer = useMutation({
+    mutationFn: async ({ source, force }: { source: "generate" | "import"; force: boolean }) => {
       let address = view.apiWallet?.address ?? null;
       if (force || !address) {
         setSignerStatus(force ? "Re-generating trading signer…" : "Generating trading signer…");
-        const result = await actions.setupApiWallet(source, source === "import" ? importedKey : "");
-        if (!result.ok || !result.data) throw new Error(result.error ?? "Could not generate trading signer.");
-        address = result.data;
+        address = await actions.setupApiWallet(source, source === "import" ? importedKey : "");
+        setImportedKey("");
       }
       setSignerStatus("Awaiting wallet signature…");
       const signed = await signWalletAction({ provider: walletProvider() }, "HyperliquidTransaction:ApproveAgent", approveAgentTypes,
         { type: "approveAgent", ...actionBase(), agentAddress: address, agentName: "HyperVibes" });
       setSignerStatus("Approving trading signer…");
-      const approval = await actions.approveApiWallet(signed);
-      if (!approval.ok) throw new Error(approval.error ?? "Hyperliquid did not approve the trading signer.");
+      await actions.approveApiWallet(signed);
       setSignerStatus("");
-      await router.invalidate();
-    } catch (reason) {
-      setSignerStatus(reason instanceof Error ? reason.message : "Trading signer setup failed.");
-    } finally {
-      signerInFlight.current = false;
-      setSignerPending(false);
-    }
-  }
-
-  async function submitBuilderFee(revoke: boolean) {
-    const clamped = Math.min(Math.max(Math.round(feeBps), 1), 10);
-    const maxFeeRate = revoke ? "0.00%" : `${(clamped / 100).toFixed(2)}%`;
-    setFeePending(true);
-    setFeeStatus("Awaiting wallet signature…");
-    try {
+    },
+    // Even a failed signature can follow a committed signer generation. Refresh
+    // its approval-required address so retries can reuse the stored signer.
+    onSettled: () => invalidateAgentCollection(client),
+  });
+  const fee = useMutation({
+    mutationFn: async (revoke: boolean) => {
+      const clamped = Math.min(Math.max(Math.round(feeBps), 1), 10);
+      const maxFeeRate = revoke ? "0.00%" : `${(clamped / 100).toFixed(2)}%`;
+      setFeeStatus("Awaiting wallet signature…");
       const signed = await signWalletAction({ provider: walletProvider() }, "HyperliquidTransaction:ApproveBuilderFee", approveBuilderFeeTypes,
         { type: "approveBuilderFee", ...actionBase(), maxFeeRate, builder: BUILDER_RECIPIENT });
-      const result = revoke
-        ? await actions.cancelBuilderFee(signed)
-        : await actions.approveBuilderFee(signed, clamped);
-      if (!result.ok) throw new Error(result.error ?? "Hyperliquid did not update the fee approval.");
+      if (revoke) await actions.cancelBuilderFee(signed);
+      else await actions.approveBuilderFee(signed, clamped);
       setFeeStatus("");
-      await router.invalidate();
-    } catch (reason) {
-      setFeeStatus(reason instanceof Error ? reason.message : "Approval failed.");
-    } finally {
-      setFeePending(false);
-    }
+    },
+    onSettled: () => invalidateAgentCollection(client),
+  });
+  const signerPending = signer.isPending;
+  const signerStatus = signer.error?.message ?? signerProgress;
+  const feePending = fee.isPending;
+  const feeStatus = fee.error?.message ?? feeProgress;
+
+  async function generateAndApprove(source: "generate" | "import", force: boolean) {
+    if (signerInFlight.current) return;
+    signerInFlight.current = true;
+    try { await signer.mutateAsync({ source, force }); }
+    catch { /* Query retains the error and refreshes any committed signer. */ }
+    finally { signerInFlight.current = false; }
+  }
+  async function submitBuilderFee(revoke: boolean) {
+    if (feeInFlight.current) return;
+    feeInFlight.current = true;
+    try { await fee.mutateAsync(revoke); }
+    catch { /* Query retains the approval error. */ }
+    finally { feeInFlight.current = false; }
   }
 
   const apiWallet = view.apiWallet;

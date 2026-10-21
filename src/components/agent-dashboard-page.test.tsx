@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, type ComponentProps } from "react";
+import { QueryClient, QueryClientProvider, notifyManager } from "@tanstack/react-query";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentDashboard } from "../hyperliquid/agent-dashboard.js";
@@ -7,7 +8,12 @@ const mocks = vi.hoisted(() => ({ sendAgentMessage: vi.fn(), runSubagent: vi.fn(
 vi.mock("../web/agents.js", () => ({ sendAgentMessage: mocks.sendAgentMessage }));
 vi.mock("../web/subagents.js", () => ({ runSubagent: mocks.runSubagent, saveSubagentSection: mocks.saveSubagentSection }));
 vi.mock("@tanstack/react-router", () => ({ useRouter: () => ({ navigate: mocks.navigate, invalidate: mocks.invalidate }) }));
-import { AgentDashboardPage } from "./agent-dashboard-page.js";
+import { AgentDashboardPage as AgentDashboardPageComponent } from "./agent-dashboard-page.js";
+notifyManager.setScheduler((callback) => { queueMicrotask(callback); return () => {}; });
+let queryClient: QueryClient;
+function AgentDashboardPage(props: ComponentProps<typeof AgentDashboardPageComponent>) {
+  return <QueryClientProvider client={queryClient}><AgentDashboardPageComponent {...props} /></QueryClientProvider>;
+}
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const initial: AgentDashboard = { address: `0x${"12".repeat(20)}`, fetchedAt: 0, perpEquity: "12.5", spotUsdc: "3", positions: [], orders: [], errors: [] };
 const source = () => FakeEventSource.instances.find((source) => source.url.endsWith("/dashboard/events"))!;
@@ -24,12 +30,13 @@ describe("Agent dashboard", () => {
   let root: Root;
   let container: HTMLDivElement;
   beforeEach(async () => {
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
     FakeEventSource.instances = [];
     vi.stubGlobal("EventSource", FakeEventSource);
     container = document.createElement("div"); document.body.append(container); root = createRoot(container);
     await act(async () => root.render(<AgentDashboardPage id="fixture" initial={initial} />));
   });
-  afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
+  afterEach(async () => { await act(async () => root.unmount()); container.remove(); queryClient.clear(); vi.unstubAllGlobals(); });
   it("sends dashboard chat to the orchestrator, prevents duplicates and navigates only after acceptance", async () => {
     const section = container.querySelector('[aria-label="Chat"]')!;
     expect(section.previousElementSibling?.getAttribute("aria-label")).toBe("Sub-agents");
@@ -50,11 +57,11 @@ describe("Agent dashboard", () => {
     await act(async () => reject(new Error("offline")));
     expect(section.querySelector('[role="alert"]')?.textContent).toContain("Retry with the same message");
     expect(input.value).toBe("Review my positions");
-    mocks.sendAgentMessage.mockResolvedValueOnce({ ok: false, error: "Agent unavailable" });
+    mocks.sendAgentMessage.mockRejectedValueOnce(new Error("Agent unavailable"));
     await act(async () => { submit(); });
     expect(section.textContent).toContain("Agent unavailable");
     expect(mocks.navigate).not.toHaveBeenCalled();
-    mocks.sendAgentMessage.mockResolvedValueOnce({ ok: true, data: { submissionId: 1 } });
+    mocks.sendAgentMessage.mockResolvedValueOnce({ submissionId: 1 });
     await act(async () => { submit(); });
     expect(mocks.sendAgentMessage.mock.calls[2]![0]).toEqual(first);
     expect(mocks.navigate).toHaveBeenCalledWith({ to: "/agents/$agentId/chat", params: { agentId: "fixture" } });
@@ -106,7 +113,7 @@ describe("Agent dashboard", () => {
       mocks.runSubagent.mockRejectedValueOnce(new Error("Network failure"));
       await submit();
       expect(document.querySelector("dialog [role=alert]")?.textContent).toContain("Retry with the same task");
-      mocks.runSubagent.mockResolvedValueOnce({ ok: true, data: { id: "run" } });
+      mocks.runSubagent.mockResolvedValueOnce({ id: "run" });
       await submit();
       expect(mocks.runSubagent.mock.calls[0]![0].data).toMatchObject({ agentId: "fixture", id: "worker", task: "Review BTC" });
       expect(mocks.runSubagent.mock.calls[0]![0].data.requestId).toBe(mocks.runSubagent.mock.calls[1]![0].data.requestId);
@@ -134,14 +141,14 @@ describe("Agent dashboard", () => {
       await act(async () => vi.advanceTimersByTime(60000));
       expect(section.textContent).toContain("Next run: in 13 minutes");
       expect(mocks.invalidate).not.toHaveBeenCalled();
-      mocks.saveSubagentSection.mockResolvedValueOnce({ ok: true, data: { enabled: false, schedule: "1h", nextRunAt: null } });
+      mocks.saveSubagentSection.mockResolvedValueOnce({ id: "worker", enabled: false, schedule: "1h", nextRunAt: null });
       await act(async () => section.querySelector<HTMLButtonElement>('[aria-label="Pause sub-agent"]')!.click());
       expect(mocks.saveSubagentSection).toHaveBeenLastCalledWith({ data: { agentId: "fixture", id: "worker", section: "enabled", settings: { enabled: false } } });
       expect(section.textContent).not.toContain("Next run:");
-      mocks.saveSubagentSection.mockResolvedValueOnce({ ok: false, error: "Unable to enable" });
+      mocks.saveSubagentSection.mockRejectedValueOnce(new Error("Unable to enable"));
       await act(async () => section.querySelector<HTMLButtonElement>('[aria-label="Enable sub-agent"]')!.click());
       expect(section.querySelector('[role="alert"]')?.textContent).toBe("Unable to enable");
-      mocks.saveSubagentSection.mockResolvedValueOnce({ ok: true, data: { enabled: true, schedule: "1h", nextRunAt: now + 61 * 60000 } });
+      mocks.saveSubagentSection.mockResolvedValueOnce({ id: "worker", enabled: true, schedule: "1h", nextRunAt: now + 61 * 60000 });
       await act(async () => section.querySelector<HTMLButtonElement>('[aria-label="Enable sub-agent"]')!.click());
       expect(section.textContent).toContain("Next run: in 1 hour");
     } finally { vi.useRealTimers(); }

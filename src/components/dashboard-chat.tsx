@@ -1,28 +1,28 @@
 import { useRef, useState } from "react";
 import { useRouter } from "@tanstack/react-router";
+import { useMutation } from "@tanstack/react-query";
 import { sendAgentMessage } from "../web/agents.js";
 
 export function DashboardChat({ agentId }: { agentId: string }) {
   const router = useRouter();
   const [message, setMessage] = useState("");
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState("");
+  const mutation = useMutation({
+    mutationFn: sendAgentMessage,
+    onSuccess: async () => { await router.navigate({ to: "/agents/$agentId/chat", params: { agentId } }); },
+  });
+  const pending = mutation.isPending;
+  const error = mutation.error ? `${mutation.error.message} Retry with the same message to avoid submitting it twice.` : "";
   const inFlight = useRef(false);
   const request = useRef<{ message: string; id: string } | null>(null);
 
   async function send() {
     if (inFlight.current || !message.trim()) return;
     inFlight.current = true;
-    setPending(true);
-    setError("");
     try {
       if (request.current?.message !== message) request.current = { message, id: crypto.randomUUID() };
-      const result = await sendAgentMessage({ data: { id: agentId, message, requestId: request.current.id } });
-      if (!result.ok) { setError(result.error); return; }
-      await router.navigate({ to: "/agents/$agentId/chat", params: { agentId } });
-    } catch {
-      setError("Unable to complete the request. Retry with the same message to avoid submitting it twice.");
-    } finally { inFlight.current = false; setPending(false); }
+      await mutation.mutateAsync({ data: { id: agentId, message, requestId: request.current.id } });
+    } catch { /* Query retains the error; preserve the idempotent submission. */ }
+    finally { inFlight.current = false; }
   }
 
   return <section aria-label="Chat" className="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">

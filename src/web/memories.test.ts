@@ -28,9 +28,9 @@ describe("authenticated Agent-owned memory server functions", () => {
     runtime = { origin: "http://localhost:3003", status: vi.fn(), agents: { owned, execution: { memories: { list, get }, insights: { current, revision, history, replace }, operator } } } as unknown as AppRuntime;
   });
   it("checks ownership before every read and forwards bounded query contracts to the service", async () => {
-    expect(await invoke(listMemories, runtime, { agentId: "agent", filters: { kind: "research", limit: 25 } })).toEqual({ ok: true, data: { items: [], nextCursor: null } });
+    expect(await invoke(listMemories, runtime, { agentId: "agent", filters: { kind: "research", limit: 25 } })).toEqual({ items: [], nextCursor: null });
     expect(list).toHaveBeenCalledWith("agent", { kind: "research", limit: 25 });
-    expect(await invoke(getMemory, runtime, { agentId: "foreign", ref: "m1" })).toMatchObject({ ok: false, error: "Agent not found" }); expect(get).not.toHaveBeenCalled();
+    await expect(invoke(getMemory, runtime, { agentId: "foreign", ref: "m1" })).rejects.toMatchObject({ message: "Agent not found", status: 404 }); expect(get).not.toHaveBeenCalled();
     await invoke(getInsights, runtime, { agentId: "agent", scope: { kind: "agent" }, history: true });
     expect(current).toHaveBeenCalledWith("agent", { kind: "agent" }); expect(history).toHaveBeenCalledWith("agent", { kind: "agent" }, {});
     await expect(invoke(listMemories, runtime, { agentId: "agent", unknownGlobalScope: true })).rejects.toThrow();
@@ -46,7 +46,7 @@ describe("authenticated Agent-owned memory server functions", () => {
   it("uses authenticated operator provenance and stable UI receipt keys, preserving visible CAS conflicts", async () => {
     const id = randomUUID(), input = { scope: { kind: "agent" }, expectedVersion: 1, content: "Draft", reason: "Consolidate", evidenceRefs: [] };
     replace.mockRejectedValue(new InsightConflict(2));
-    expect(await invoke(replaceInsights, runtime, { agentId: "agent", requestId: id, input })).toMatchObject({ ok: false, error: expect.stringContaining("v2") });
+    await expect(invoke(replaceInsights, runtime, { agentId: "agent", requestId: id, input })).rejects.toMatchObject({ message: expect.stringContaining("v2") });
     expect(operator).toHaveBeenCalledWith("agent", "owner"); expect(replace).toHaveBeenCalledWith({ agentId: "agent", userId: "owner" }, `ui:${id}`, input);
     await expect(invoke(replaceInsights, runtime, { agentId: "agent", requestId: "model-supplied-task", input })).rejects.toThrow("request ID");
   });

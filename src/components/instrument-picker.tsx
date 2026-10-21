@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
-import { getChartInstruments } from "../web/charts.js";
+import { useQuery } from "@tanstack/react-query";
+import { chartInstrumentsQueryOptions } from "../web/chart-queries.js";
 import { ConfigDialog, configButton, configInput } from "./config-dialog.js";
 import { InstrumentLabel } from "./instrument-label.js";
 
@@ -27,29 +28,16 @@ function InstrumentDialog({ agentId, value, onCancel, onApply }: { agentId: stri
   const [unlimited, setUnlimited] = useState(value === null);
   const [selected, setSelected] = useState(() => new Set(value ?? []));
   const [search, setSearch] = useState("");
-  const [catalog, setCatalog] = useState<string[] | null>(null);
-  const [error, setError] = useState("");
-  const [attempt, setAttempt] = useState(0);
-  useEffect(() => {
-    let disposed = false;
-    setCatalog(null); setError("");
-    // Charts already owns an authenticated, cached catalog of active main-DEX perps.
-    void getChartInstruments({ data: { id: agentId } }).then((result) => {
-      if (disposed) return;
-      if (!result.ok) throw new Error(result.error);
-      setCatalog(result.data);
-    }).catch((cause: unknown) => {
-      if (!disposed) setError(cause instanceof Error ? cause.message : "Unable to load instruments.");
-    });
-    return () => { disposed = true; };
-  }, [agentId, attempt]);
+  const query = useQuery(chartInstrumentsQueryOptions(agentId));
+  const catalog = query.data;
+  const error = query.error?.message;
   const active = new Set(catalog ?? []);
   // Keep saved symbols visible if the venue delists them; never silently drop restrictions.
   const symbols = [...new Set([...(catalog ?? []), ...(value ?? [])])].sort();
   const matches = symbols.filter((symbol) => symbol.toLowerCase().includes(search.trim().toLowerCase()));
   const selectable = matches.filter((symbol) => active.has(symbol));
   const bulk = new Set([...selected, ...selectable]);
-  const ready = catalog !== null;
+  const ready = catalog !== undefined;
   function toggle(symbol: string) {
     setSelected((current) => {
       const next = new Set(current);
@@ -75,7 +63,7 @@ function InstrumentDialog({ agentId, value, onCancel, onApply }: { agentId: stri
     </div>
     {!unlimited && !selected.size && <p role="status" className="text-sm text-amber-200">Select at least one instrument, or choose No limit to allow all instruments.</p>}
     {!unlimited && (catalog?.length ?? 0) > maxSelections && <p className="text-xs text-zinc-400">Choose up to {maxSelections} instruments. Filter to select all matching instruments, or use No limit to allow every instrument.</p>}
-    {error ? <div role="alert" className="space-y-3 text-sm text-red-300"><p>{error}</p><button type="button" onClick={() => setAttempt((current) => current + 1)} className={configButton}>Retry</button></div>
+    {error ? <div role="alert" className="space-y-3 text-sm text-red-300"><p>{error}</p><button type="button" onClick={() => { void query.refetch(); }} className={configButton}>Retry</button></div>
       : !ready ? <p role="status" className="text-sm text-zinc-400">Loading instruments…</p>
       : <fieldset disabled={unlimited} aria-label="Trading instruments" className="min-h-0 space-y-2 overflow-y-auto pb-5 disabled:opacity-50" style={{ maxHeight: "24rem" }}>
         {matches.map((symbol) => <label key={symbol} className={instrumentRow}>
@@ -85,7 +73,7 @@ function InstrumentDialog({ agentId, value, onCancel, onApply }: { agentId: stri
           </span>
           <InstrumentLabel symbol={symbol} />{!active.has(symbol) && <span className="ml-auto text-xs text-amber-200">Unavailable</span>}
         </label>)}
-        {!matches.length && <p className="rounded-xl border border-zinc-800 p-6 text-center text-sm text-zinc-500">{catalog.length ? "No instruments match this filter." : "No active perpetual instruments are available."}</p>}
+        {!matches.length && <p className="rounded-xl border border-zinc-800 p-6 text-center text-sm text-zinc-500">{catalog?.length ? "No instruments match this filter." : "No active perpetual instruments are available."}</p>}
       </fieldset>}
   </ConfigDialog>;
 }

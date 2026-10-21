@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
+import { QueryClient, QueryClientProvider, notifyManager } from "@tanstack/react-query";
+import { chartLayoutsQueryOptions } from "../web/chart-queries.js";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChartLayout } from "../charts/contracts.js";
@@ -8,6 +10,7 @@ import { useChartLayouts } from "./use-chart-layouts.js";
 const mocks = vi.hoisted(() => ({ create: vi.fn(), change: vi.fn(), remove: vi.fn(), list: vi.fn() }));
 vi.mock("../web/charts.js", () => ({ createChartLayout: mocks.create, changeChartLayout: mocks.change, deleteChartLayout: mocks.remove, getChartLayouts: mocks.list }));
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+notifyManager.setScheduler((callback) => { queueMicrotask(callback); return () => {}; });
 class LayoutSource extends EventTarget {
   static instances: LayoutSource[] = [];
   close = vi.fn();
@@ -19,17 +22,18 @@ const fixture = (id = "first", revision = 0): ChartLayout => ({ id, revision, do
 
 describe("SSE chart layouts", () => {
   let root: Root | undefined, container: HTMLDivElement, state: ReturnType<typeof useChartLayouts>, initial: ChartLayout[];
-  function Fixture() { state = useChartLayouts("agent", initial, ["BTC"]); return null; }
+  let client: QueryClient;
+  function Fixture() { state = useChartLayouts("agent", ["BTC"]); return null; }
   const source = () => LayoutSource.instances.at(-1)!;
-  async function render() { await act(async () => root!.render(<Fixture />)); }
+  async function render() { if (!client.getQueryData(chartLayoutsQueryOptions("agent").queryKey)) client.setQueryData(chartLayoutsQueryOptions("agent").queryKey, initial); await act(async () => root!.render(<QueryClientProvider client={client}><Fixture /></QueryClientProvider>)); }
   async function push(layouts: ChartLayout[]) { await act(async () => source().emit("chart-layouts", layouts)); }
   beforeEach(() => {
-    vi.resetAllMocks(); localStorage.clear(); LayoutSource.instances = []; vi.stubGlobal("EventSource", LayoutSource);
+    vi.resetAllMocks(); client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } }); localStorage.clear(); LayoutSource.instances = []; vi.stubGlobal("EventSource", LayoutSource);
     initial = [fixture()]; container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   });
   afterEach(async () => {
     if (root) await act(async () => root!.unmount());
-    container.remove(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals();
+    container.remove(); client.clear(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals();
   });
 
   it("uses one persistent subscription, makes no polling requests, and applies reconnect snapshots", async () => {
@@ -56,7 +60,7 @@ describe("SSE chart layouts", () => {
     await act(async () => { void state!.change("edit", { label: "My edit", settings: { notes: "Mine" } }); });
     expect(state!.pending).toBe(true);
     const latest = fixture("first", 2); await push([latest]);
-    await act(async () => finish({ ok: true, data: fixture("first", 1) }));
+    await act(async () => finish(fixture("first", 1)));
     expect(state!.layout).toEqual(latest); expect(state!.pending).toBe(false);
   });
 
@@ -66,9 +70,9 @@ describe("SSE chart layouts", () => {
     await render(); await push(initial);
     await act(async () => { void state!.change("edit", { label: "First move" }); });
     await push([fixture("first", 0)]);
-    await act(async () => finish({ ok: true, data: fixture("first", 1) }));
+    await act(async () => finish(fixture("first", 1)));
     expect(state!.layout?.revision).toBe(1); expect(state!.pending).toBe(false);
-    mocks.change.mockResolvedValueOnce({ ok: true, data: fixture("first", 2) });
+    mocks.change.mockResolvedValueOnce(fixture("first", 2));
     await act(async () => { await state!.change("edit", { label: "Second move" }); });
     expect(mocks.change).toHaveBeenLastCalledWith({ data: expect.objectContaining({ revision: 1 }) });
     expect(state!.layout?.revision).toBe(2);
@@ -76,11 +80,12 @@ describe("SSE chart layouts", () => {
   });
 
   it("does not downgrade a committed layout when an older SSE frame arrives late", async () => {
-    mocks.change.mockResolvedValueOnce({ ok: true, data: fixture("first", 1) });
+    mocks.change.mockResolvedValueOnce(fixture("first", 1));
     await render(); await push(initial);
     await act(async () => { await state!.change("edit", { label: "Move" }); });
     await push([fixture("first", 0), fixture("other", 2)]);
     expect(state!.layouts).toEqual([fixture("first", 1), fixture("other", 2)]);
+    expect(client.getQueryData(chartLayoutsQueryOptions("agent").queryKey)).toEqual(state!.layouts);
     await push([fixture("first", 2), fixture("other", 3)]);
     expect(state!.layout?.revision).toBe(2);
     await push([fixture("other", 3)]);
@@ -93,8 +98,9 @@ describe("SSE chart layouts", () => {
     await render(); await push(initial);
     await act(async () => { void state!.change("edit", { label: "My edit" }); });
     await push([]);
-    await act(async () => finish({ ok: true, data: fixture("first", 1) }));
+    await act(async () => finish(fixture("first", 1)));
     expect(state!.layouts).toEqual([]); expect(mocks.create).not.toHaveBeenCalled();
+    expect(client.getQueryData(chartLayoutsQueryOptions("agent").queryKey)).toEqual([]);
   });
 
   it("does not restore a newly created layout deleted before its response arrives", async () => {
@@ -103,7 +109,7 @@ describe("SSE chart layouts", () => {
     await render(); await push(initial);
     await act(async () => { void state!.create("New", false, "new"); });
     await push([fixture("new"), ...initial]); await push(initial);
-    await act(async () => finish({ ok: true, data: fixture("new") }));
+    await act(async () => finish(fixture("new")));
     expect(state!.layouts).toEqual(initial); expect(state!.layout).toEqual(initial[0]);
   });
 
@@ -115,7 +121,7 @@ describe("SSE chart layouts", () => {
   });
 
   it("initializes an empty workspace once and remembers the chosen layout", async () => {
-    mocks.create.mockResolvedValue({ ok: true, data: fixture("default") });
+    mocks.create.mockResolvedValue(fixture("default"));
     initial = []; await render(); await push([]);
     expect(mocks.create).toHaveBeenCalledTimes(1);
     expect(state!.layout?.id).toBe("default");
@@ -125,7 +131,7 @@ describe("SSE chart layouts", () => {
   });
 
   it("preserves save errors while reconciling conflicts through SSE, without a GET or retry", async () => {
-    mocks.change.mockResolvedValue({ ok: false, error: "Chart changed elsewhere" });
+    mocks.change.mockRejectedValue(new Error("Chart changed elsewhere"));
     await render(); await push(initial);
     await act(async () => { await state!.change("edit", { label: "My edit" }); });
     const latest = fixture("first", 3); await push([latest]);

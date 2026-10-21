@@ -1,11 +1,11 @@
-import { isRedirect } from "@tanstack/react-router";
+import { isRedirect, notFound, redirect } from "@tanstack/react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentError } from "../agents/agent-input.js";
 import type { AppRuntime } from "../runtime.js";
 
 const mocks = vi.hoisted(() => ({ currentUser: vi.fn() }));
 vi.mock("../auth-user.js", () => ({ currentUser: mocks.currentUser }));
-import { agentAction, agentUser, booleanField, optionalNumber, selectedTradingAccount } from "./agents.js";
+import { agentOperation, agentUser, booleanField, optionalNumber, selectedTradingAccount } from "./agents.js";
 
 const runtime = { origin: "http://localhost:3003", status: vi.fn() } as unknown as AppRuntime;
 describe("Agent server-function boundary", () => {
@@ -67,13 +67,20 @@ describe("Agent server-function boundary", () => {
     vi.resetModules();
     const { AgentError: RuntimeAgentError } = await import("../agents/agent-input.js");
     expect(RuntimeAgentError).not.toBe(AgentError);
-    expect(await agentAction(async () => { throw new RuntimeAgentError("Select a supported thinking level."); })).toEqual({ ok: false, error: "Select a supported thinking level." });
-    expect(await agentAction(async () => { throw Object.assign(new Error("secret SQL"), { name: "AgentError", status: 400 }); })).toEqual({ ok: false, error: "Agent operation failed. Please try again." });
+    await expect(agentOperation(async () => { throw new RuntimeAgentError("Select a supported thinking level."); })).rejects.toThrow("Select a supported thinking level.");
+    await expect(agentOperation(async () => { throw Object.assign(new Error("secret SQL"), { name: "AgentError", status: 400 }); })).rejects.toMatchObject({ message: "Agent operation failed. Please try again.", status: 500 });
   });
-  it("returns public errors without disclosing unexpected provider/storage errors", async () => {
-    expect(await agentAction(async () => { throw new AgentError("Agent not found", 404); })).toEqual({ ok: false, error: "Agent not found" });
-    const result = await agentAction(async () => { throw new Error("secret-key-fixture sql stack"); });
-    expect(result).toEqual({ ok: false, error: "Agent operation failed. Please try again." });
-    expect(JSON.stringify(result)).not.toContain("secret-key");
+  it("returns domain data and preserves public errors without disclosing internal failures", async () => {
+    expect(await agentOperation(async () => ({ id: "agent" }))).toEqual({ id: "agent" });
+    const missing = new AgentError("Agent not found", 404);
+    await expect(agentOperation(async () => { throw missing; })).rejects.toBe(missing);
+    const error: unknown = await agentOperation(async () => { throw new Error("secret-key-fixture sql stack"); }).catch((cause: unknown) => cause);
+    expect(error).toMatchObject({ message: "Agent operation failed. Please try again.", status: 500 });
+    expect(String(error)).not.toContain("secret-key");
+  });
+  it("preserves router redirects and not-found protocol without sanitizing them", async () => {
+    for (const protocol of [redirect({ to: "/login" }), notFound()]) {
+      await expect(agentOperation(async () => { throw protocol; })).rejects.toBe(protocol);
+    }
   });
 });

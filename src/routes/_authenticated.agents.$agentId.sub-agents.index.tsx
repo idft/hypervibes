@@ -1,10 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { SubagentsPage } from "../components/subagents-page.js";
-import { listSubagents } from "../web/subagents.js";
+import { subagentsQueryOptions } from "../web/subagent-queries.js";
+
 export const Route = createFileRoute("/_authenticated/agents/$agentId/sub-agents/")({
-  loader: ({ params }) => listSubagents({ data: { agentId: params.agentId } }), component: Page,
+  loader: async ({ params, context }) => { await context.queryClient.ensureQueryData(subagentsQueryOptions(params.agentId)); },
+  component: Page,
 });
 function Page() {
-  const result = Route.useLoaderData(), { agentId } = Route.useParams();
-  return result.ok ? <SubagentsPage key={agentId} agentId={agentId} definitions={result.data} /> : <p role="alert" className="text-red-300">{result.error}</p>;
+  const { agentId } = Route.useParams();
+  return <SubagentsPage key={agentId} agentId={agentId} />;
 }

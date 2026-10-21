@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, type ComponentProps } from "react";
+import { QueryClient, QueryClientProvider, notifyManager } from "@tanstack/react-query";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeAll, afterAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,7 +10,13 @@ import type { ModelChoice } from "../providers/provider-service.js";
 const mocks = vi.hoisted(() => ({ compactAgentChat: vi.fn(), getAgentChatHistory: vi.fn(), retryAgent: vi.fn(), resetAgentChat: vi.fn(), saveSubagentSection: vi.fn(), sendAgentMessage: vi.fn(), stopAgentChat: vi.fn() }));
 vi.mock("../web/agents.js", () => mocks);
 vi.mock("../web/subagents.js", () => ({ saveSubagentSection: mocks.saveSubagentSection }));
-import { AgentChatPage } from "./agent-chat-page.js";
+import { AgentChatPage as AgentChatPageComponent } from "./agent-chat-page.js";
+
+notifyManager.setScheduler((callback) => { queueMicrotask(callback); return () => {}; });
+let queryClient: QueryClient;
+function AgentChatPage(props: ComponentProps<typeof AgentChatPageComponent>) {
+  return <QueryClientProvider client={queryClient}><AgentChatPageComponent {...props} /></QueryClientProvider>;
+}
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -62,6 +69,7 @@ describe("Agent chat", () => {
   });
   beforeEach(async () => {
     vi.resetAllMocks();
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
     FakeEventSource.instances = [];
     Element.prototype.scrollIntoView = vi.fn();
     container = document.createElement("div");
@@ -72,6 +80,7 @@ describe("Agent chat", () => {
   afterEach(async () => {
     await act(async () => root.unmount());
     container.remove();
+    queryClient.clear();
   });
   const current = () => FakeEventSource.instances.at(-1)!;
   async function type(text: string) {
@@ -109,7 +118,7 @@ describe("Agent chat", () => {
     expect(container.querySelector("textarea")!.placeholder).toBe("Ask about this chart");
     expect(container.querySelector("button[type=submit] svg")).not.toBeNull();
     expect(container.querySelector("button[type=submit]")!.getAttribute("aria-label")).toBe("Send message");
-    mocks.sendAgentMessage.mockResolvedValue({ ok: true, data: { submissionId: 1 } });
+    mocks.sendAgentMessage.mockResolvedValue({ submissionId: 1 });
     await type("What do you see?"); await submit();
     expect(mocks.sendAgentMessage).toHaveBeenCalledWith({ data: expect.objectContaining({ message: "What do you see?" }) });
     await act(async () => current().emit("chat", { ...initial, busy: true, partial: "Checking the chart" }));
@@ -120,7 +129,7 @@ describe("Agent chat", () => {
     expect(container.querySelector("[aria-label='Choose model']")).not.toBeNull();
   });
   it("applies pushed snapshots without polling requests", async () => {
-    mocks.sendAgentMessage.mockResolvedValue({ ok: true, data: { submissionId: 1 } });
+    mocks.sendAgentMessage.mockResolvedValue({ submissionId: 1 });
     await type("Hello");
     await submit();
     expect(mocks.sendAgentMessage).toHaveBeenCalledOnce();
@@ -132,7 +141,7 @@ describe("Agent chat", () => {
     expect(container.textContent).toContain("Idle");
   });
   it("stops on a single Escape only while working, and preserves the draft", async () => {
-    mocks.stopAgentChat.mockResolvedValue({ ok: true });
+    mocks.stopAgentChat.mockResolvedValue(undefined);
     const escape = (options: KeyboardEventInit = {}) => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true, ...options }));
     await act(async () => { escape(); });
     expect(mocks.stopAgentChat).not.toHaveBeenCalled();
@@ -202,8 +211,8 @@ describe("Agent chat", () => {
     const first = mocks.sendAgentMessage.mock.calls[0]![0];
     expect(first.data.message).toBe("Hello");
     await act(async () => reject(new Error("network failure")));
-    expect(container.querySelector("[role=alert]")?.textContent).toContain("Unable to complete");
-    mocks.sendAgentMessage.mockResolvedValue({ ok: true, data: { submissionId: 1 } });
+    expect(container.querySelector("[role=alert]")?.textContent).toContain("network failure");
+    mocks.sendAgentMessage.mockResolvedValue({ submissionId: 1 });
     await submit();
     expect(mocks.sendAgentMessage.mock.calls[1]![0]).toEqual(first);
     expect(container.querySelector("textarea")!.value).toBe("");
@@ -226,7 +235,7 @@ describe("Agent chat", () => {
       const radio = [...dialog.querySelectorAll<HTMLInputElement>("input[name=model]")].find((input) => input.closest("label")!.textContent!.includes("GPT Test"))!;
       radio.click();
     });
-    mocks.saveSubagentSection.mockResolvedValueOnce({ ok: true, data: {} });
+    mocks.saveSubagentSection.mockResolvedValueOnce({ id: "main:agent-fixture" });
     await act(async () => { [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Apply")!.click(); });
     await act(async () => {});
     expect(mocks.saveSubagentSection).toHaveBeenCalledWith({ data: { agentId: "agent-fixture", id: "main:agent-fixture", section: "model", settings: { provider: "opencode-go", modelId: "gpt-test", thinkingLevel: "" } } });
@@ -247,7 +256,7 @@ describe("Agent chat", () => {
     expect(container.querySelector("form button")!.hasAttribute("disabled")).toBe(true);
   });
   it("sends on Enter and keeps Shift+Enter as a newline", async () => {
-    mocks.sendAgentMessage.mockResolvedValue({ ok: true, data: { submissionId: 1 } });
+    mocks.sendAgentMessage.mockResolvedValue({ submissionId: 1 });
     const textarea = () => container.querySelector("textarea")!;
     const key = (options: KeyboardEventInit) => textarea().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...options }));
     await type("Hello");
@@ -270,8 +279,8 @@ describe("Agent chat", () => {
     expect(html).toContain("Lifetime conversation usage, including before context resets");
   });
   it("requires confirmation before resetting context, explains what is preserved, and can compact", async () => {
-    mocks.resetAgentChat.mockResolvedValue({ ok: true });
-    mocks.compactAgentChat.mockResolvedValue({ ok: true, data: {} });
+    mocks.resetAgentChat.mockResolvedValue(undefined);
+    mocks.compactAgentChat.mockResolvedValue({});
     const buttons = () => [...container.querySelectorAll("header button")] as [HTMLButtonElement, HTMLButtonElement, HTMLButtonElement];
     const [, compactButton, resetButton] = buttons();
     await act(async () => { compactButton.click(); });
@@ -317,10 +326,10 @@ describe("Agent chat", () => {
     expect(container.textContent).not.toContain("Load earlier messages");
   });
   it("loads older transcript pages when scrolled to the top", async () => {
-    mocks.getAgentChatHistory.mockResolvedValue({ ok: true, data: { messages: [
+    mocks.getAgentChatHistory.mockResolvedValue({ messages: [
       { id: "old:1", role: "user", text: "First ever", failed: false },
       { id: "old:2", role: "assistant", text: "Ancient reply", failed: false },
-    ], before: 2, more: false } });
+    ], before: 2, more: false });
     await act(async () => container.querySelector("[aria-label=Conversation]")!.dispatchEvent(new Event("scroll", { bubbles: true })));
     expect(mocks.getAgentChatHistory).toHaveBeenCalledWith({ data: { id: "agent-fixture", before: undefined } });
     expect(container.textContent).toContain("First ever");
@@ -329,9 +338,9 @@ describe("Agent chat", () => {
     expect(container.textContent).not.toContain("Loading earlier messages…");
   });
   it("drops loaded history on context reset and explains how to view messages before reset", async () => {
-    mocks.getAgentChatHistory.mockResolvedValue({ ok: true, data: { messages: [
+    mocks.getAgentChatHistory.mockResolvedValue({ messages: [
       { id: "old:1", role: "user", text: "From the old session", failed: false },
-    ], before: 5, more: false } });
+    ], before: 5, more: false });
     await act(async () => container.querySelector("[aria-label=Conversation]")!.dispatchEvent(new Event("scroll", { bubbles: true })));
     expect(container.textContent).toContain("From the old session");
     await act(async () => current().emit("chat", {
@@ -348,7 +357,7 @@ describe("Agent chat", () => {
   it("loads pre-reset messages without scrolling and preserves them across snapshots", async () => {
     const reset: AgentChat = { ...initial, history: true, messages: [{ id: "reset:9", role: "system", text: "Context reset", failed: false, marker: "reset" }], usage: { ...initial.usage, input: 28000, output: 3800 } };
     await act(async () => current().emit("chat", reset));
-    mocks.getAgentChatHistory.mockResolvedValue({ ok: true, data: { messages: [{ id: "1:0", role: "user", text: "Before reset", failed: false }, ...reset.messages], before: 1, more: false } });
+    mocks.getAgentChatHistory.mockResolvedValue({ messages: [{ id: "1:0", role: "user", text: "Before reset", failed: false }, ...reset.messages], before: 1, more: false });
     const historyButton = [...container.querySelectorAll("button")].find((button) => button.textContent === "View messages before reset")!;
     await act(async () => { historyButton.click(); });
     expect(mocks.getAgentChatHistory).toHaveBeenCalledOnce();
@@ -369,9 +378,14 @@ describe("Agent chat", () => {
     await act(async () => { [...container.querySelectorAll("button")].find((button) => button.textContent === "View messages before reset")!.click(); });
     expect(container.textContent).toContain("Loading earlier messages…");
     await act(async () => current().emit("chat", { ...reset, messages: [{ ...reset.messages[0]!, id: "reset:20" }] }));
-    await act(async () => { resolve({ ok: true, data: { messages: [{ id: "1:0", role: "user", text: "Stale page", failed: false }], before: 1, more: false } }); });
+    // The new context must not dedupe against the old context's pending query.
+    mocks.getAgentChatHistory.mockResolvedValueOnce({ messages: [{ id: "10:0", role: "user", text: "Current context history", failed: false }], before: 10, more: false });
+    await act(async () => { [...container.querySelectorAll("button")].find((button) => button.textContent === "View messages before reset")!.click(); });
+    expect(mocks.getAgentChatHistory).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain("Current context history");
+    await act(async () => { resolve({ messages: [{ id: "1:0", role: "user", text: "Stale page", failed: false }], before: 1, more: false }); });
     expect(container.textContent).not.toContain("Stale page");
-    expect(container.textContent).toContain("View messages before reset");
+    expect(container.textContent).toContain("Current context history");
   });
   it("allows retrying history after a network failure", async () => {
     await act(async () => current().emit("chat", { ...initial, history: true }));
@@ -380,13 +394,13 @@ describe("Agent chat", () => {
     await act(async () => { button.click(); });
     expect(container.querySelector("[role=alert]")?.textContent).toContain("Unable to load earlier messages");
     expect(button.disabled).toBe(false);
-    mocks.getAgentChatHistory.mockResolvedValueOnce({ ok: true, data: { messages: [{ id: "1:0", role: "user", text: "Recovered history", failed: false }], before: 1, more: false } });
+    mocks.getAgentChatHistory.mockResolvedValueOnce({ messages: [{ id: "1:0", role: "user", text: "Recovered history", failed: false }], before: 1, more: false });
     await act(async () => { button.click(); });
     expect(container.textContent).toContain("Recovered history");
     expect(container.querySelector("[role=alert]")).toBeNull();
   });
   it("restores composer focus after a send so chatting stays hands-on-keyboard", async () => {
-    mocks.sendAgentMessage.mockResolvedValue({ ok: true, data: { submissionId: 1 } });
+    mocks.sendAgentMessage.mockResolvedValue({ submissionId: 1 });
     const textarea = () => container.querySelector("textarea")!;
     expect(document.activeElement).toBe(textarea());
     await act(async () => { (document.activeElement as HTMLElement).blur(); });
@@ -410,7 +424,7 @@ describe("Agent chat", () => {
     expect(container.textContent).toContain("Queued · sent when the response finishes");
   });
   it("explains when there is nothing to compact", async () => {
-    mocks.compactAgentChat.mockResolvedValue({ ok: true, data: { message: "Nothing to compact yet — the recent conversation still fits within the context window." } });
+    mocks.compactAgentChat.mockResolvedValue({ message: "Nothing to compact yet — the recent conversation still fits within the context window." });
     const compactButton = container.querySelectorAll("header button")[1] as HTMLButtonElement;
     await act(async () => { compactButton.click(); });
     expect(container.textContent).toContain("Nothing to compact yet — the recent conversation still fits within the context window.");
@@ -435,7 +449,7 @@ describe("Agent chat", () => {
     const first = mocks.sendAgentMessage.mock.calls[0]![0];
     expect(first.data.chart).toEqual(chart);
     expect(container.textContent).toContain("Retries reuse the captured chart");
-    mocks.sendAgentMessage.mockResolvedValue({ ok: true, data: { submissionId: 1 } });
+    mocks.sendAgentMessage.mockResolvedValue({ submissionId: 1 });
     await submit();
     expect(capture).toHaveBeenCalledTimes(1);
     expect(mocks.sendAgentMessage.mock.calls[1]![0]).toEqual(first);
@@ -449,7 +463,7 @@ describe("Agent chat", () => {
     expect(mocks.sendAgentMessage).not.toHaveBeenCalled();
     let release!: (value: unknown) => void;
     capture.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
-    mocks.sendAgentMessage.mockResolvedValue({ ok: true, data: { submissionId: 1 } });
+    mocks.sendAgentMessage.mockResolvedValue({ submissionId: 1 });
     await submit();
     await type("My next message");
     await act(async () => release({ layoutId: crypto.randomUUID(), revision: 0, capturedAt: Date.now(), status: "live", range: { from: 1, to: 2 }, candles: [] }));

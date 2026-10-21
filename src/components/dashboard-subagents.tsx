@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "@tanstack/react-router";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { cacheSubagent, invalidateSubagentLists } from "../web/subagent-queries.js";
 import { toast } from "sonner";
 import { format } from "timeago.js";
 import { SubagentEnabledToggle } from "./subagent-enabled-toggle.js";
@@ -67,26 +69,21 @@ function NextRun({ timestamp }: { timestamp: number }) {
 
 function DashboardWorkerControls({ agentId, definition }: { agentId: string; definition: DashboardSubagent }) {
   const [settings, setSettings] = useState(definition);
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState("");
-  const inFlight = useRef(false);
+  const client = useQueryClient();
+  const mutation = useMutation({
+    mutationFn: () => saveSubagentSection({ data: { agentId, id: definition.id, section: "enabled", settings: { enabled: !settings.enabled } } }),
+    onSuccess: async (row) => {
+      setSettings((current) => ({ ...current, enabled: row.enabled, schedule: row.schedule, nextRunAt: row.nextRunAt }));
+      toast.success(row.enabled ? "Sub-agent enabled" : "Sub-agent paused");
+      await cacheSubagent(client, agentId, row);
+    },
+  });
+  const pending = mutation.isPending, error = mutation.error?.message;
   useEffect(() => { setSettings(definition); }, [definition]);
-  async function toggle() {
-    if (inFlight.current) return;
-    inFlight.current = true; setPending(true); setError("");
-    try {
-      const result = await saveSubagentSection({ data: { agentId, id: definition.id, section: "enabled", settings: { enabled: !settings.enabled } } });
-      if (!result.ok) throw new Error(result.error);
-      setSettings((current) => ({ ...current, enabled: result.data.enabled, schedule: result.data.schedule, nextRunAt: result.data.nextRunAt }));
-      toast.success(result.data.enabled ? "Sub-agent enabled" : "Sub-agent paused");
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to change enabled status. Please retry.");
-    } finally { inFlight.current = false; setPending(false); }
-  }
   return <div className="flex flex-1 flex-wrap items-center gap-2">
     {settings.enabled && settings.schedule && settings.nextRunAt !== null && <NextRun timestamp={settings.nextRunAt} />}
     <div className="ml-auto flex items-center gap-2">
-      <SubagentEnabledToggle enabled={settings.enabled} disabled={pending} onClick={() => { void toggle(); }} />
+      <SubagentEnabledToggle enabled={settings.enabled} disabled={pending} onClick={() => mutation.mutate()} />
       {error && <p role="alert" className="text-xs text-red-300">{error}</p>}
     </div>
   </div>;
@@ -96,15 +93,20 @@ function DashboardRunDialog({ agentId, subagentId, onClose }: { agentId: string;
   const router = useRouter();
   const [task, setTask] = useState("");
   const assignmentId = useRef<{ task: string; id: string } | null>(null);
-  async function startRun() {
-    if (assignmentId.current?.task !== task) assignmentId.current = { task, id: crypto.randomUUID() };
-    let result;
-    try { result = await runSubagent({ data: { agentId, id: subagentId, task, requestId: assignmentId.current!.id } }); }
-    catch { throw new Error("Unable to confirm the assignment. Retry with the same task to reuse its request ID."); }
-    if (!result.ok) throw new Error(result.error);
-    toast.success("Assignment started");
-    await router.navigate({ to: "/agents/$agentId/sub-agents/$subagentId/runs/$runId", params: { agentId, subagentId, runId: result.data.id } });
-    onClose();
-  }
+  const client = useQueryClient();
+  const mutation = useMutation({
+    mutationFn: async () => {
+      if (assignmentId.current?.task !== task) assignmentId.current = { task, id: crypto.randomUUID() };
+      try { return await runSubagent({ data: { agentId, id: subagentId, task, requestId: assignmentId.current.id } }); }
+      catch (cause) { throw new Error(`${cause instanceof Error ? cause.message : "Unable to confirm the assignment."} Retry with the same task to reuse its request ID.`, { cause }); }
+    },
+    onSuccess: async (run) => {
+      await invalidateSubagentLists(client, agentId);
+      toast.success("Assignment started");
+      await router.navigate({ to: "/agents/$agentId/sub-agents/$subagentId/runs/$runId", params: { agentId, subagentId, runId: run.id } });
+      onClose();
+    },
+  });
+  async function startRun() { await mutation.mutateAsync(); }
   return <RunSubagentDialog task={task} onTaskChange={setTask} onCancel={onClose} onRun={startRun} />;
 }

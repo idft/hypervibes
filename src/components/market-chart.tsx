@@ -3,7 +3,8 @@ import { createPortal } from "react-dom";
 import { CandlestickSeries, ColorType, HistogramSeries, createChart, type IChartApi, type ISeriesApi, type Logical, type UTCTimestamp } from "lightweight-charts";
 import { mergeChartCandles, intervalMillis, type ChartCandle, type ChartSnapshot } from "../hyperliquid/chart-contracts.js";
 import type { ChartCapture, ChartDrawing, ChartLayout, ChartPoint, DrawingKind } from "../charts/contracts.js";
-import { getChartHistory } from "../web/charts.js";
+import { useQueryClient } from "@tanstack/react-query";
+import { chartHistoryQueryOptions } from "../web/chart-queries.js";
 import { ChartDrawings, type ChartProjection } from "./chart-drawings.js";
 import { defaultChartOverlays, type ChartOverlayVisibility } from "../charts/trading-contracts.js";
 import { createTradingOverlays, type FillHover } from "../charts/trading-overlays.js";
@@ -15,6 +16,7 @@ export function MarketChart({ id, layout, tool, selected, disabled, statusHost, 
   id: string; layout: ChartLayout; tool: DrawingKind | "select"; selected: string; disabled: boolean; statusHost: HTMLElement | null; overlayVisibility?: ChartOverlayVisibility;
   onSelect: (id: string) => void; onSave: (drawing: ChartDrawing) => Promise<number | undefined>; onDrawn: () => void; onEdit: () => void; ref: Ref<MarketChartHandle>;
 }) {
+  const client = useQueryClient();
   const host = useRef<HTMLDivElement>(null), svg = useRef<SVGSVGElement>(null), active = useRef<ActiveChart | null>(null);
   const [status, setStatus] = useState<ChartSnapshot["status"]>("connecting");
   const [error, setError] = useState("");
@@ -57,13 +59,12 @@ export function MarketChart({ id, layout, tool, selected, disabled, statusHost, 
       if (disposed || loading || !hasMore) return;
       loading = true; setHistoryStatus("Loading candles…");
       try {
-        const result = await getChartHistory({ data: { id, coin, interval, ...(before === undefined ? {} : { before }) } });
+        const result = await client.fetchQuery(chartHistoryQueryOptions(id, coin, interval, before));
         if (disposed) return;
-        if (!result.ok) throw new Error(result.error);
         const range = chart.timeScale().getVisibleLogicalRange(), oldest = state.candles[0]?.time;
-        state.candles = mergeChartCandles(result.data.candles, state.candles);
+        state.candles = mergeChartCandles(result.candles, state.candles);
         const added = oldest === undefined ? 0 : state.candles.filter((c) => c.time < oldest).length;
-        hasMore = result.data.hasMore && (before === undefined || added > 0);
+        hasMore = result.hasMore && (before === undefined || added > 0);
         draw();
         if (!initialized && state.candles.length) chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, state.candles.length - 120), to: state.candles.length + 3 });
         else if (range && added) chart.timeScale().setVisibleLogicalRange({ from: range.from + added, to: range.to + added });
@@ -109,7 +110,7 @@ export function MarketChart({ id, layout, tool, selected, disabled, statusHost, 
       element.removeEventListener("pointermove", redraw); element.removeEventListener("wheel", redraw);
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRange); chart.timeScale().unsubscribeSizeChange(redraw); chart.unsubscribeCrosshairMove(redraw); overlays.close(); chart.remove();
     };
-  }, [id, coin, interval, retry]);
+  }, [client, id, coin, interval, retry]);
   const state = active.current;
   const candles = state?.candles;
   const step = intervalMillis[interval] / 1000;

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,16 +17,19 @@ import { LoginPage } from "./login-page.js";
 describe("login page", () => {
   let container: HTMLDivElement;
   let root: Root;
+  let client: QueryClient;
   beforeEach(async () => {
     vi.resetAllMocks();
+    client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
-    await act(async () => root.render(<LoginPage />));
+    await act(async () => root.render(<QueryClientProvider client={client}><LoginPage /></QueryClientProvider>));
   });
   afterEach(async () => {
     await act(async () => root.unmount());
     container.remove();
+    client.clear();
     vi.restoreAllMocks();
   });
 

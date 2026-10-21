@@ -1,10 +1,13 @@
 import { useRouter } from "@tanstack/react-router";
 import { useId, useState } from "react";
+import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { invalidateAgentCollection } from "../web/agent-queries.js";
 import type { AgentChat } from "../agents/agent-service.js";
 import type { RiskSettings } from "../hyperliquid/orders/risk-settings.js";
 import { deleteAgent } from "../web/agents.js";
 import { saveRiskSettings } from "../web/risk.js";
+import { riskQueryOptions } from "../web/risk-queries.js";
 import { AgentSectionPage } from "./agent-section-page.js";
 import { InstrumentPicker } from "./instrument-picker.js";
 
@@ -33,14 +36,27 @@ function NotionalLimit({ title, inputLabel, placeholder, value, onChange }: { ti
 }
 
 /** The only host-enforced trading rules; everything else is instructions/insights. */
-function RiskManagementSection({ agentId, initial }: { agentId: string; initial?: RiskSettings }) {
-  const router = useRouter();
-  const [enabled, setEnabled] = useState(initial?.tradingEnabled ?? false);
-  const [instruments, setInstruments] = useState<string[] | null>(initial?.allowedInstruments ?? null);
-  const [maxOrder, setMaxOrder] = useState<NotionalLimitDraft>({ limited: initial?.maxOrderNotional != null, amount: initial?.maxOrderNotional ?? "" });
-  const [maxTotal, setMaxTotal] = useState<NotionalLimitDraft>({ limited: initial?.maxTotalNotional != null, amount: initial?.maxTotalNotional ?? "" });
-  const [saved, setSaved] = useState<RiskSettings>(initial ?? { tradingEnabled: false, allowedInstruments: null, maxOrderNotional: null, maxTotalNotional: null });
-  const [busy, setBusy] = useState(false), [error, setError] = useState("");
+function RiskManagementSection({ agentId }: { agentId: string }) {
+  const client = useQueryClient();
+  const { data: saved, error: refreshError } = useSuspenseQuery(riskQueryOptions(agentId));
+  const [enabled, setEnabled] = useState(saved.tradingEnabled);
+  const [instruments, setInstruments] = useState<string[] | null>(saved.allowedInstruments);
+  const [maxOrder, setMaxOrder] = useState<NotionalLimitDraft>({ limited: saved.maxOrderNotional !== null, amount: saved.maxOrderNotional ?? "" });
+  const [maxTotal, setMaxTotal] = useState<NotionalLimitDraft>({ limited: saved.maxTotalNotional !== null, amount: saved.maxTotalNotional ?? "" });
+  const mutation = useMutation({
+    mutationFn: async (settings: RiskSettings) => {
+      if (maxOrder.limited && !maxOrder.amount.trim()) throw new Error("Enter a max order notional limit or select No limit.");
+      if (maxTotal.limited && !maxTotal.amount.trim()) throw new Error("Enter a max total exposure limit or select No limit.");
+      return saveRiskSettings({ data: { agentId, settings } });
+    },
+    onSuccess: async (settings) => {
+      client.setQueryData(riskQueryOptions(agentId).queryKey, settings);
+      toast.success("Risk settings saved");
+      await invalidateAgentCollection(client);
+    },
+  });
+  const busy = mutation.isPending;
+  const error = mutation.error?.message ?? refreshError?.message;
   const settings: RiskSettings = {
     tradingEnabled: enabled,
     allowedInstruments: instruments,
@@ -51,19 +67,8 @@ function RiskManagementSection({ agentId, initial }: { agentId: string; initial?
     || JSON.stringify(settings.allowedInstruments === null ? null : [...settings.allowedInstruments].sort()) !== JSON.stringify(saved.allowedInstruments === null ? null : [...saved.allowedInstruments].sort())
     || settings.maxOrderNotional !== saved.maxOrderNotional
     || settings.maxTotalNotional !== saved.maxTotalNotional;
-  async function save() {
-    if (busy || !dirty) return;
-    setBusy(true); setError("");
-    try {
-      if (maxOrder.limited && !maxOrder.amount.trim()) throw new Error("Enter a max order notional limit or select No limit.");
-      if (maxTotal.limited && !maxTotal.amount.trim()) throw new Error("Enter a max total exposure limit or select No limit.");
-      const result = await saveRiskSettings({ data: { agentId, settings } });
-      if (!result.ok) throw new Error(result.error);
-      setSaved(result.data);
-      toast.success("Risk settings saved");
-      await router.invalidate();
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to save risk settings; your draft is preserved"); }
-    finally { setBusy(false); }
+  function save() {
+    if (!busy && dirty) mutation.mutate(settings);
   }
   return <section id="risk-management" className="w-full scroll-mt-2 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6" aria-label="Risk management">
     <h2 className="text-lg font-medium text-white">Risk management</h2>
@@ -90,20 +95,27 @@ function DeleteAgentSection({ agent }: { agent: AgentChat["agent"] }) {
   const router = useRouter();
   const [confirming, setConfirming] = useState(false);
   const [confirmation, setConfirmation] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  async function remove() {
-    if (busy || confirmation !== agent.name) return;
-    setBusy(true); setError("");
-    try {
-      const result = await deleteAgent({ data: { id: agent.id, confirmation } });
-      if (!result.ok) throw new Error(result.error);
+  const client = useQueryClient();
+  const mutation = useMutation({
+    mutationFn: () => deleteAgent({ data: { id: agent.id, confirmation } }),
+    onSuccess: async () => {
       await router.navigate({ to: "/agents" });
-      await router.invalidate();
+      for (const key of ["agent", "agent-chat", "agent-history", "agent-dashboard", "risk", "journal", "journal-notes", "journal-audit", "subagents", "memories", "insights", "artifacts", "chart-instruments", "chart-layouts", "chart-history", "chart-fills"]) {
+        client.removeQueries({ queryKey: [key, agent.id] });
+      }
       toast.success("Agent deleted");
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Deletion incomplete. Retry deletion.");
-    } finally { setBusy(false); }
+    },
+    onSettled: async (_data, error) => {
+      await invalidateAgentCollection(client);
+      if (error) {
+        await Promise.all([client.invalidateQueries({ queryKey: ["agent", agent.id] }), client.invalidateQueries({ queryKey: ["agent-chat", agent.id] })]);
+      }
+    },
+  });
+  const busy = mutation.isPending;
+  const error = mutation.error?.message;
+  function remove() {
+    if (!busy && confirmation === agent.name) mutation.mutate();
   }
   return <section aria-label="Danger zone" className="rounded-2xl border border-red-900/60 bg-[#0d0d10] p-6">
     <h2 className="text-lg font-medium text-red-300">Danger zone</h2>
@@ -114,7 +126,7 @@ function DeleteAgentSection({ agent }: { agent: AgentChat["agent"] }) {
         <input aria-label="Agent name confirmation" autoComplete="off" value={confirmation} disabled={busy} onChange={(event) => setConfirmation(event.target.value)} className="mt-2 block w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-white" />
       </label>
       <div className="flex gap-3">
-        <button type="button" disabled={busy} onClick={() => { setConfirming(false); setConfirmation(""); setError(""); }} className="cursor-pointer rounded-full border border-zinc-700 px-4 py-2 text-sm text-zinc-300 disabled:cursor-not-allowed">Cancel</button>
+        <button type="button" disabled={busy} onClick={() => { setConfirming(false); setConfirmation(""); mutation.reset(); }} className="cursor-pointer rounded-full border border-zinc-700 px-4 py-2 text-sm text-zinc-300 disabled:cursor-not-allowed">Cancel</button>
         <button type="submit" disabled={busy || confirmation !== agent.name} className="cursor-pointer rounded-full bg-red-700 px-4 py-2 text-sm text-white hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-50">{busy ? "Stopping and deleting…" : "Permanently delete agent"}</button>
       </div>
     </form>}
@@ -122,13 +134,13 @@ function DeleteAgentSection({ agent }: { agent: AgentChat["agent"] }) {
   </section>;
 }
 
-export function AgentSettingsPage({ initial, risk }: { initial: AgentChat; risk?: RiskSettings }) {
+export function AgentSettingsPage({ initial }: { initial: AgentChat }) {
   return <div className="w-full space-y-2">
     <section className="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
       <h2 className="text-lg font-medium text-white">Settings</h2>
       <dl className="mt-4 grid gap-4 sm:grid-cols-2"><div><dt className="text-xs uppercase tracking-wide text-zinc-500">Trading account</dt><dd className="mt-2 break-all font-mono text-sm text-zinc-300">{initial.agent.tradingAccountAddress ?? "No account linked (chat only)"}</dd></div><div><dt className="text-xs uppercase tracking-wide text-zinc-500">Agent status</dt><dd className="mt-2 text-sm text-zinc-300">{initial.agent.state}</dd></div></dl>
     </section>
-    {initial.agent.state !== "stopping" && initial.agent.state !== "stopped" && <RiskManagementSection agentId={initial.agent.id} initial={risk} />}
+    {initial.agent.state !== "stopping" && initial.agent.state !== "stopped" && <RiskManagementSection agentId={initial.agent.id} />}
     <AgentSectionPage title="Telegram" description="Connect Telegram to this Agent’s main chat in a future update." />
     <DeleteAgentSection agent={initial.agent} />
   </div>;

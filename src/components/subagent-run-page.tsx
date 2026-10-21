@@ -1,5 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { invalidateSubagentLists } from "../web/subagent-queries.js";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import type { RunDetail } from "../agents/subagent-service.js";
 import { workerInstructions } from "../agents/subagent-input.js";
@@ -79,9 +81,21 @@ function InstructionsDialog({ instructions, children, onClose }: { instructions:
   </dialog>, document.body);
 }
 export function SubagentRunPage({ initial }: { initial: RunDetail }) {
-  const [pending, setPending] = useState(false), [error, setError] = useState("");
-  const [instructionsOpen, setInstructionsOpen] = useState(false);
+  const client = useQueryClient();
+  const mutation = useMutation({
+    mutationFn: () => stopSubagentRun({ data: { agentId: initial.run.agentId, runId: initial.run.id } }),
+    onSuccess: () => invalidateSubagentLists(client, initial.run.agentId),
+  });
+  const pending = mutation.isPending, error = mutation.error?.message;
   const inFlight = useRef(false);
+  async function stop() {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    try { await mutation.mutateAsync(); }
+    catch { /* Query retains the cancellation error. */ }
+    finally { inFlight.current = false; }
+  }
+  const [instructionsOpen, setInstructionsOpen] = useState(false);
   const { detail, connectionError } = useSubagentRun(initial.run.agentId, initial.run.subagentId, initial.run.id, initial);
   const { run } = detail;
   const transcriptEnd = useRef<HTMLDivElement>(null);
@@ -112,16 +126,6 @@ export function SubagentRunPage({ initial }: { initial: RunDetail }) {
     wasLive.current = live;
   }, [detail.entries, detail.tools, run.status]);
   const subagentUrl = `/agents/${encodeURIComponent(run.agentId)}/sub-agents/${encodeURIComponent(run.subagentId)}`;
-  async function stop() {
-    if (inFlight.current) return;
-    inFlight.current = true; setPending(true); setError("");
-    try {
-      const result = await stopSubagentRun({ data: { agentId: run.agentId, runId: run.id } });
-      if (!result.ok) throw new Error(result.error);
-      // The live stream replaces any manual refresh here.
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to stop the assignment. Please retry."); }
-    finally { inFlight.current = false; setPending(false); }
-  }
   return <div className="flex h-[calc(100dvh-4.5rem)] min-h-0 w-full min-w-0 flex-col gap-3 overflow-hidden sm:h-[calc(100dvh-5rem)]">
     <section aria-label="Run header" className={`${panel} shrink-0`}>
       <header className="flex flex-wrap items-center justify-between gap-3">

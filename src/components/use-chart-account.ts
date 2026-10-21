@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import type { AgentDashboard } from "../hyperliquid/agent-dashboard.js";
 import { accountSectionFresh } from "../charts/trading-overlays.js";
-import type { ChartFill, ChartFillCursor, ChartOverlayVisibility } from "../charts/trading-contracts.js";
-import { getChartFills } from "../web/charts.js";
+import type { ChartFill, ChartOverlayVisibility } from "../charts/trading-contracts.js";
+import { chartFillsQueryOptions } from "../web/chart-queries.js";
 
 const noFills: ChartFill[] = [];
 export function useChartAccount(id: string, coin: string, from: number, to: number, visibility: ChartOverlayVisibility) {
@@ -26,15 +26,8 @@ export function useChartAccount(id: string, coin: string, from: number, to: numb
     return () => { disposed = true; source.close(); };
   }, [id, enabled, retry]);
   const trades = useInfiniteQuery({
-    queryKey: ["chart-fills", id, coin, from, to],
-    queryFn: ({ pageParam, signal }) => getChartFills({ data: { id, coin, from, to, ...(pageParam ? { cursor: pageParam } : {}) }, signal }),
-    initialPageParam: undefined as ChartFillCursor | undefined,
-    getNextPageParam: (page) => page.nextCursor ?? undefined,
+    ...chartFillsQueryOptions(id, coin, from, to),
     enabled: visibility.trades && to > from,
-    staleTime: 5_000,
-    gcTime: 60_000,
-    refetchInterval: 5_000,
-    retry: 1,
   });
   const { hasNextPage, isFetching, isError, fetchNextPage } = trades;
   useEffect(() => {

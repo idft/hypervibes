@@ -40,8 +40,8 @@ describe("authenticated risk management settings", () => {
     expect(get).not.toHaveBeenCalled();
   });
   it("checks Agent ownership before reads or writes", async () => {
-    expect(await invoke(getRiskSettings, runtime, { agentId: "agent" })).toEqual({ ok: true, data: { tradingEnabled: false } });
-    expect(await invoke(saveRiskSettings, runtime, { agentId: "foreign", settings: {} })).toMatchObject({ ok: false, error: "Agent not found" });
+    expect(await invoke(getRiskSettings, runtime, { agentId: "agent" })).toEqual({ tradingEnabled: false });
+    await expect(invoke(saveRiskSettings, runtime, { agentId: "foreign", settings: {} })).rejects.toMatchObject({ message: "Agent not found", status: 404 });
     expect(save).not.toHaveBeenCalled();
     const settings = { tradingEnabled: true, allowedInstruments: ["BTC"], maxOrderNotional: null, maxTotalNotional: "100" };
     await invoke(saveRiskSettings, runtime, { agentId: "agent", settings });

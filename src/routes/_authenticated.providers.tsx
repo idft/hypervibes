@@ -1,17 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { ProvidersPage } from "../components/providers-page.js";
-import { getProviderSettings } from "../web/providers.js";
-import { getSetupState } from "../web/setup.js";
+import { providerSettingsQueryOptions, setupQueryOptions } from "../web/provider-queries.js";
 
 export const Route = createFileRoute("/_authenticated/providers")({
-  loader: async () => {
-    const [settings, setup] = await Promise.all([getProviderSettings(), getSetupState()]);
-    return { settings, setup };
+  loader: async ({ context }) => {
+    await Promise.all([
+      context.queryClient.ensureQueryData(providerSettingsQueryOptions()),
+      context.queryClient.ensureQueryData(setupQueryOptions()),
+    ]);
   },
-  component: ProvidersRoute,
+  component: ProvidersPage,
 });
-
-function ProvidersRoute() {
-  const { settings, setup } = Route.useLoaderData();
-  return <ProvidersPage initial={settings} agentCount={setup.agentCount} setup={setup} />;
-}

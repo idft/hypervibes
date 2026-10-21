@@ -1,11 +1,12 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { toast } from "sonner";
+import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import type { AuthEvent, AuthType } from "@earendil-works/pi-ai";
 import type { LoginView, ProviderSettings } from "../providers/provider-service.js";
-import { answerProviderLogin, beginProviderLogin, cancelProviderLogin, disconnectProvider, getProviderSettings, refreshProviderModels } from "../web/providers.js";
+import { invalidateProviderQueries, providerMutationOptions, providerSettingsQueryOptions, setupQueryOptions, type ProviderOperation } from "../web/provider-queries.js";
 import { choiceContextTokens, costCurrency, modelKey } from "./model-picker.js";
 import { ProviderLogo } from "./provider-logo.js";
-import { SetupChecklist, type SetupState } from "./setup-checklist.js";
+import { SetupChecklist } from "./setup-checklist.js";
 
 const button = "cursor-pointer rounded-lg border border-zinc-700 px-3 py-2 text-sm hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50";
 const primaryButton = "cursor-pointer rounded-lg bg-violet-600 px-3 py-2 text-sm text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50";
@@ -20,16 +21,29 @@ function connectLabel(method: { type: AuthType }): string {
   return method.type === "oauth" ? "OAuth" : "API key";
 }
 
-export function ProvidersPage({ initial, agentCount, setup }: { initial: ProviderSettings; agentCount: number; setup: SetupState }) {
-  const [settings, setSettings] = useState(initial);
-  const [login, setLogin] = useState<LoginView | undefined>(initial.activeLogin);
+export function ProvidersPage() {
+  const client = useQueryClient();
+  const { data: settings, error: refreshError } = useSuspenseQuery(providerSettingsQueryOptions());
+  const { data: setup } = useSuspenseQuery(setupQueryOptions());
+  const { agentCount } = setup;
+  const mutation = useMutation<LoginView | undefined, Error, ProviderOperation>({
+    ...providerMutationOptions(client),
+    onSuccess: (login: LoginView | undefined, operation) => {
+      if (operation.type === "begin" && login) {
+        if (login.state === "complete") toast.success("Provider connected.");
+        else setLogin(login);
+      } else if (operation.type === "cancel") setLogin(undefined);
+      else if (operation.type === "answer") setValue("");
+    },
+  });
+  const [login, setLogin] = useState<LoginView | undefined>(settings.activeLogin);
   const [disconnecting, setDisconnecting] = useState<ProviderSummary | undefined>();
   const [value, setValue] = useState("");
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<string | undefined>();
-  const [error, setError] = useState("");
-  const [pending, setPending] = useState(false);
-  const inFlight = useRef(false);
+  const [streamError, setStreamError] = useState("");
+  const pending = mutation.isPending;
+  const error = streamError || mutation.error?.message || refreshError?.message;
   const active = login?.state === "pending";
 
   useEffect(() => { setValue(""); }, [login?.prompt?.id]);
@@ -40,77 +54,47 @@ export function ProvidersPage({ initial, agentCount, setup }: { initial: Provide
     source.addEventListener("provider-login", (event) => {
       if (disposed) return;
       const snapshot = JSON.parse((event as MessageEvent<string>).data) as LoginView;
-      setError("");
+      setStreamError("");
       if (snapshot.state === "pending") { setLogin(snapshot); return; }
       source.close();
-      void getProviderSettings().then((updated) => {
-        if (disposed) return;
-        setSettings(updated);
-        if (snapshot.state === "complete") { setLogin(undefined); toast.success("Provider connected."); }
-        else setLogin(snapshot.state === "failed" ? snapshot : undefined);
-      }).catch(() => {
-        if (!disposed) { setLogin(snapshot); setError("Unable to refresh providers. Reload the page."); }
-      });
+      setLogin(snapshot.state === "failed" ? snapshot : undefined);
+      if (snapshot.state === "complete") toast.success("Provider connected.");
+      void invalidateProviderQueries(client);
     });
     source.onerror = () => {
       if (disposed) return;
       if (source.readyState === EventSource.CLOSED) {
         setLogin(undefined);
-        setError("Sign-in status unavailable. Reload the page to reconnect.");
-      } else setError("Sign-in status unavailable. Reconnecting…");
+        setStreamError("Sign-in status unavailable. Reload the page to reconnect.");
+      } else setStreamError("Sign-in status unavailable. Reconnecting…");
     };
     source.addEventListener("stream-error", () => {
       source.close();
-      if (!disposed) { setLogin(undefined); setError("Sign-in status unavailable. Reload the page."); }
+      if (!disposed) { setLogin(undefined); setStreamError("Sign-in status unavailable. Reload the page."); }
     });
     source.addEventListener("unauthorized", () => {
       source.close();
-      if (!disposed) { setLogin(undefined); setError("Session ended. Please sign in again."); }
+      if (!disposed) { setLogin(undefined); setStreamError("Session ended. Please sign in again."); }
     });
     return () => { disposed = true; source.close(); };
-  }, [login?.id, login?.state]);
+  }, [client, login?.id, login?.state]);
 
-  async function action(operation: () => Promise<void>) {
-    if (inFlight.current) return;
-    inFlight.current = true; setPending(true); setError("");
-    try { await operation(); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "Provider operation failed. Try again."); }
-    finally { inFlight.current = false; setPending(false); }
-  }
   function begin(providerId: string, type: AuthType) {
-    void action(async () => {
-      const result = await beginProviderLogin({ data: { providerId, type } });
-      if (!result.ok) throw new Error(result.error);
-      if (result.data.state === "complete") {
-        setSettings(await getProviderSettings());
-        toast.success("Provider connected.");
-      } else setLogin(result.data);
-    });
+    setStreamError("");
+    mutation.mutate({ type: "begin", providerId, authType: type });
   }
   function submitAnswer() {
     const prompt = login?.prompt;
     if (!login || !prompt) return;
-    void action(async () => {
-      const result = await answerProviderLogin({ data: { id: login.id, promptId: prompt.id, value } });
-      if (!result.ok) throw new Error(result.error);
-      setValue("");
-    });
+    mutation.mutate({ type: "answer", id: login.id, promptId: prompt.id, value });
   }
   function cancelLogin() {
     if (!login) return;
     if (login.state !== "pending") { setLogin(undefined); return; }
-    void action(async () => {
-      const result = await cancelProviderLogin({ data: { id: login.id } });
-      if (!result.ok) throw new Error(result.error);
-      setLogin(undefined); setSettings(await getProviderSettings());
-    });
+    mutation.mutate({ type: "cancel", id: login.id });
   }
   function disconnect(provider: ProviderSummary) {
-    void action(async () => {
-      const result = await disconnectProvider({ data: { providerId: provider.id } });
-      if (!result.ok) throw new Error(result.error);
-      setSettings(await getProviderSettings());
-    });
+    mutation.mutate({ type: "disconnect", providerId: provider.id });
   }
   const connected = settings.providers.filter((provider) => provider.connected);
   const renderProvider = (provider: ProviderSummary) => {
@@ -175,11 +159,7 @@ export function ProvidersPage({ initial, agentCount, setup }: { initial: Provide
         <h2 id="all-providers-heading" className="shrink-0 text-lg font-semibold text-white">All Providers</h2>
         <div className="flex shrink-0 flex-wrap gap-3">
           <input aria-label="Search providers" placeholder="Search providers…" className={`${input} flex-1`} value={search} onChange={(event) => setSearch(event.target.value)} />
-          <button className={button} disabled={pending || active} onClick={() => { void action(async () => {
-            const result = await refreshProviderModels();
-            setSettings(await getProviderSettings());
-            if (!result.ok) throw new Error(result.error);
-          }); }}>Refresh models</button>
+          <button className={button} disabled={pending || active} onClick={() => mutation.mutate({ type: "refresh" })}>Refresh models</button>
         </div>
         <div className="min-h-0 flex-1 divide-y divide-zinc-800 overflow-y-auto rounded-xl border border-zinc-800">
           {/* Connected providers live in their own section above; only the

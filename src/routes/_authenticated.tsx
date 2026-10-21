@@ -1,7 +1,8 @@
 import { createFileRoute, Outlet, redirect, useParams } from "@tanstack/react-router";
 import { Navbar } from "../components/navbar.js";
 import { getCurrentUser } from "../web/auth.js";
-import { listAgents } from "../web/agents.js";
+import { useSuspenseQuery } from "@tanstack/react-query";
+import { agentsQueryOptions } from "../web/agent-queries.js";
 
 export const Route = createFileRoute("/_authenticated")({
   beforeLoad: async () => {
@@ -9,13 +10,13 @@ export const Route = createFileRoute("/_authenticated")({
     if (!user) throw redirect({ to: "/login" });
     return { user };
   },
-  loader: () => listAgents(),
+  loader: async ({ context }) => { await context.queryClient.ensureQueryData(agentsQueryOptions()); },
   component: AuthenticatedLayout,
 });
 
 function AuthenticatedLayout() {
   const { user } = Route.useRouteContext();
-  const agents = Route.useLoaderData();
+  const { data: agents } = useSuspenseQuery(agentsQueryOptions());
   const { agentId } = useParams({ strict: false });
   return (
     <>

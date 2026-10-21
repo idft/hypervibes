@@ -1,15 +1,18 @@
 // @vitest-environment jsdom
 import { act, useState } from "react";
+import { QueryClient, QueryClientProvider, notifyManager } from "@tanstack/react-query";
 import { createRoot, type Root } from "react-dom/client";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({ instruments: vi.fn(), change: vi.fn() }));
 vi.mock("../web/charts.js", () => ({ getChartInstruments: mocks.instruments }));
 import { InstrumentPicker } from "./instrument-picker.js";
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+notifyManager.setScheduler((callback) => { queueMicrotask(callback); return () => {}; });
+let client: QueryClient;
 
 function Host({ initial, disabled = false }: { initial: string[] | null; disabled?: boolean }) {
   const [value, setValue] = useState(initial);
-  return <InstrumentPicker agentId="agent-fixture" value={value} disabled={disabled} onChange={(next) => { mocks.change(next); setValue(next); }} />;
+  return <QueryClientProvider client={client}><InstrumentPicker agentId="agent-fixture" value={value} disabled={disabled} onChange={(next) => { mocks.change(next); setValue(next); }} /></QueryClientProvider>;
 }
 
 describe("Instrument picker", () => {
@@ -29,11 +32,12 @@ describe("Instrument picker", () => {
   });
   beforeEach(async () => {
     vi.resetAllMocks();
-    mocks.instruments.mockResolvedValue({ ok: true, data: ["BTC", "ETH", "SOL"] });
+    client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } } });
+    mocks.instruments.mockResolvedValue(["BTC", "ETH", "SOL"]);
     container = document.createElement("div"); document.body.append(container); root = createRoot(container);
     await act(async () => root.render(<Host initial={["BTC"]} />));
   });
-  afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
+  afterEach(async () => { await act(async () => root.unmount()); container.remove(); client.clear(); });
   const dialog = () => document.querySelector("dialog")!;
   const button = (text: string) => [...document.querySelectorAll("button")].find((entry) => entry.textContent === text)!;
   const click = async (text: string) => act(async () => button(text).click());
@@ -113,7 +117,7 @@ describe("Instrument picker", () => {
   });
   it("enforces the existing 50-instrument cap and bulk-selects only filtered matches", async () => {
     const symbols = Array.from({ length: 51 }, (_, index) => `COIN${String(index).padStart(2, "0")}`);
-    mocks.instruments.mockResolvedValue({ ok: true, data: symbols });
+    mocks.instruments.mockResolvedValue(symbols);
     await act(async () => root.render(<Host key="capped" initial={symbols.slice(0, 50)} />));
     await click("Select instruments");
     expect(button("Select all").disabled).toBe(true);
@@ -143,7 +147,7 @@ describe("Instrument picker", () => {
     expect(mocks.change).toHaveBeenLastCalledWith(["BTC", "ETH"]);
   });
   it("handles catalog failure and retry without changing saved restrictions", async () => {
-    mocks.instruments.mockResolvedValueOnce({ ok: false, error: "Venue unavailable" });
+    mocks.instruments.mockRejectedValueOnce(new Error("Venue unavailable"));
     await click("Select instruments");
     expect(dialog().querySelector('[role="alert"]')!.textContent).toContain("Venue unavailable");
     expect(button("Apply").disabled).toBe(true);
@@ -153,7 +157,7 @@ describe("Instrument picker", () => {
     expect(button("Apply").disabled).toBe(false);
   });
   it("shows an empty catalog without turning saved restrictions into No limit", async () => {
-    mocks.instruments.mockResolvedValue({ ok: true, data: [] });
+    mocks.instruments.mockResolvedValue([]);
     await click("Select instruments");
     expect(checkbox("BTC").checked).toBe(true);
     expect(checkbox("BTC").closest("label")?.textContent).toContain("Unavailable");
@@ -174,7 +178,7 @@ describe("Instrument picker", () => {
     await click("Select instruments");
     expect(dialog().textContent).toContain("Loading instruments");
     await click("Cancel");
-    await act(async () => resolve({ ok: true, data: ["ETH"] }));
+    await act(async () => resolve(["ETH"]));
     expect(document.querySelector("dialog")).toBeNull();
     expect(mocks.change).not.toHaveBeenCalled();
   });

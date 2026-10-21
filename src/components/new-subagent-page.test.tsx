@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, type ComponentProps } from "react";
+import { QueryClient, QueryClientProvider, notifyManager } from "@tanstack/react-query";
 import { createRoot, type Root } from "react-dom/client";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { subagentTemplates, templateDraft } from "../agents/subagent-templates.js";
@@ -7,7 +8,12 @@ const mocks = vi.hoisted(() => ({ navigate: vi.fn(), saveSubagent: vi.fn(), succ
 vi.mock("../web/subagents.js", () => ({ saveSubagent: mocks.saveSubagent }));
 vi.mock("sonner", () => ({ toast: { success: mocks.success } }));
 vi.mock("@tanstack/react-router", () => ({ useRouter: () => ({ navigate: mocks.navigate }), Link: ({ children }: { children: React.ReactNode }) => <a>{children}</a> }));
-import { NewSubagentPage } from "./new-subagent-page.js";
+import { NewSubagentPage as NewSubagentPageComponent } from "./new-subagent-page.js";
+notifyManager.setScheduler((callback) => { queueMicrotask(callback); return () => {}; });
+let client: QueryClient;
+function NewSubagentPage(props: ComponentProps<typeof NewSubagentPageComponent>) {
+  return <QueryClientProvider client={client}><NewSubagentPageComponent {...props} /></QueryClientProvider>;
+}
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const model = { provider: "parent-provider", modelId: "parent-model", thinkingLevel: "high" };
 const choices = [model, { provider: "other", modelId: "other-model", thinkingLevel: "" }].map((entry) => ({ ...entry, name: entry.modelId, providerName: entry.provider, thinkingLevels: ["high"], contextWindow: 200_000, inputCost: 3, outputCost: 15, reasoning: true }));
@@ -37,11 +43,12 @@ describe("new sub-agent", () => {
   });
   beforeEach(async () => {
     vi.resetAllMocks();
-    mocks.saveSubagent.mockResolvedValue({ ok: true, data: { id: "worker:new" } });
+    client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+    mocks.saveSubagent.mockResolvedValue({ id: "worker:new" });
     container = document.createElement("div"); document.body.append(container); root = createRoot(container);
     await act(async () => root.render(<NewSubagentPage agentId="agent-1" model={model} choices={choices} />));
   });
-  afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
+  afterEach(async () => { await act(async () => root.unmount()); container.remove(); client.clear(); });
   it("lists templates on the left and fills editable identity fields on selection, clearing them for Custom", async () => {
     expect([...container.querySelectorAll('[aria-label="Sub-agent templates"] button')].map((button) => button.textContent)).toEqual(["Custom", ...subagentTemplates.map((template) => template.name)]);
     expect(container.querySelectorAll("input, textarea, select")).toHaveLength(2);
@@ -117,13 +124,14 @@ describe("new sub-agent", () => {
   it("rejects blank names and lets users correct server validation failures", async () => {
     await input(name(), "   "); await submit(); expect(mocks.saveSubagent).not.toHaveBeenCalled();
     await input(name(), "Worker");
-    mocks.saveSubagent.mockResolvedValueOnce({ ok: false, error: "Select a model." });
+    mocks.saveSubagent.mockRejectedValueOnce(new Error("Select a model."));
     await submit();
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("Select a model.");
     expect(name().matches(":disabled")).toBe(false);
     expect(mocks.navigate).not.toHaveBeenCalled();
     await input(name(), "Corrected"); await submit();
     expect(mocks.saveSubagent.mock.calls[1]![0].data.settings.name).toBe("Corrected");
+    expect(mocks.saveSubagent.mock.calls[1]![0].data.requestId).not.toBe(mocks.saveSubagent.mock.calls[0]![0].data.requestId);
   });
   it("blocks duplicate submissions and reuses identical settings after uncertain network failures", async () => {
     await input(name(), "Worker");
@@ -133,9 +141,8 @@ describe("new sub-agent", () => {
     expect(mocks.saveSubagent).toHaveBeenCalledOnce();
     await act(async () => reject(new Error("Disconnected")));
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("retry safely");
-    expect(name().matches(":disabled")).toBe(true);
-    expect(container.querySelector('[aria-label="Choose model"]')?.matches(":disabled")).toBe(true);
-    expect([...container.querySelectorAll('[aria-pressed]')].every((button) => button.matches(":disabled"))).toBe(true);
+    expect(name().matches(":disabled")).toBe(false);
+    expect(container.querySelector('[aria-label="Choose model"]')?.matches(":disabled")).toBe(false);
     await submit();
     expect(mocks.saveSubagent.mock.calls[1]![0]).toEqual(mocks.saveSubagent.mock.calls[0]![0]);
   });

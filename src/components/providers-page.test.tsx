@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act } from "react";
+import { QueryClient, QueryClientProvider, notifyManager } from "@tanstack/react-query";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,13 +8,21 @@ import type { LoginView, ProviderSettings } from "../providers/provider-service.
 
 const mocks = vi.hoisted(() => ({
   answerProviderLogin: vi.fn(), beginProviderLogin: vi.fn(), cancelProviderLogin: vi.fn(), disconnectProvider: vi.fn(),
-  getProviderSettings: vi.fn(), refreshProviderModels: vi.fn(),
+  getProviderSettings: vi.fn(), refreshProviderModels: vi.fn(), getSetupState: vi.fn(),
 }));
 vi.mock("../web/providers.js", () => mocks);
 import { ProvidersPage as ProvidersPageComponent } from "./providers-page.js";
+import { providerSettingsQueryOptions, setupQueryOptions } from "../web/provider-queries.js";
 
+notifyManager.setScheduler((callback) => { queueMicrotask(callback); return () => {}; });
+vi.mock("../web/setup.js", () => ({ getSetupState: mocks.getSetupState }));
+const clients: QueryClient[] = [];
 function ProvidersPage({ initial, agentCount = 0 }: { initial: ProviderSettings; agentCount?: number }) {
-  return <ProvidersPageComponent initial={initial} agentCount={agentCount} setup={{ providerConnected: false, apiKeyApproved: false, builderFeeApproved: false }} />;
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } } });
+  clients.push(client);
+  client.setQueryData(providerSettingsQueryOptions().queryKey, initial);
+  client.setQueryData(setupQueryOptions().queryKey, { agentCount, providerConnected: false, apiKeyApproved: false, builderFeeApproved: false });
+  return <QueryClientProvider client={client}><ProvidersPageComponent /></QueryClientProvider>;
 }
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -50,6 +59,7 @@ describe("Providers page", () => {
   });
   beforeEach(async () => {
     vi.resetAllMocks();
+    mocks.getSetupState.mockResolvedValue({ agentCount: 0, providerConnected: false, apiKeyApproved: false, builderFeeApproved: false });
     vi.useFakeTimers();
     MockEventSource.instances = [];
     vi.stubGlobal("EventSource", MockEventSource);
@@ -57,7 +67,7 @@ describe("Providers page", () => {
     await act(async () => root.render(<ProvidersPage initial={initial} />));
   });
   afterEach(async () => {
-    await act(async () => root.unmount()); container.remove(); vi.useRealTimers(); vi.unstubAllGlobals();
+    await act(async () => root.unmount()); container.remove(); clients.splice(0).forEach((client) => client.clear()); vi.useRealTimers(); vi.unstubAllGlobals();
   });
   const button = (text: string) => [...container.querySelectorAll("button")].find((button) => button.textContent === text)!;
   const dialog = () => container.querySelector<HTMLDialogElement>("dialog")!;
@@ -95,8 +105,32 @@ describe("Providers page", () => {
     expect(list?.contains(container.querySelector('[aria-label="Search providers"]'))).toBe(false);
   });
 
+  it("retains the provider snapshot after refresh failure and recovers on retry", async () => {
+    mocks.refreshProviderModels.mockResolvedValue(undefined);
+    mocks.getProviderSettings.mockRejectedValueOnce(new Error("Unable to refresh providers"));
+    await act(async () => button("Refresh models").click());
+    expect(container.textContent).toContain("Test Provider");
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Unable to refresh providers");
+    expect(button("Refresh models").disabled).toBe(false);
+    mocks.getProviderSettings.mockResolvedValue(initial);
+    await act(async () => button("Refresh models").click());
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("reports a rejected login mutation and allows retry without opening a stream", async () => {
+    mocks.beginProviderLogin.mockRejectedValueOnce(new Error("Another sign-in is in progress"));
+    mocks.getProviderSettings.mockResolvedValue(initial);
+    await act(async () => button("API key").click());
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Another sign-in is in progress");
+    expect(MockEventSource.instances).toHaveLength(0);
+    mocks.beginProviderLogin.mockResolvedValue(attempt);
+    await act(async () => button("API key").click());
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(MockEventSource.instances).toHaveLength(1);
+  });
+
   it("bridges secret prompts without reflecting the answer and refreshes models after completion", async () => {
-    mocks.beginProviderLogin.mockResolvedValue({ ok: true, data: attempt });
+    mocks.beginProviderLogin.mockResolvedValue(attempt);
     await act(async () => button("API key").click());
     const input = dialog().querySelector<HTMLInputElement>("#provider-answer")!;
     expect(input.type).toBe("password");
@@ -104,7 +138,7 @@ describe("Providers page", () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "private-key");
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    mocks.answerProviderLogin.mockResolvedValue({ ok: true, data: { ...attempt, prompt: undefined } });
+    mocks.answerProviderLogin.mockResolvedValue(undefined);
     await act(async () => dialog().querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
     expect(mocks.answerProviderLogin).toHaveBeenCalledWith({ data: { id: "login", promptId: "prompt", value: "private-key" } });
     expect(container.textContent).not.toContain("private-key");
@@ -121,7 +155,7 @@ describe("Providers page", () => {
   });
 
   it("receives prompt updates and closes the stream on cancel or unmount", async () => {
-    mocks.beginProviderLogin.mockResolvedValue({ ok: true, data: { ...attempt, prompt: undefined } });
+    mocks.beginProviderLogin.mockResolvedValue({ ...attempt, prompt: undefined });
     await act(async () => button("OAuth").click());
     const source = MockEventSource.instances[0]!;
     await act(async () => source.snapshot(attempt));
@@ -131,7 +165,7 @@ describe("Providers page", () => {
     await act(async () => source.snapshot(attempt));
     expect(container.textContent).not.toContain("Reconnecting");
     expect(MockEventSource.instances).toHaveLength(1);
-    mocks.cancelProviderLogin.mockResolvedValue({ ok: true });
+    mocks.cancelProviderLogin.mockResolvedValue(undefined);
     mocks.getProviderSettings.mockResolvedValue(initial);
     await act(async () => [...dialog().querySelectorAll("button")].find((b) => b.textContent === "Cancel sign-in")!.click());
     expect(source.close).toHaveBeenCalled();
@@ -142,7 +176,7 @@ describe("Providers page", () => {
   });
 
   it("keeps a failed sign-in open in the modal with its error", async () => {
-    mocks.beginProviderLogin.mockResolvedValue({ ok: true, data: attempt });
+    mocks.beginProviderLogin.mockResolvedValue(attempt);
     mocks.getProviderSettings.mockResolvedValue(initial);
     await act(async () => button("API key").click());
     await act(async () => MockEventSource.instances[0]!.snapshot({ ...attempt, state: "failed", prompt: undefined, error: "Invalid key" }));
@@ -209,7 +243,7 @@ describe("Providers page", () => {
   });
 
   it("confirms disconnects in a modal before disconnecting", async () => {
-    mocks.disconnectProvider.mockResolvedValue({ ok: true });
+    mocks.disconnectProvider.mockResolvedValue(undefined);
     mocks.getProviderSettings.mockResolvedValue(initial);
     await act(async () => { await root.unmount(); root = createRoot(container); });
     await act(async () => root.render(<ProvidersPage initial={{ ...initial, providers: [{ ...initial.providers[0]!, connected: true, configured: true }] }} />));
@@ -227,9 +261,9 @@ describe("Providers page", () => {
   it.each([true, false])("copies the exact device code and reports clipboard success=%s", async (success) => {
     const writeText = success ? vi.fn().mockResolvedValue(undefined) : vi.fn().mockRejectedValue(new Error("Clipboard denied"));
     vi.stubGlobal("navigator", { clipboard: { writeText } });
-    mocks.beginProviderLogin.mockResolvedValue({ ok: true, data: { ...attempt, prompt: undefined, events: [
+    mocks.beginProviderLogin.mockResolvedValue({ ...attempt, prompt: undefined, events: [
       { type: "device_code", userCode: "ABCD-1234", verificationUri: "https://auth.example.test/device" },
-    ] } });
+    ] });
     await act(async () => button("OAuth").click());
     expect([...dialog().querySelectorAll("button")].find((b) => b.textContent === "Copy to clipboard")!.className).toContain("cursor-pointer");
     await act(async () => [...dialog().querySelectorAll("button")].find((b) => b.textContent === "Copy to clipboard")!.click());
@@ -240,8 +274,8 @@ describe("Providers page", () => {
 
   it("allows blank responses to optional native text prompts", async () => {
     const optional: LoginView = { ...attempt, prompt: { id: "domain", input: { type: "text", message: "Domain (blank for github.com)" } } };
-    mocks.beginProviderLogin.mockResolvedValue({ ok: true, data: optional });
-    mocks.answerProviderLogin.mockResolvedValue({ ok: true, data: { ...optional, prompt: undefined } });
+    mocks.beginProviderLogin.mockResolvedValue(optional);
+    mocks.answerProviderLogin.mockResolvedValue(undefined);
     await act(async () => button("OAuth").click());
     expect(dialog().querySelector<HTMLInputElement>("#provider-answer")!.required).toBe(false);
     expect([...dialog().querySelectorAll("button")].find((b) => b.textContent === "Continue")!.disabled).toBe(false);
@@ -254,12 +288,12 @@ describe("Providers page", () => {
       { type: "auth_url", url: "javascript:alert(1)" },
       { type: "device_code", userCode: "ABCD-1234", verificationUri: "https://auth.example.test/device" },
     ] };
-    mocks.beginProviderLogin.mockResolvedValue({ ok: true, data: oauth });
+    mocks.beginProviderLogin.mockResolvedValue(oauth);
     await act(async () => button("OAuth").click());
     expect(container.innerHTML).not.toContain("javascript:");
     expect(dialog().textContent).toContain("ABCD-1234");
     expect(container.querySelector('a[href="https://auth.example.test/device"]')?.getAttribute("rel")).toContain("noopener");
-    mocks.cancelProviderLogin.mockResolvedValue({ ok: true }); mocks.getProviderSettings.mockResolvedValue(initial);
+    mocks.cancelProviderLogin.mockResolvedValue(undefined); mocks.getProviderSettings.mockResolvedValue(initial);
     await act(async () => [...dialog().querySelectorAll("button")].find((b) => b.textContent === "Cancel sign-in")!.click());
     expect(mocks.cancelProviderLogin).toHaveBeenCalledWith({ data: { id: "login" } });
     expect(container.querySelector("dialog")).toBeNull();

@@ -1,9 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { AgentChat, ChatEntry } from "../agents/agent-service.js";
-import { getAgentChatHistory } from "../web/agents.js";
+import { useQueryClient } from "@tanstack/react-query";
+import { agentHistoryQueryOptions } from "../web/agent-queries.js";
 
 /** Each mounted chat/settings page owns its stream and closes it on navigation. */
 export function useAgentChat(initial: AgentChat) {
+  const client = useQueryClient();
+  const historyId = useId();
   const [chat, setChat] = useState(initial);
   const [connectionError, setConnectionError] = useState("");
   /** Transcript older than the streamed tail, oldest first. */
@@ -59,21 +62,17 @@ export function useAgentChat(initial: AgentChat) {
     setHistoryLoading(true);
     const version = historyVersion.current;
     try {
-      const result = await getAgentChatHistory({ data: { id, before: before.current } });
+      const result = await client.fetchQuery(agentHistoryQueryOptions(id, before.current, `${historyId}:${version}`));
       if (version !== historyVersion.current) return false;
-      if (!result.ok) {
-        setConnectionError(result.error);
-        return false;
-      }
       const known = new Set([...chatRef.current.messages, ...olderRef.current].map((entry) => entry.id));
-      const fresh = result.data.messages.filter((entry) => !known.has(entry.id));
+      const fresh = result.messages.filter((entry) => !known.has(entry.id));
       if (fresh.length) {
         olderRef.current = [...fresh, ...olderRef.current];
         setOlder(olderRef.current);
       }
-      before.current = result.data.before;
-      doneRef.current = !result.data.more;
-      setHistoryDone(!result.data.more);
+      before.current = result.before;
+      doneRef.current = !result.more;
+      setHistoryDone(!result.more);
       setConnectionError("");
       return true;
     } catch {

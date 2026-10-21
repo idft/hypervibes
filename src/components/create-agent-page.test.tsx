@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act } from "react";
+import { QueryClient, QueryClientProvider, notifyManager } from "@tanstack/react-query";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelChoice } from "../providers/provider-service.js";
@@ -7,20 +8,23 @@ const mocks = vi.hoisted(() => ({ create: vi.fn(), invalidate: vi.fn() }));
 vi.mock("@tanstack/react-router", () => ({ useRouter: () => ({ invalidate: mocks.invalidate }) }));
 import { CreateAgentPage } from "./create-agent-page.js";
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+notifyManager.setScheduler((callback) => { queueMicrotask(callback); return () => {}; });
 const model: ModelChoice = { provider: "test", modelId: "model", name: "Model", providerName: "Test", thinkingLevels: ["low", "high"], contextWindow: 1000, inputCost: 0, outputCost: 0, reasoning: true };
 
 describe("Agent creation default sub-agents", () => {
   let root: Root, container: HTMLDivElement;
+  let queryClient: QueryClient;
   const submit = () => act(async () => { container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
   beforeEach(async () => {
     vi.resetAllMocks();
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
     Object.defineProperties(HTMLDialogElement.prototype, {
       showModal: { configurable: true, value(this: HTMLDialogElement) { this.open = true; } },
       close: { configurable: true, value(this: HTMLDialogElement) { this.open = false; } },
     });
-    mocks.create.mockResolvedValue({ ok: false, error: "Retry safely" });
+    mocks.create.mockRejectedValue(new Error("Retry safely"));
     container = document.createElement("div"); document.body.append(container); root = createRoot(container);
-    await act(async () => root.render(<CreateAgentPage choices={{ mainAddress: `0x${"a".repeat(40)}`, mainBalance: null, mainAssignedTo: null, subaccounts: [], subaccountCapacity: null, lookupError: null, accountModeSupported: true, apiWalletReady: true }} models={[model]} create={mocks.create} createSubaccount={vi.fn()} />));
+    await act(async () => root.render(<QueryClientProvider client={queryClient}><CreateAgentPage choices={{ mainAddress: `0x${"a".repeat(40)}`, mainBalance: null, mainAssignedTo: null, subaccounts: [], subaccountCapacity: null, lookupError: null, accountModeSupported: true, apiWalletReady: true }} models={[model]} create={mocks.create} createSubaccount={vi.fn()} /></QueryClientProvider>));
     await act(async () => {
       const input = container.querySelector<HTMLInputElement>("#display_name")!;
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Desk");
@@ -30,7 +34,7 @@ describe("Agent creation default sub-agents", () => {
     await act(async () => document.querySelector<HTMLInputElement>('dialog input[type="radio"]')!.click());
     await act(async () => [...document.querySelectorAll<HTMLButtonElement>("dialog button")].find((button) => button.textContent === "Apply")!.click());
   });
-  afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
+  afterEach(async () => { await act(async () => root.unmount()); container.remove(); queryClient.clear(); });
   it("includes paused defaults by default, passes the selection and reuses the creation ID on retry", async () => {
     expect(container.textContent).toContain("Include default sub-agents");
     expect(container.textContent).toContain("Adds a connected Technical Analyst, Trader, and Daily Reviewer. All start paused.");

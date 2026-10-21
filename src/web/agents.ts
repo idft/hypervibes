@@ -36,18 +36,9 @@ export function optionalNumber(data: unknown, key: string): number | undefined {
   return value;
 }
 
-export async function agentAction<T>(action: () => Promise<T>) {
-  try { return { ok: true as const, data: await action() }; }
-  catch (error) {
-    if (isAgentError(error) || error instanceof HyperliquidError) return { ok: false as const, error: error.message };
-    return { ok: false as const, error: "Agent operation failed. Please try again." };
-  }
-}
-
-/** The throwing successor to agentAction: same sanitizing boundary, but domain
- * errors rethrow so server functions answer with data or an exception, which
- * TanStack Start serializes and the client rethrows. Router protocol (redirect,
- * not found) passes through untouched. Migrated modules use this instead. */
+/** Server functions return domain data or throw a public error. Unknown failures
+ * are sanitized before TanStack Start serializes them; redirects and not-found
+ * protocol pass through unchanged. */
 export async function agentOperation<T>(action: () => Promise<T>): Promise<T> {
   try { return await action(); }
   catch (error) {
@@ -58,11 +49,13 @@ export async function agentOperation<T>(action: () => Promise<T>): Promise<T> {
 
 export const listAgents = createServerFn({ method: "GET" }).handler(async ({ context }) => {
   const user = await agentUser(context.runtime, getRequestHeaders());
-  const agents = await context.runtime.agents.list(user.id);
-  return Promise.all(agents.map(async (agent) => ({
-    ...agent,
-    tradingEnabled: (await context.runtime.agents.risk.get(agent.id)).tradingEnabled,
-  })));
+  return agentOperation(async () => {
+    const agents = await context.runtime.agents.list(user.id);
+    return Promise.all(agents.map(async (agent) => ({
+      ...agent,
+      tradingEnabled: (await context.runtime.agents.risk.get(agent.id)).tradingEnabled,
+    })));
+  });
 });
 
 /** New accounts require fresh exchange validation; an owned creation retry uses its original binding. */
@@ -102,7 +95,7 @@ export const createAgent = createServerFn({ method: "POST" })
   }))
   .handler(async ({ context, data }) => {
     const user = await agentUser(context.runtime, getRequestHeaders(), true);
-    return agentAction(async () => {
+    return agentOperation(async () => {
       const model = await context.runtime.providers.validate(user.id, { provider: data.provider, modelId: data.modelId });
       const tradingAccount = await selectedTradingAccount(context.runtime, user, data.accountSelection, data.requestId);
       return context.runtime.agents.create(user.id, data.name, data.requestId, tradingAccount, model, data.includeDefaultSubagents, data.thinkingLevel);
@@ -111,14 +104,14 @@ export const createAgent = createServerFn({ method: "POST" })
 
 export const getTradingAccountChoices = createServerFn({ method: "GET" }).handler(async ({ context }) => {
   const user = await agentUser(context.runtime, getRequestHeaders());
-  return context.runtime.hyperliquid.tradingAccountChoices(user);
+  return agentOperation(() => context.runtime.hyperliquid.tradingAccountChoices(user));
 });
 
 export const createAgentSubaccount = createServerFn({ method: "POST" })
   .validator((data: unknown) => ({ name: field(data, "name") }))
   .handler(async ({ context, data }) => {
     const user = await agentUser(context.runtime, getRequestHeaders(), true);
-    return agentAction(() => context.runtime.hyperliquid.createAgentSubaccount(user, data.name));
+    return agentOperation(() => context.runtime.hyperliquid.createAgentSubaccount(user, data.name));
   });
 
 export const getAgent = createServerFn({ method: "GET" })
@@ -126,7 +119,7 @@ export const getAgent = createServerFn({ method: "GET" })
   .handler(async ({ context, data }) => {
     const user = await agentUser(context.runtime, getRequestHeaders());
     try {
-      return await context.runtime.agents.owned(user.id, data.id, true);
+      return await agentOperation(() => context.runtime.agents.owned(user.id, data.id, true));
     } catch (error) {
       if (isAgentError(error) && error.status === 404) throw notFound();
       throw error;
@@ -137,28 +130,28 @@ export const getAgentDashboard = createServerFn({ method: "GET" })
   .validator((data: unknown) => ({ id: field(data, "id") }))
   .handler(async ({ context, data }) => {
     const user = await agentUser(context.runtime, getRequestHeaders());
-    return agentAction(() => context.runtime.hyperliquid.agentDashboard(user.id, data.id));
+    return agentOperation(() => context.runtime.hyperliquid.agentDashboard(user.id, data.id));
   });
 
 export const getAgentChat = createServerFn({ method: "GET" })
   .validator((data: unknown) => ({ id: field(data, "id") }))
   .handler(async ({ context, data }) => {
     const user = await agentUser(context.runtime, getRequestHeaders());
-    return agentAction(() => context.runtime.agents.chat(user.id, data.id));
+    return agentOperation(() => context.runtime.agents.chat(user.id, data.id));
   });
 
 export const sendAgentMessage = createServerFn({ method: "POST" })
   .validator((data: unknown) => ({ id: field(data, "id"), message: field(data, "message"), requestId: field(data, "requestId"), chart: typeof data === "object" && data !== null && "chart" in data ? data.chart : undefined }))
   .handler(async ({ context, data }) => {
     const user = await agentUser(context.runtime, getRequestHeaders(), true);
-    return agentAction(() => context.runtime.agents.send(user.id, data.id, data.message, data.requestId, data.chart));
+    return agentOperation(() => context.runtime.agents.send(user.id, data.id, data.message, data.requestId, data.chart));
   });
 
 export const deleteAgent = createServerFn({ method: "POST" })
   .validator((data: unknown) => ({ id: field(data, "id"), confirmation: field(data, "confirmation") }))
   .handler(async ({ context, data }) => {
     const user = await agentUser(context.runtime, getRequestHeaders(), true);
-    return agentAction(async () => {
+    return agentOperation(async () => {
       const agent = await context.runtime.agents.owned(user.id, data.id, true);
       if (data.confirmation !== agent.name) throw new AgentError("Type the agent name to confirm deletion.");
       await context.runtime.agents.delete(user.id, agent.id);
@@ -170,33 +163,33 @@ export const retryAgent = createServerFn({ method: "POST" })
   .validator((data: unknown) => ({ id: field(data, "id") }))
   .handler(async ({ context, data }) => {
     const user = await agentUser(context.runtime, getRequestHeaders(), true);
-    return agentAction(() => context.runtime.agents.retry(user.id, data.id));
+    return agentOperation(() => context.runtime.agents.retry(user.id, data.id));
   });
 
 export const stopAgentChat = createServerFn({ method: "POST" })
   .validator((data: unknown) => ({ id: field(data, "id") }))
   .handler(async ({ context, data }) => {
     const user = await agentUser(context.runtime, getRequestHeaders(), true);
-    return agentAction(() => context.runtime.agents.stop(user.id, data.id));
+    return agentOperation(() => context.runtime.agents.stop(user.id, data.id));
   });
 
 export const resetAgentChat = createServerFn({ method: "POST" })
   .validator((data: unknown) => ({ id: field(data, "id") }))
   .handler(async ({ context, data }) => {
     const user = await agentUser(context.runtime, getRequestHeaders(), true);
-    return agentAction(() => context.runtime.agents.reset(user.id, data.id));
+    return agentOperation(() => context.runtime.agents.reset(user.id, data.id));
   });
 
 export const compactAgentChat = createServerFn({ method: "POST" })
   .validator((data: unknown) => ({ id: field(data, "id") }))
   .handler(async ({ context, data }) => {
     const user = await agentUser(context.runtime, getRequestHeaders(), true);
-    return agentAction(() => context.runtime.agents.compact(user.id, data.id));
+    return agentOperation(() => context.runtime.agents.compact(user.id, data.id));
   });
 
 export const getAgentChatHistory = createServerFn({ method: "GET" })
   .validator((data: unknown) => ({ id: field(data, "id"), before: optionalNumber(data, "before") }))
   .handler(async ({ context, data }) => {
     const user = await agentUser(context.runtime, getRequestHeaders());
-    return agentAction(() => context.runtime.agents.chatHistory(user.id, data.id, data.before));
+    return agentOperation(() => context.runtime.agents.chatHistory(user.id, data.id, data.before));
   });

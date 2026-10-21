@@ -1,11 +1,17 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useSuspenseQuery } from "@tanstack/react-query";
 import { SubagentDetailPage } from "../components/subagent-detail-page.js";
-import { getSubagent } from "../web/subagents.js";
-import { getModelChoices } from "../web/providers.js";
+import { modelChoicesQueryOptions } from "../web/provider-queries.js";
+import { subagentQueryOptions } from "../web/subagent-queries.js";
+
 export const Route = createFileRoute("/_authenticated/agents/$agentId/sub-agents/$subagentId")({
-  loader: async ({ params }) => ({ result: await getSubagent({ data: { agentId: params.agentId, id: params.subagentId } }), choices: await getModelChoices() }), component: Page,
+  loader: async ({ params, context }) => {
+    await Promise.all([context.queryClient.fetchQuery(subagentQueryOptions(params.agentId, params.subagentId)), context.queryClient.ensureQueryData(modelChoicesQueryOptions())]);
+  },
+  component: Page,
 });
 function Page() {
-  const { result, choices } = Route.useLoaderData(), { agentId } = Route.useParams();
-  return result.ok ? <SubagentDetailPage key={result.data.definition.id} agentId={agentId} initial={result.data} choices={choices} /> : <p role="alert" className="text-red-300">{result.error}</p>;
+  const { agentId, subagentId } = Route.useParams();
+  const { data: choices } = useSuspenseQuery(modelChoicesQueryOptions());
+  return <SubagentDetailPage key={`${agentId}:${subagentId}`} agentId={agentId} subagentId={subagentId} choices={choices} />;
 }

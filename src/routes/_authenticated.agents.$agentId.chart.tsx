@@ -1,23 +1,26 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useSuspenseQuery } from "@tanstack/react-query";
 import { AgentChartPage } from "../components/agent-chart-page.js";
-import { getChartInstruments, getChartLayouts } from "../web/charts.js";
-import { getAgentChat } from "../web/agents.js";
-import { getModelChoices } from "../web/providers.js";
+import { agentChatQueryOptions } from "../web/agent-queries.js";
+import { chartInstrumentsQueryOptions, chartLayoutsQueryOptions } from "../web/chart-queries.js";
+import { modelChoicesQueryOptions } from "../web/provider-queries.js";
 
 export const Route = createFileRoute("/_authenticated/agents/$agentId/chart")({
-  loader: async ({ params }) => {
-    const data = { id: params.agentId };
-    const [instruments, layouts, chat, choices] = await Promise.all([getChartInstruments({ data }), getChartLayouts({ data }), getAgentChat({ data }), getModelChoices()]);
-    return { instruments, layouts, chat, choices };
+  loader: async ({ params, context }) => {
+    await Promise.all([
+      context.queryClient.ensureQueryData(chartInstrumentsQueryOptions(params.agentId)),
+      context.queryClient.fetchQuery({ ...chartLayoutsQueryOptions(params.agentId), staleTime: 0 }),
+      context.queryClient.fetchQuery(agentChatQueryOptions(params.agentId)),
+      context.queryClient.ensureQueryData(modelChoicesQueryOptions()),
+    ]);
   },
   component: ChartRoute,
 });
 
 function ChartRoute() {
-  const { instruments, layouts, chat, choices } = Route.useLoaderData();
   const { agentId } = Route.useParams();
-  if (!instruments.ok) return <p role="alert" className="text-amber-200">{instruments.error}</p>;
-  if (!layouts.ok) return <p role="alert" className="text-amber-200">{layouts.error}</p>;
-  if (!chat.ok) return <p role="alert" className="text-amber-200">{chat.error}</p>;
-  return <AgentChartPage key={agentId} id={agentId} instruments={instruments.data} layouts={layouts.data} initialChat={chat.data} choices={choices} />;
+  const { data: instruments, error } = useSuspenseQuery(chartInstrumentsQueryOptions(agentId));
+  const { data: choices } = useSuspenseQuery(modelChoicesQueryOptions());
+  const { data: chat } = useSuspenseQuery(agentChatQueryOptions(agentId));
+  return <>{error && <p role="alert" className="text-sm text-amber-200">{error.message}</p>}<AgentChartPage key={agentId} id={agentId} instruments={instruments} initialChat={chat} choices={choices} /></>;
 }

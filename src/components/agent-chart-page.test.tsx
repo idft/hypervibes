@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
+import { QueryClient, QueryClientProvider, notifyManager } from "@tanstack/react-query";
+import { chartLayoutsQueryOptions } from "../web/chart-queries.js";
 import { createRoot, type Root } from "react-dom/client";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentChat } from "../agents/agent-service.js";
@@ -19,6 +21,7 @@ vi.mock("./market-chart.js", async () => {
 vi.mock("./agent-chat-page.js", () => ({ AgentChatPage: (props: Record<string, unknown>) => { mocks.chatProps = props; return <div aria-label="Root chat fixture">Main conversation</div>; } }));
 import { AgentChartPage } from "./agent-chart-page.js";
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+notifyManager.setScheduler((callback) => { queueMicrotask(callback); return () => {}; });
 const instruments = ["BTC", "ETH"];
 const chat = { agent: { id: "fixture" } } as AgentChat;
 class LayoutSource extends EventTarget {
@@ -29,7 +32,7 @@ class LayoutSource extends EventTarget {
 }
 
 describe("chart workspace", () => {
-  let root: Root, container: HTMLDivElement, layout: ChartLayout, initial: ChartLayout[];
+  let root: Root, container: HTMLDivElement, layout: ChartLayout, initial: ChartLayout[], client: QueryClient;
   let observedResize: ResizeObserverCallback;
   const dialogMethods = Object.fromEntries(["showModal", "close"].map((key) => [key, Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, key)]));
   beforeAll(() => {
@@ -40,6 +43,7 @@ describe("chart workspace", () => {
   });
   afterAll(() => { for (const [key, descriptor] of Object.entries(dialogMethods)) { if (descriptor) Object.defineProperty(HTMLDialogElement.prototype, key, descriptor); else Reflect.deleteProperty(HTMLDialogElement.prototype, key); } });
   beforeEach(() => {
+    client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
     localStorage.clear(); vi.resetAllMocks(); LayoutSource.instances = []; vi.stubGlobal("EventSource", LayoutSource);
     Element.prototype.scrollIntoView = vi.fn();
     vi.stubGlobal("ResizeObserver", class { constructor(callback: ResizeObserverCallback) { observedResize = callback; } observe() {} disconnect() {} });
@@ -48,23 +52,24 @@ describe("chart workspace", () => {
     HTMLElement.prototype.hasPointerCapture = vi.fn((id: number) => captured.has(id));
     HTMLElement.prototype.releasePointerCapture = vi.fn((id: number) => { captured.delete(id); });
     layout = { id: crypto.randomUUID(), revision: 0, document: { name: "My chart", coin: "BTC", interval: "1h", drawings: [], notes: "", hideDrawings: false, magnet: true }, updatedAt: 0, canUndo: false, canRedo: false, lastChange: "Created" }; initial = [layout];
-    mocks.list.mockImplementation(async () => ({ ok: true, data: [layout] }));
+    mocks.list.mockImplementation(async () => [layout]);
     mocks.change.mockImplementation(async ({ data }: { data: { action: string; edit: unknown } }) => {
       const edit = data.action === "edit" ? chartEdit(data.edit) : { label: data.action, upsert: [], remove: [] };
       const drawings = new Map(layout.document.drawings.map((d) => [d.id, d]));
       for (const id of edit.remove ?? []) drawings.delete(id);
       for (const d of edit.upsert ?? []) drawings.set(d.id, d);
       layout = { ...layout, revision: layout.revision + 1, canUndo: true, document: { ...layout.document, ...edit.settings, drawings: [...drawings.values()] } };
-      return { ok: true, data: layout };
+      return layout;
     });
-    mocks.create.mockImplementation(async ({ data }: { data: { layoutId: string; settings: { name: string; coin?: string } } }) => ({ ok: true, data: { ...layout, id: data.layoutId, document: { ...layout.document, ...data.settings } } }));
-    mocks.remove.mockResolvedValue({ ok: true });
+    mocks.create.mockImplementation(async ({ data }: { data: { layoutId: string; settings: { name: string; coin?: string } } }) => ({ ...layout, id: data.layoutId, document: { ...layout.document, ...data.settings } }));
+    mocks.remove.mockResolvedValue(undefined);
     mocks.capture.mockResolvedValue({ layoutId: layout.id, revision: 0 });
     container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   });
-  afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+  afterEach(async () => { await act(async () => root.unmount()); container.remove(); client.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
   async function render() {
-    await act(async () => root.render(<AgentChartPage id="fixture" instruments={instruments} layouts={initial} initialChat={chat} choices={[]} />));
+    client.setQueryData(chartLayoutsQueryOptions("fixture").queryKey, initial);
+    await act(async () => root.render(<QueryClientProvider client={client}><AgentChartPage id="fixture" instruments={instruments} initialChat={chat} choices={[]} /></QueryClientProvider>));
     await act(async () => LayoutSource.instances.at(-1)!.emit(initial));
   }
   async function click(label: string) { await act(async () => {
@@ -318,7 +323,7 @@ describe("chart workspace", () => {
     expect(container.textContent).toContain("Saved");
   });
   it("surfaces save conflicts and reconciles via SSE without silently reapplying the edit", async () => {
-    mocks.change.mockResolvedValue({ ok: false, error: "Chart changed elsewhere" });
+    mocks.change.mockRejectedValue(new Error("Chart changed elsewhere"));
     await render(); await select("Instrument", "ETH");
     expect(container.querySelector("[role=alert]")!.textContent).toContain("changed elsewhere");
     expect(mocks.change).toHaveBeenCalledTimes(1); expect(mocks.list).not.toHaveBeenCalled();

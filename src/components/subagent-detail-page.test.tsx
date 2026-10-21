@@ -1,16 +1,28 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, type ComponentProps } from "react";
+import { QueryClient, QueryClientProvider, notifyManager } from "@tanstack/react-query";
+import type { SubagentDetail } from "../web/subagent-queries.js";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRow } from "../db/subagent-schema.js";
 import { hyperliquidToolNames, mainToolNames, taToolNames } from "../agents/subagent-input.js";
-const mocks = vi.hoisted(() => ({ invalidate: vi.fn(), navigate: vi.fn(), success: vi.fn(), saveSubagent: vi.fn(), saveSubagentSection: vi.fn(), saveSubagentAssignments: vi.fn(), saveSubagentIdentity: vi.fn(), saveSubagentTools: vi.fn(), getSubagent: vi.fn(), runSubagent: vi.fn(), archiveSubagent: vi.fn(), unarchiveSubagent: vi.fn(), stopSubagentRun: vi.fn() }));
+const mocks = vi.hoisted(() => ({ invalidate: vi.fn(), navigate: vi.fn(), success: vi.fn(), saveSubagent: vi.fn(), saveSubagentSection: vi.fn(), saveSubagentAssignments: vi.fn(), saveSubagentIdentity: vi.fn(), saveSubagentTools: vi.fn(), getSubagent: vi.fn(), runSubagent: vi.fn(), archiveSubagent: vi.fn(), unarchiveSubagent: vi.fn(), stopSubagentRun: vi.fn(), listSubagents: vi.fn() }));
 vi.mock("../web/subagents.js", () => mocks);
 vi.mock("sonner", () => ({ toast: { success: mocks.success } }));
 vi.mock("@tanstack/react-router", () => ({ useRouter: () => ({ invalidate: mocks.invalidate, navigate: mocks.navigate }), Link: ({ to, params, children, ...props }: { to: string; params: Record<string, string>; children: React.ReactNode }) => <a {...props} href={to.replace(/\$(\w+)/g, (_match, key: string) => encodeURIComponent(params[key]!))}>{children}</a> }));
-import { SubagentDetailPage } from "./subagent-detail-page.js";
-import { SubagentsPage } from "./subagents-page.js";
+import { SubagentDetailPage as SubagentDetailPageComponent } from "./subagent-detail-page.js";
+import { SubagentsPage as SubagentsPageComponent } from "./subagents-page.js";
+notifyManager.setScheduler((callback) => { queueMicrotask(callback); return () => {}; });
+let queryClient: QueryClient;
+function SubagentDetailPage({ initial, ...props }: Omit<ComponentProps<typeof SubagentDetailPageComponent>, "subagentId"> & { initial: Pick<SubagentDetail, "definition" | "runs" | "schedulerError"> & Omit<Partial<SubagentDetail>, "workers"> & { workers?: { id: string; name: string; archived?: boolean; tools?: string[] }[] } }) {
+  queryClient.setQueryData(["subagents", props.agentId, "detail", initial.definition.id], initial);
+  return <QueryClientProvider client={queryClient}><SubagentDetailPageComponent {...props} subagentId={initial.definition.id} /></QueryClientProvider>;
+}
+function SubagentsPage({ agentId, definitions }: { agentId: string; definitions: SubagentRow[] }) {
+  queryClient.setQueryData(["subagents", agentId, "list"], definitions);
+  return <QueryClientProvider client={queryClient}><SubagentsPageComponent agentId={agentId} /></QueryClientProvider>;
+}
 import { ScheduleConfig } from "./subagent-config.js";
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const definition: SubagentRow = { id: "worker:fixture", agentId: "agent-fixture", kind: "worker", name: "Research", description: "Find evidence", instructions: "Research carefully", provider: "faux", modelId: "faux-1", thinkingLevel: "", tools: [], triggers: { inboxEnabled: false, workerDelegates: [], researchSources: [], fills: false, orderChanges: false }, templateOrigin: null, enabled: true, archived: false, delegatable: true, persistent: false, conversationId: null, schedule: "", delaySeconds: 30, nextRunAt: null, completion: "wake", timeoutSeconds: 900, createdAt: 1, updatedAt: 1 };
@@ -46,8 +58,8 @@ describe("subagent pages", () => {
       else Reflect.deleteProperty(HTMLDialogElement.prototype, key);
     }
   });
-  beforeEach(() => { vi.resetAllMocks(); HistorySource.instances = []; vi.stubGlobal("EventSource", HistorySource); container = document.createElement("div"); document.body.append(container); root = createRoot(container); mocks.getSubagent.mockResolvedValue({ ok: true, data: initial() }); mocks.saveSubagentSection.mockImplementation(({ data }: { data: { settings: Partial<SubagentRow> } }) => Promise.resolve({ ok: true, data: { ...definition, ...data.settings } })); mocks.saveSubagentAssignments.mockImplementation(({ data }: { data: { settings: Partial<SubagentRow> } }) => Promise.resolve({ ok: true, data: { ...definition, ...data.settings } })); mocks.saveSubagentIdentity.mockImplementation(({ data }: { data: { name: string; description: string } }) => Promise.resolve({ ok: true, data: { ...definition, name: data.name, description: data.description } })); mocks.saveSubagentTools.mockImplementation(({ data }: { data: { tools: string[] } }) => Promise.resolve({ ok: true, data: { ...definition, tools: data.tools } })); });
-  afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+  beforeEach(() => { vi.resetAllMocks(); queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } } }); mocks.listSubagents.mockImplementation(({ data }: { data: { agentId: string } }) => Promise.resolve(queryClient.getQueryData(["subagents", data.agentId, "list"]))); HistorySource.instances = []; vi.stubGlobal("EventSource", HistorySource); container = document.createElement("div"); document.body.append(container); root = createRoot(container); mocks.getSubagent.mockResolvedValue(initial()); mocks.saveSubagentSection.mockImplementation(({ data }: { data: { settings: Partial<SubagentRow> } }) => Promise.resolve({ ...definition, ...data.settings })); mocks.saveSubagentAssignments.mockImplementation(({ data }: { data: { settings: Partial<SubagentRow> } }) => Promise.resolve({ ...definition, ...data.settings })); mocks.saveSubagentIdentity.mockImplementation(({ data }: { data: { name: string; description: string } }) => Promise.resolve({ ...definition, name: data.name, description: data.description })); mocks.saveSubagentTools.mockImplementation(({ data }: { data: { tools: string[] } }) => Promise.resolve({ ...definition, tools: data.tools })); });
+  afterEach(async () => { await act(async () => root.unmount()); container.remove(); queryClient.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
   it("paginates live history without refresh controls, ignores old streams and cleans up on navigation", async () => {
     await render();
     expect(container.textContent).not.toContain("latest 50");
@@ -79,7 +91,7 @@ describe("subagent pages", () => {
     expect(container.textContent).toContain("Live updates interrupted");
     await push(second, 2, 53);
     expect(container.textContent).not.toContain("Live updates interrupted");
-    mocks.stopSubagentRun.mockResolvedValue({ ok: true });
+    mocks.stopSubagentRun.mockResolvedValue(undefined);
     await click("Stop assignment");
     expect(mocks.stopSubagentRun).toHaveBeenCalledWith({ data: { agentId: definition.agentId, runId: summary.id } });
     expect(mocks.getSubagent).not.toHaveBeenCalled();
@@ -119,11 +131,11 @@ describe("subagent pages", () => {
     expect(mocks.success).toHaveBeenCalledWith("Sub-agent paused");
     await click("Enable sub-agent");
     expect(container.querySelector('[aria-label="Pause sub-agent"]')?.getAttribute("aria-pressed")).toBe("true");
-    expect(mocks.invalidate).toHaveBeenCalledTimes(2);
+    expect(mocks.invalidate).not.toHaveBeenCalled();
     expect(mocks.navigate).not.toHaveBeenCalled();
   });
   it("keeps index toggle state on failure and excludes protected or archived agents", async () => {
-    mocks.saveSubagentSection.mockResolvedValue({ ok: false, error: "Unable to save" });
+    mocks.saveSubagentSection.mockRejectedValue(new Error("Unable to save"));
     await act(async () => root.render(<SubagentsPage agentId={definition.agentId} definitions={[definition, { ...definition, id: "main", kind: "orchestrator" }, { ...definition, id: "old", archived: true }]} />));
     await click("Show archived (1)");
     expect(container.querySelectorAll('[aria-label="Pause sub-agent"]')).toHaveLength(1);
@@ -134,7 +146,7 @@ describe("subagent pages", () => {
   });
   it("unarchives a worker outside the disabled settings and leaves it paused", async () => {
     const restored = { ...definition, enabled: false, nextRunAt: null, updatedAt: 2 };
-    mocks.unarchiveSubagent.mockResolvedValue({ ok: true, data: restored });
+    mocks.unarchiveSubagent.mockResolvedValue(restored);
     await render({ ...definition, archived: true, enabled: false });
     const restore = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Unarchive")!;
     expect(restore.closest("fieldset")).toBeNull();
@@ -145,11 +157,11 @@ describe("subagent pages", () => {
     expect(container.querySelector('[aria-label="Enable sub-agent"]')).not.toBeNull();
     expect(container.textContent).not.toContain("Unarchive");
     expect(mocks.success).toHaveBeenCalledWith("Sub-agent unarchived", { description: "Restored paused. Enable it when ready." });
-    expect(mocks.invalidate).toHaveBeenCalledOnce();
+    expect(mocks.invalidate).not.toHaveBeenCalled();
     expect(mocks.navigate).not.toHaveBeenCalled();
   });
   it("keeps archived settings disabled if unarchiving fails", async () => {
-    mocks.unarchiveSubagent.mockResolvedValue({ ok: false, error: "Unable to restore" });
+    mocks.unarchiveSubagent.mockRejectedValue(new Error("Unable to restore"));
     await render({ ...definition, archived: true, enabled: false });
     await click("Unarchive");
     expect(container.querySelector('[role="alert"]')?.textContent).toBe("Unable to restore");
@@ -159,7 +171,7 @@ describe("subagent pages", () => {
   });
   it("redirects to the refreshed index after archiving", async () => {
     await render(); const browserConfirm = vi.spyOn(window, "confirm");
-    mocks.archiveSubagent.mockResolvedValue({ ok: true });
+    mocks.archiveSubagent.mockResolvedValue(undefined);
     await click("Archive worker");
     const dialog = container.querySelector("dialog")!;
     expect(dialog.open).toBe(true); expect(dialog.textContent).toContain("Research");
@@ -167,14 +179,14 @@ describe("subagent pages", () => {
     expect(mocks.archiveSubagent).not.toHaveBeenCalled(); expect(browserConfirm).not.toHaveBeenCalled();
     await click("Archive sub-agent");
     expect(mocks.archiveSubagent).toHaveBeenCalledWith({ data: { agentId: definition.agentId, id: definition.id } });
-    expect(mocks.invalidate).toHaveBeenCalledOnce();
+    expect(mocks.invalidate).not.toHaveBeenCalled();
     expect(mocks.navigate).toHaveBeenCalledWith({ to: "/agents/$agentId/sub-agents", params: { agentId: definition.agentId } });
     expect(mocks.getSubagent).not.toHaveBeenCalled();
     expect(mocks.success).toHaveBeenCalledWith("Sub-agent archived", { description: "History is preserved." });
   });
   it("stays on the detail page when archiving fails", async () => {
     await render();
-    mocks.archiveSubagent.mockResolvedValue({ ok: false, error: "Stop the active assignment first" });
+    mocks.archiveSubagent.mockRejectedValue(new Error("Stop the active assignment first"));
     await click("Archive worker"); await click("Archive sub-agent");
     expect(container.querySelector("[role=alert]")?.textContent).toContain("Stop the active assignment");
     expect(mocks.navigate).not.toHaveBeenCalled(); expect(mocks.invalidate).not.toHaveBeenCalled();
@@ -242,13 +254,13 @@ describe("subagent pages", () => {
     await act(async () => HistorySource.instances.at(-1)!.dispatchEvent(new MessageEvent("runs", { data: JSON.stringify({ runs: [], pagination: { page: 1, pages: 1, total: 0, pageSize: 50 }, schedulerError: null, inbox: [{ id: "request-1", intent: "account_event", reason: "fill", preview: "Partial BTC fill", createdAt: 1, discardedReason: null }] }) })));
     expect(container.textContent).toContain("Partial BTC fill");
     expect(container.textContent).toContain("account_event");
-    mocks.stopSubagentRun.mockResolvedValue({ ok: true });
+    mocks.stopSubagentRun.mockResolvedValue(undefined);
     await click("Discard request");
     expect(mocks.stopSubagentRun).toHaveBeenCalledWith({ data: { agentId: definition.agentId, runId: "request-1" } });
   });
   it("edits the orchestrator model, thinking and tools without offering deletion or schedules", async () => {
     const main = { ...definition, id: "main:fixture", name: "Orchestrator", kind: "orchestrator" as const, tools: mainToolNames };
-    await render(main); mocks.saveSubagentSection.mockResolvedValue({ ok: true, data: { ...main, thinkingLevel: "high" } });
+    await render(main); mocks.saveSubagentSection.mockResolvedValue({ ...main, thinkingLevel: "high" });
     expect(container.textContent).not.toContain("cannot be disabled, archived, or deleted"); expect(container.textContent).not.toContain("Archive worker"); expect(container.textContent).not.toContain("UTC candle close");
     expect(container.textContent).not.toContain("Manage providers");
     expect(container.querySelector("select")).toBeNull();
@@ -421,7 +433,7 @@ describe("subagent pages", () => {
   });
   it("keeps failed tool edits open for retry without changing the saved summary", async () => {
     await render();
-    mocks.saveSubagentTools.mockResolvedValueOnce({ ok: false, error: "Stop the active assignment first" });
+    mocks.saveSubagentTools.mockRejectedValueOnce(new Error("Stop the active assignment first"));
     await click("Edit tools"); await click("All tools in Hyperliquid"); await click("Apply");
     expect(document.querySelector("dialog [role=alert]")?.textContent).toContain("Stop the active assignment");
     expect(container.textContent).toContain("No tools allowed");
@@ -499,7 +511,7 @@ describe("subagent pages", () => {
   });
   it("retains failed identity edits for retry", async () => {
     await render();
-    mocks.saveSubagentIdentity.mockResolvedValueOnce({ ok: false, error: "Stop the active assignment first" });
+    mocks.saveSubagentIdentity.mockRejectedValueOnce(new Error("Stop the active assignment first"));
     await click("Edit name and description");
     const name = document.querySelector("dialog input") as HTMLInputElement;
     await act(async () => {
@@ -563,7 +575,7 @@ describe("subagent pages", () => {
     expect(mocks.saveSubagentAssignments).not.toHaveBeenCalled();
     await click("Edit assignments");
     await act(async () => { (document.querySelector('dialog input[type="checkbox"]') as HTMLInputElement).click(); });
-    mocks.saveSubagentAssignments.mockResolvedValueOnce({ ok: false, error: "Stop the active assignment first" });
+    mocks.saveSubagentAssignments.mockRejectedValueOnce(new Error("Stop the active assignment first"));
     await click("Apply");
     expect(document.querySelector("dialog [role=alert]")?.textContent).toContain("Stop the active assignment");
     expect(container.textContent).toContain("Orchestrator delegation allowed");
@@ -626,7 +638,7 @@ describe("subagent pages", () => {
     expect(mocks.saveSubagent).not.toHaveBeenCalled();
   });
   it("preserves manual assignment request IDs after uncertain network failures and shows server errors", async () => {
-    await render(); mocks.runSubagent.mockRejectedValueOnce(new Error("Disconnected")).mockResolvedValueOnce({ ok: false, error: "Worker already has an active assignment" });
+    await render(); mocks.runSubagent.mockRejectedValueOnce(new Error("Disconnected")).mockRejectedValueOnce(new Error("Worker already has an active assignment"));
     await click("Run now");
     const assignment = document.querySelector("dialog textarea")!;
     await act(async () => {
@@ -675,7 +687,7 @@ describe("subagent pages", () => {
     expect((await keydown({ shiftKey: true })).defaultPrevented).toBe(false);
     expect((await keydown({ isComposing: true })).defaultPrevented).toBe(false);
     expect(mocks.runSubagent).not.toHaveBeenCalled();
-    mocks.runSubagent.mockResolvedValue({ ok: true, data: { id: "keyboard-run" } });
+    mocks.runSubagent.mockResolvedValue({ id: "keyboard-run" });
     expect((await keydown()).defaultPrevented).toBe(true);
     expect(mocks.runSubagent).toHaveBeenCalledOnce();
     expect(mocks.runSubagent).toHaveBeenCalledWith({ data: { agentId: definition.agentId, id: definition.id, task: "Research conditions", requestId: expect.any(String) } });
@@ -689,7 +701,7 @@ describe("subagent pages", () => {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(task, "Research current conditions");
       task.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    mocks.runSubagent.mockResolvedValue({ ok: true, data: { id: "new-run-id" } });
+    mocks.runSubagent.mockResolvedValue({ id: "new-run-id" });
     await click("Run assignment");
     expect(document.querySelector("dialog")).toBeNull();
     expect(mocks.runSubagent).toHaveBeenCalledWith({ data: { agentId: definition.agentId, id: definition.id, task: "Research current conditions", requestId: expect.any(String) } });
@@ -714,7 +726,7 @@ describe("subagent pages", () => {
     await click("Starting…"); await click("Cancel");
     expect(document.querySelector("dialog")).not.toBeNull();
     expect(mocks.runSubagent).toHaveBeenCalledOnce();
-    await act(async () => { HistorySource.instances.at(-1)!.onerror?.(); resolve({ ok: true, data: { id: "accepted-run-id" } }); });
+    await act(async () => { HistorySource.instances.at(-1)!.onerror?.(); resolve({ id: "accepted-run-id" }); });
     expect(document.querySelector("dialog")).toBeNull();
     expect(container.querySelector("[role=status]")?.textContent).toContain("Live updates interrupted");
     expect(mocks.runSubagent).toHaveBeenCalledOnce();
@@ -733,7 +745,7 @@ describe("subagent pages", () => {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(task, "Run paused worker once");
       task.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    mocks.runSubagent.mockResolvedValueOnce({ ok: true, data: { id: "paused-run" } });
+    mocks.runSubagent.mockResolvedValueOnce({ id: "paused-run" });
     await click("Run assignment");
     expect(mocks.runSubagent).toHaveBeenCalledWith({ data: { agentId: definition.agentId, id: definition.id, task: "Run paused worker once", requestId: expect.any(String) } });
     expect((container.querySelector('[aria-label="Archive worker"]') as HTMLButtonElement).matches(":disabled")).toBe(false);
@@ -769,7 +781,7 @@ describe("subagent pages", () => {
   });
   it("retains enabled status on failure and disables toggling during saves", async () => {
     await render();
-    mocks.saveSubagentSection.mockResolvedValueOnce({ ok: false, error: "Stop the active assignment first" });
+    mocks.saveSubagentSection.mockRejectedValueOnce(new Error("Stop the active assignment first"));
     await click("Pause sub-agent");
     expect(container.querySelector("[role=alert]")?.textContent).toContain("Stop the active assignment");
     expect(container.querySelector('[aria-label="Pause sub-agent"]')?.textContent).toBe("Enabled");
@@ -778,7 +790,7 @@ describe("subagent pages", () => {
     await click("Pause sub-agent"); await click("Pause sub-agent");
     expect(mocks.saveSubagentSection).toHaveBeenCalledTimes(2);
     expect(container.querySelector('[aria-label="Pause sub-agent"]')?.matches(":disabled")).toBe(true);
-    await act(async () => resolve({ ok: true, data: { ...definition, enabled: false } }));
+    await act(async () => resolve({ ...definition, enabled: false }));
     expect(container.querySelector('[aria-label="Enable sub-agent"]')?.textContent).toBe("Paused");
     expect(container.querySelector("[role=alert]")).toBeNull();
   });
@@ -819,7 +831,7 @@ describe("subagent pages", () => {
     await editInstructions("  ");
     expect([...container.querySelectorAll("button")].find((button) => button.textContent === "Save instructions")!.disabled).toBe(true);
     await editInstructions("Retry this draft");
-    mocks.saveSubagentSection.mockResolvedValueOnce({ ok: false, error: "Stop the active assignment first" });
+    mocks.saveSubagentSection.mockRejectedValueOnce(new Error("Stop the active assignment first"));
     await click("Save instructions");
     expect(container.querySelector("[role=alert]")?.textContent).toContain("Stop the active assignment");
     expect(container.querySelector("textarea")!.value).toBe("Retry this draft");
@@ -828,7 +840,7 @@ describe("subagent pages", () => {
     await click("Save instructions"); await click("Save instructions");
     expect(mocks.saveSubagentSection).toHaveBeenCalledTimes(2);
     expect([...container.querySelectorAll("button")].find((button) => button.textContent === "Reset")!.matches(":disabled")).toBe(true);
-    await act(async () => resolve({ ok: true, data: { ...definition, instructions: "Retry this draft" } }));
+    await act(async () => resolve({ ...definition, instructions: "Retry this draft" }));
     expect(container.textContent).not.toContain("Save instructions");
     expect(container.querySelector("[role=alert]")).toBeNull();
   });
@@ -837,7 +849,7 @@ describe("subagent pages", () => {
     await editInstructions("Unsaved instructions");
     for (const trigger of ["Choose model", "Edit schedule"]) {
       await click(trigger);
-      mocks.saveSubagentSection.mockResolvedValueOnce({ ok: false, error: "Unable to update now" });
+      mocks.saveSubagentSection.mockRejectedValueOnce(new Error("Unable to update now"));
       await click("Apply");
       expect(document.querySelector("dialog [role=alert]")?.textContent).toContain("Unable to update now");
       await click("Apply");

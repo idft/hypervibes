@@ -56,7 +56,7 @@ describe("annotated market chart", () => {
   let layout: ChartLayout, client: QueryClient;
   beforeEach(() => {
     layout = { id: crypto.randomUUID(), revision: 0, document: { name: "Test", coin: "BTC", interval: "1h", drawings: [], notes: "", magnet: true, hideDrawings: false }, updatedAt: 0, canUndo: false, canRedo: false, lastChange: "Created" };
-    mocks.history.mockReset().mockResolvedValue({ ok: true, data: { candles: [candle(3600), candle(7200)], hasMore: true } });
+    mocks.history.mockReset().mockResolvedValue({ candles: [candle(3600), candle(7200)], hasMore: true });
     mocks.fills.mockReset().mockResolvedValue({ fills: [], nextCursor: null, historyLimited: false, sync: { updatedAt: 1, error: null } });
     client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     mocks.charts.length = 0; mocks.plugins.length = 0; FakeEventSource.instances = []; handle = null;
@@ -78,7 +78,7 @@ describe("annotated market chart", () => {
     expect(chartMount.firstElementChild!.firstElementChild!.getAttribute("aria-label")).toBe("BTC 1h candlestick and volume chart");
     await act(async () => FakeEventSource.instances[0]!.send({ status: "live", candles: [] }));
     expect(indicator.textContent).toContain("Connected");
-    mocks.history.mockResolvedValueOnce({ ok: true, data: { candles: [candle(0)], hasMore: false } });
+    mocks.history.mockResolvedValueOnce({ candles: [candle(0)], hasMore: false });
     await act(async () => mocks.charts[0]!.scroll(0));
     expect(indicator.title).toContain("No older candles available");
     await act(async () => FakeEventSource.instances[0]!.onerror?.());
@@ -120,7 +120,7 @@ describe("annotated market chart", () => {
     expect(container.querySelector("g[aria-label='trend'] path")!.getAttribute("d")).toBe("M -2.5 388 L 7.5 387");
   });
   it("preserves intraday anchor positions when displayed on a coarser timeframe", async () => {
-    mocks.history.mockResolvedValue({ ok: true, data: { candles: [candle(0), candle(14400)], hasMore: false } });
+    mocks.history.mockResolvedValue({ candles: [candle(0), candle(14400)], hasMore: false });
     const level = newDrawing("trend", "BTC", [{ time: 3600, price: 12 }, { time: 10800, price: 13 }]);
     layout = { ...layout, document: { ...layout.document, interval: "4h", drawings: [level] } };
     await render();
@@ -149,10 +149,10 @@ describe("annotated market chart", () => {
   });
   it("loads older candles and preserves viewport; ignores obsolete history after selection changes", async () => {
     await render();
-    mocks.history.mockResolvedValueOnce({ ok: true, data: { candles: [candle(0)], hasMore: false } });
+    mocks.history.mockResolvedValueOnce({ candles: [candle(0)], hasMore: false });
     const chart = mocks.charts[0]!;
     await act(async () => chart.scroll(0));
-    expect(mocks.history).toHaveBeenLastCalledWith({ data: { id: "fixture", coin: "BTC", interval: "1h", before: 3_600_000 } });
+    expect(mocks.history).toHaveBeenLastCalledWith({ data: { id: "fixture", coin: "BTC", interval: "1h", before: 3_600_000 }, signal: expect.any(AbortSignal) });
     expect(chart.timeScale().setVisibleLogicalRange).toHaveBeenLastCalledWith({ from: 1, to: 121 });
     let resolve!: (value: unknown) => void;
     mocks.history.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
@@ -161,7 +161,7 @@ describe("annotated market chart", () => {
     layout = { ...layout, document: { ...layout.document, interval: "5m" } }; await render();
     await act(async () => chartSources()[1]!.onerror?.());
     expect(statusHost.querySelector("[aria-label='Chart connection']")!.textContent).toContain("Connecting…");
-    await act(async () => resolve({ ok: true, data: { candles: [candle(999)], hasMore: false } }));
+    await act(async () => resolve({ candles: [candle(999)], hasMore: false }));
     expect(obsolete.price.setData).not.toHaveBeenCalled();
     expect(obsolete.remove).toHaveBeenCalledOnce();
     expect(chartSources()[1]!.close).toHaveBeenCalledOnce();
@@ -209,7 +209,7 @@ describe("annotated market chart", () => {
     expect(chartSources()[0]!.close).not.toHaveBeenCalled();
   });
   it("offers retry on history failure and cleans up subscriptions", async () => {
-    mocks.history.mockResolvedValueOnce({ ok: false, error: "History offline" }); await render();
+    mocks.history.mockRejectedValueOnce(new Error("History offline")); await render();
     expect(container.querySelector("[role=alert]")!.textContent).toContain("History offline");
     await act(async () => container.querySelector<HTMLButtonElement>("button")!.click());
     expect(mocks.history).toHaveBeenCalledTimes(2);

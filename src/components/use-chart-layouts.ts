@@ -1,19 +1,23 @@
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import type { ChartEdit, ChartLayout } from "../charts/contracts.js";
 import { changeChartLayout, createChartLayout, deleteChartLayout } from "../web/charts.js";
+import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import { chartLayoutsQueryOptions } from "../web/chart-queries.js";
 
 /** SSE snapshots are authoritative, including reconnects, agent edits and other tabs. */
-export function useChartLayouts(id: string, initial: ChartLayout[], instruments: string[]) {
-  const [layouts, setLayouts] = useState(initial);
-  const [selected, setSelected] = useState(initial[0]?.id ?? "");
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState("");
+export function useChartLayouts(id: string, instruments: string[]) {
+  const client = useQueryClient();
+  const { data: layouts } = useSuspenseQuery(chartLayoutsQueryOptions(id));
+  const [selected, setSelected] = useState(layouts[0]?.id ?? "");
+  const mutation = useMutation({ mutationFn: (operation: () => Promise<ChartLayout | undefined>) => operation() });
+  const pending = mutation.isPending;
+  const error = mutation.error?.message;
   const [connectionError, setConnectionError] = useState("");
   const [ready, setReady] = useState(false);
   const busy = useRef(false), alive = useRef(true), creation = useRef(crypto.randomUUID()), streamVersion = useRef(0);
   const key = `hypervibes:chart-layout:${id}`;
   const restorePreference = useEffectEvent(() => {
-    try { const saved = localStorage.getItem(key); if (saved && initial.some((l) => l.id === saved)) setSelected(saved); } catch { /* Optional preference. */ }
+    try { const saved = localStorage.getItem(key); if (saved && layouts.some((l) => l.id === saved)) setSelected(saved); } catch { /* Optional preference. */ }
   });
   useEffect(() => {
     alive.current = true;
@@ -27,7 +31,7 @@ export function useChartLayouts(id: string, initial: ChartLayout[], instruments:
       if (!active) return;
       streamVersion.current++;
       const snapshot = JSON.parse((event as MessageEvent).data) as ChartLayout[];
-      setLayouts((current) => {
+      client.setQueryData(chartLayoutsQueryOptions(id).queryKey, (current = []) => {
         const known = new Map(current.map((layout) => [layout.id, layout]));
         // SSE owns collection membership, but an older frame must not undo an
         // already-committed mutation response received on the other connection.
@@ -42,15 +46,14 @@ export function useChartLayouts(id: string, initial: ChartLayout[], instruments:
     source.addEventListener("stream-error", (event) => { interrupted(event, "Chart layouts are too large to stream. Reload the page."); source.close(); });
     source.onerror = () => interrupted(undefined, "Chart layout connection interrupted. Reconnecting…");
     return () => { active = false; alive.current = false; streamVersion.current++; source.close(); };
-  }, [id]);
-  async function run<T>(operation: (before: number) => Promise<T>): Promise<T | undefined> {
+  }, [client, id]);
+  async function run(operation: (before: number) => Promise<ChartLayout | undefined>) {
     if (busy.current) return undefined;
-    busy.current = true; setPending(true); setError("");
-    try { return await operation(streamVersion.current); }
-    catch (cause) {
-      if (alive.current) setError(cause instanceof Error ? cause.message : "Unable to save chart. Please retry.");
-      return undefined;
-    } finally { busy.current = false; if (alive.current) setPending(false); }
+    busy.current = true;
+    const before = streamVersion.current;
+    try { return await mutation.mutateAsync(() => operation(before)); }
+    catch { return undefined; /* Query retains the conflict; never blindly reapply an edit. */ }
+    finally { busy.current = false; }
   }
   function choose(layoutId: string) {
     setSelected(layoutId);
@@ -58,7 +61,7 @@ export function useChartLayouts(id: string, initial: ChartLayout[], instruments:
   }
   function accept(layout: ChartLayout, requireExisting = false) {
     if (!alive.current) return;
-    setLayouts((current) => {
+    client.setQueryData(chartLayoutsQueryOptions(id).queryKey, (current = []) => {
       const previous = current.find((item) => item.id === layout.id);
       if ((requireExisting && !previous) || (previous && previous.revision >= layout.revision)) return current;
       return [layout, ...current.filter((item) => item.id !== layout.id)];
@@ -69,10 +72,9 @@ export function useChartLayouts(id: string, initial: ChartLayout[], instruments:
     const layoutId = defaultId ?? crypto.randomUUID();
     return run(async (before) => {
       const result = await createChartLayout({ data: { id, layoutId, settings: { name, ...(duplicate ? {} : { coin: instruments.includes("BTC") ? "BTC" : instruments[0] ?? "BTC", interval: "1h" }) }, ...(duplicate && layout ? { sourceId: layout.id } : {}) } });
-      if (!result.ok) throw new Error(result.error);
-      if (streamVersion.current === before) accept(result.data);
-      if (alive.current) choose(result.data.id);
-      return result.data;
+      if (streamVersion.current === before) accept(result);
+      if (alive.current) choose(result.id);
+      return result;
     });
   }
   const initialize = useRef(false);
@@ -87,22 +89,21 @@ export function useChartLayouts(id: string, initial: ChartLayout[], instruments:
     const requestId = crypto.randomUUID();
     return run(async (before) => {
       const result = await changeChartLayout({ data: { id, layoutId: layout.id, revision: layout.revision, requestId, action, edit } });
-      if (!result.ok) throw new Error(result.error); // SSE reconciles conflicts; never blindly reapply an edit.
       // Compare revisions, not arrival order: a mid-request SSE frame may be
       // older than this committed response. Never resurrect a streamed deletion.
-      accept(result.data, streamVersion.current !== before);
-      return result.data;
+      accept(result, streamVersion.current !== before);
+      return result;
     });
   }
   async function remove() {
     if (!layout) return;
     await run(async (before) => {
-      const result = await deleteChartLayout({ data: { id, layoutId: layout.id, revision: layout.revision } });
-      if (!result.ok) throw new Error(result.error);
+      await deleteChartLayout({ data: { id, layoutId: layout.id, revision: layout.revision } });
       if (alive.current) {
-        if (streamVersion.current === before) setLayouts((current) => current.filter((item) => item.id !== layout.id));
+        if (streamVersion.current === before) client.setQueryData(chartLayoutsQueryOptions(id).queryKey, (current) => current?.filter((item) => item.id !== layout.id));
         setSelected("");
       }
+      return undefined;
     });
   }
   return { layouts, layout, pending, error: error || connectionError, ready, choose, create, remove, change };

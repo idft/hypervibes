@@ -1,13 +1,18 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { AgentChatPage } from "../components/agent-chat-page.js";
-import { getAgentChat } from "../web/agents.js";
-import { getModelChoices } from "../web/providers.js";
+import { agentChatQueryOptions } from "../web/agent-queries.js";
+import { useSuspenseQuery } from "@tanstack/react-query";
+import { modelChoicesQueryOptions } from "../web/provider-queries.js";
 
 export const Route = createFileRoute("/_authenticated/agents/$agentId/chat")({
-  loader: async ({ params }) => ({ result: await getAgentChat({ data: { id: params.agentId } }), choices: await getModelChoices() }),
+  loader: async ({ params, context }) => {
+    await Promise.all([context.queryClient.fetchQuery(agentChatQueryOptions(params.agentId)), context.queryClient.ensureQueryData(modelChoicesQueryOptions())]);
+  },
   component: ChatRoute,
 });
 function ChatRoute() {
-  const { result, choices } = Route.useLoaderData();
-  return result.ok ? <AgentChatPage key={result.data.agent.id} initial={result.data} choices={choices} /> : <p role="alert" className="text-red-300">{result.error}</p>;
+  const { agentId } = Route.useParams();
+  const { data: chat } = useSuspenseQuery(agentChatQueryOptions(agentId));
+  const { data: choices } = useSuspenseQuery(modelChoicesQueryOptions());
+  return <AgentChatPage key={agentId} initial={chat} choices={choices} />;
 }

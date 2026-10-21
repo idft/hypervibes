@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { chartIntervals, isChartInterval } from "../hyperliquid/chart-contracts.js";
-import { drawingKinds, type ChartDrawing, type ChartLayout, type DrawingKind } from "../charts/contracts.js";
+import { drawingKinds, type ChartDrawing, type DrawingKind } from "../charts/contracts.js";
 import type { AgentChat } from "../agents/agent-service.js";
 import type { ModelChoice } from "../providers/provider-service.js";
 import { AgentChatPage } from "./agent-chat-page.js";
@@ -32,8 +32,8 @@ function ChartIcon({ name }: { name: keyof typeof iconPaths }) {
   return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" className="size-4"><path d={iconPaths[name]} /></svg>;
 }
 const minChatWidth = 240, maxChatWidth = 560;
-export function AgentChartPage({ id, instruments, layouts: initialLayouts, initialChat, choices }: { id: string; instruments: string[]; layouts: ChartLayout[]; initialChat: AgentChat; choices: ModelChoice[] }) {
-  const { layouts, layout, pending, error, ready, choose, create, remove, change } = useChartLayouts(id, initialLayouts, instruments);
+export function AgentChartPage({ id, instruments, initialChat, choices }: { id: string; instruments: string[]; initialChat: AgentChat; choices: ModelChoice[] }) {
+  const { layouts, layout, pending, error, ready, choose, create, remove, change } = useChartLayouts(id, instruments);
   const [tool, setTool] = useState<DrawingKind | "select">("select"), [selected, setSelected] = useState("");
   const [chatOpen, setChatOpen] = useState(true), [chatWidth, setChatWidth] = useState(360);
   const [editing, setEditing] = useState(false), [keepDrawing, setKeepDrawing] = useState(false), [toolsOpen, setToolsOpen] = useState(false);

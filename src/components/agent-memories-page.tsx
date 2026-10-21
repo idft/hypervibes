@@ -1,9 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { SubagentRow } from "../db/subagent-schema.js";
 import { Link } from "@tanstack/react-router";
-import type { MemoryMetadata } from "../memory/memory-contracts.js";
-import type { InsightScope } from "../memory/insight-contracts.js";
-import { getInsights, listMemories } from "../web/memories.js";
+import { insightsQueryOptions, memoriesQueryOptions, type MemoryFilters } from "../web/memory-queries.js";
 import { InstrumentLabel } from "./instrument-label.js";
 import { MemoryStatus } from "./memory-status.js";
 import { MemoryReplacements } from "./memory-replacements.js";
@@ -12,38 +11,26 @@ import { ToggleTimestamp } from "./toggle-timestamp.js";
 
 const button = "cursor-pointer rounded-lg border border-zinc-700 px-3 py-2 text-sm text-zinc-200 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50";
 const input = "rounded-lg border border-zinc-700 bg-zinc-950 p-2 text-sm text-white";
-type Cursor = { createdAt: number; ref: string };
-type MemoryPage = Extract<Awaited<ReturnType<typeof listMemories>>, { ok: true }>["data"];
-type InsightData = Extract<Awaited<ReturnType<typeof getInsights>>, { ok: true }>["data"];
-export function AgentMemoriesPage({ agentId, workers, initialMemories, scopeId = "", version, initialTab }: { initialTab?: "insights" | "memories"; agentId: string; workers: SubagentRow[]; initialMemories?: MemoryPage; scopeId?: string; version?: number }) {
+export function AgentMemoriesPage({ agentId, workers, scopeId = "", version, initialTab }: { initialTab?: "insights" | "memories"; agentId: string; workers: SubagentRow[]; scopeId?: string; version?: number }) {
   const tab = initialTab ?? (scopeId || version ? "insights" : "memories");
-  const [items, setItems] = useState<MemoryMetadata[]>(initialMemories?.items ?? []), [next, setNext] = useState<Cursor | null>(initialMemories?.nextCursor ?? null);
+  const client = useQueryClient();
+  const [filters, setFilters] = useState<MemoryFilters>({});
   const [kind, setKind] = useState(""), [coin, setCoin] = useState(""), [topic, setTopic] = useState(""), [producer, setProducer] = useState(""), [status, setStatus] = useState(""), [query, setQuery] = useState(""), [start, setStart] = useState(""), [end, setEnd] = useState("");
-  const [scope, setScope] = useState(scopeId), [insight, setInsight] = useState<InsightData | null>(null);
-  const [busy, setBusy] = useState(false), [error, setError] = useState("");
-  const inFlight = useRef(false);
-  const insightScope = (id = scope): InsightScope => id ? { kind: "worker", subagentId: id } : { kind: "agent" };
-  async function perform(action: () => Promise<void>) {
-    if (inFlight.current) return;
-    inFlight.current = true; setBusy(true); setError("");
-    try { await action(); } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to load data"); }
-    finally { inFlight.current = false; setBusy(false); }
+  const [scope, setScope] = useState(scopeId), [beforeVersion, setBeforeVersion] = useState<number | undefined>();
+  const publications = useQuery({ ...memoriesQueryOptions(agentId, filters), enabled: tab === "memories", placeholderData: keepPreviousData });
+  const insights = useQuery({ ...insightsQueryOptions(agentId, scope, beforeVersion), enabled: tab === "insights" });
+  const items = publications.data?.items ?? [], next = publications.data?.nextCursor;
+  const insight = insights.data;
+  const busy = tab === "insights" ? insights.isPending || insights.isFetching : publications.isPending || publications.isFetching;
+  const error = (tab === "insights" ? insights.error : publications.error)?.message;
+  function applyFilters() {
+    const applied: MemoryFilters = { ...(kind ? { kind } : {}), ...(coin ? { instrument: coin } : {}), ...(topic ? { topic } : {}), ...(producer ? { producerSubagentId: producer } : {}), ...(status ? { status } : {}), ...(query ? { query } : {}), ...(start ? { start: Date.parse(`${start}T00:00:00Z`) } : {}), ...(end ? { end: Date.parse(`${end}T00:00:00Z`) } : {}) };
+    setFilters(applied);
+    void client.invalidateQueries({ queryKey: memoriesQueryOptions(agentId, applied).queryKey, exact: true });
   }
-  async function load(cursor?: Cursor) {
-    const filters = { ...(kind ? { kind } : {}), ...(coin ? { instrument: coin } : {}), ...(topic ? { topic } : {}), ...(producer ? { producerSubagentId: producer } : {}), ...(status ? { status } : {}), ...(query ? { query } : {}), ...(start ? { start: Date.parse(`${start}T00:00:00Z`) } : {}), ...(end ? { end: Date.parse(`${end}T00:00:00Z`) } : {}), ...(cursor ? { cursor } : {}) };
-    const result = await listMemories({ data: { agentId, filters } });
-    if (!result.ok) throw new Error(result.error);
-    setItems(result.data.items); setNext(result.data.nextCursor);
-  }
-  async function loadInsight(id = scope, beforeVersion?: number) {
-    const result = await getInsights({ data: { agentId, scope: insightScope(id), history: true, ...(beforeVersion === undefined ? {} : { beforeVersion }) } });
-    if (!result.ok) throw new Error(result.error);
-    setInsight(result.data);
-  }
-  useEffect(() => { void perform(async () => { if (tab === "insights") { setScope(scopeId); setInsight(null); await loadInsight(scopeId); } else if (!initialMemories) await load(); }); }, [agentId, scopeId, tab, initialMemories]);
   function changeScope(id: string) {
-    if (inFlight.current || id === scope) return;
-    setScope(id); setInsight(null); void perform(() => loadInsight(id));
+    if (busy || id === scope) return;
+    setScope(id); setBeforeVersion(undefined);
   }
   return <section className="w-full min-w-0 space-y-4 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6 text-zinc-200">
     <header><h1 className="text-lg font-medium text-white">{tab === "memories" ? "Memories" : "Insights"}</h1></header>
@@ -51,7 +38,7 @@ export function AgentMemoriesPage({ agentId, workers, initialMemories, scopeId =
     {tab === "memories" ? <>
       <details>
         <summary className="w-fit cursor-pointer text-sm text-zinc-400 hover:text-white">Filter</summary>
-      <form className="mt-3 flex flex-wrap items-end gap-3 text-sm" onSubmit={(event) => { event.preventDefault(); void perform(() => load()); }}>
+      <form className="mt-3 flex flex-wrap items-end gap-3 text-sm" onSubmit={(event) => { event.preventDefault(); if (!busy) applyFilters(); }}>
         <label>Kind<select aria-label="Memory kind" className={`${input} ml-2 cursor-pointer`} value={kind} onChange={(event) => setKind(event.target.value)}><option value="">All</option>{["research", "decision", "review"].map((value) => <option key={value}>{value}</option>)}</select></label>
         <label>Instrument<input className={`${input} ml-2 w-24`} maxLength={32} value={coin} onChange={(event) => setCoin(event.target.value)} /></label><label>Topic<input className={`${input} ml-2 w-40`} maxLength={64} value={topic} onChange={(event) => setTopic(event.target.value)} /></label>
         <label>Producer<select className={`${input} ml-2 cursor-pointer`} value={producer} onChange={(event) => setProducer(event.target.value)}><option value="">All</option>{workers.filter((worker) => !worker.archived).map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}</select></label>
@@ -74,7 +61,7 @@ export function AgentMemoriesPage({ agentId, workers, initialMemories, scopeId =
             </tr>)}{!items.length && <tr><td colSpan={7} className="px-4 py-8 text-center text-zinc-400">No memories found. Try different filters, or configure an analysis/review worker and its memory tools.</td></tr>}</tbody>
           </table>
         </div>
-        <button className={button} disabled={busy || !next} onClick={() => { if (next) void perform(() => load(next)); }}>Next page</button>
+        <button className={button} disabled={busy || publications.isPlaceholderData || !!publications.error || !next} onClick={() => { if (next) setFilters((current) => ({ ...current, cursor: next })); }}>Next page</button>
       </section>
       </div>
     </> : <section className="space-y-4">
@@ -92,7 +79,7 @@ export function AgentMemoriesPage({ agentId, workers, initialMemories, scopeId =
               <summary className="cursor-pointer text-sm text-zinc-400 hover:text-white">Revision history</summary>
               <ul className="mt-3 space-y-3 text-xs text-zinc-400">{insight.history?.items.map((item) => <li key={item.version}><span className="text-zinc-200">v{item.version}</span> · {new Date(item.createdAt).toISOString()}<p className="mt-1">{item.reason}</p></li>)}</ul>
               {!insight.history?.items.length && <p className="mt-3 text-sm text-zinc-500">No revisions yet.</p>}
-              {insight.history?.nextBeforeVersion && <button className={`${button} mt-3`} disabled={busy} onClick={() => { void perform(() => loadInsight(scope, insight.history!.nextBeforeVersion!)); }}>Older revisions</button>}
+              {insight.history?.nextBeforeVersion && <button className={`${button} mt-3`} disabled={busy} onClick={() => setBeforeVersion(insight.history!.nextBeforeVersion!)}>Older revisions</button>}
             </details>
           </> : <p className="text-sm text-zinc-500">{busy ? "Loading insights…" : "Insights unavailable."}</p>}
         </article>

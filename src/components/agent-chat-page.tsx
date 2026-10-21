@@ -1,9 +1,11 @@
 import { Link } from "@tanstack/react-router";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useEffectEvent, useId, useLayoutEffect, useRef, useState } from "react";
 import type { AgentChat, ChatEntry } from "../agents/agent-service.js";
 import type { ModelChoice } from "../providers/provider-service.js";
 import { compactAgentChat, resetAgentChat, retryAgent, sendAgentMessage, stopAgentChat } from "../web/agents.js";
 import { saveSubagentSection } from "../web/subagents.js";
+import { cacheSubagent } from "../web/subagent-queries.js";
 import { ModelDialog, modelKey } from "./model-picker.js";
 import { ProviderLogo } from "./provider-logo.js";
 import { ToolCall } from "./tool-activity.js";
@@ -61,8 +63,13 @@ export function AgentChatPage({ initial, choices, embedded = false, visible = tr
 }) {
   const { chat, messages, connectionError, historyLoading, historyDone, loadOlder } = useAgentChat(initial);
   const [message, setMessage] = useState("");
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState("");
+  const client = useQueryClient();
+  const mutation = useMutation({
+    mutationFn: (operation: () => Promise<void>) => operation(),
+    onMutate: () => { setNotice(""); },
+  });
+  const pending = mutation.isPending;
+  const error = mutation.error?.message;
   /** Transient outcome of a background action, such as a declined compaction. */
   const [notice, setNotice] = useState("");
   const [resetOpen, setResetOpen] = useState(false);
@@ -99,41 +106,37 @@ export function AgentChatPage({ initial, choices, embedded = false, visible = tr
     if (notice && chat.messages.some((entry) => entry.marker === "compaction")) setNotice("");
   }, [chat.messages, notice]);
 
-  async function run<T extends { ok: boolean; error?: string }>(operation: () => Promise<T>): Promise<T | undefined> {
-    if (inFlight.current) return undefined;
+  async function run(operation: () => Promise<void>) {
+    // Guard synchronous double submits before Query's pending render commits.
+    if (inFlight.current) return;
     inFlight.current = true;
-    setPending(true);
-    setError("");
-    setNotice("");
-    try {
-      const result = await operation();
-      if (!result.ok) setError((result as { error?: string }).error ?? "Agent operation failed. Please try again.");
-      return result;
-    } catch { setError("Unable to complete the request. Retrying a message will not submit it twice."); return undefined; }
-    finally { inFlight.current = false; setPending(false); }
+    try { await mutation.mutateAsync(operation); }
+    catch { /* Query retains the error and the composer keeps its request ID. */ }
+    finally { inFlight.current = false; }
   }
   /** The composer keeps focus through sends so chatting stays hands-on-keyboard. */
   const composer = useRef<HTMLTextAreaElement>(null);
   async function action(kind: "send" | "retry" | "stop" | "reset" | "compact") {
-    if (kind === "compact") {
-      const result = await run(() => compactAgentChat({ data: { id } }));
-      if (result?.ok && result.data.message) setNotice(result.data.message);
-      return;
-    }
-    await run(async (): Promise<{ ok: boolean; error?: string }> => {
-      if (kind === "send" && request.current?.message !== message) request.current = { message, id: crypto.randomUUID() };
-      if (kind === "retry") return retryAgent({ data: { id } });
-      if (kind === "stop") return stopAgentChat({ data: { id } });
-      if (kind === "reset") return resetAgentChat({ data: { id } });
-      const outgoing = request.current!;
-      if (chartContext && !outgoing.chart) {
-        try { outgoing.chart = await chartContext.capture(includeImage && chat.supportsImages === true); }
-        catch (cause) { return { ok: false, error: cause instanceof Error ? cause.message : "Unable to capture chart context." }; }
+    await run(async () => {
+      if (kind === "compact") {
+        const result = await compactAgentChat({ data: { id } });
+        if (result.message) setNotice(result.message);
+        return;
       }
-      const sent = sendAgentMessage({ data: { id, message: outgoing.message, requestId: outgoing.id, ...(outgoing.chart ? { chart: outgoing.chart } : {}) } });
+      if (kind === "retry") {
+        await retryAgent({ data: { id } });
+        await Promise.all([client.invalidateQueries({ queryKey: ["agents"] }), client.invalidateQueries({ queryKey: ["agent", id] })]);
+        return;
+      }
+      if (kind === "stop") { await stopAgentChat({ data: { id } }); return; }
+      if (kind === "reset") { await resetAgentChat({ data: { id } }); return; }
+      if (request.current?.message !== message) request.current = { message, id: crypto.randomUUID() };
+      const outgoing = request.current;
+      if (chartContext && !outgoing.chart) outgoing.chart = await chartContext.capture(includeImage && chat.supportsImages === true);
+      await sendAgentMessage({ data: { id, message: outgoing.message, requestId: outgoing.id, ...(outgoing.chart ? { chart: outgoing.chart } : {}) } });
       // Committed state arrives through the event stream; no follow-up fetch.
-      sent.then((result) => { if (result.ok) { setMessage((current) => current === outgoing.message ? "" : current); if (request.current === outgoing) request.current = null; } },  () => { /* run reports the failure. */ });
-      return sent;
+      setMessage((current) => current === outgoing.message ? "" : current);
+      if (request.current === outgoing) request.current = null;
     });
     if (kind === "send" || kind === "retry" || kind === "reset") composer.current?.focus();
   }
@@ -176,9 +179,11 @@ export function AgentChatPage({ initial, choices, embedded = false, visible = tr
   async function changeModel(value: string, thinkingLevel: string) {
     const choice = choices.find((entry) => modelKey(entry) === value);
     if (!choice) throw new Error("Select an available model.");
-    const result = await saveSubagentSection({ data: { agentId: id, id: `main:${id}`, section: "model", settings: { provider: choice.provider, modelId: choice.modelId, thinkingLevel } } });
-    if (!result.ok) throw new Error(result.error);
-    setModelOpen(false);
+    await mutation.mutateAsync(async () => {
+      const row = await saveSubagentSection({ data: { agentId: id, id: `main:${id}`, section: "model", settings: { provider: choice.provider, modelId: choice.modelId, thinkingLevel } } });
+      await cacheSubagent(client, id, row);
+      setModelOpen(false);
+    });
   }
   // A modal dialog makes the rest of the page inert and returns focus to its
   // opener on close, so the composer is focused only after the dialog unmounted.

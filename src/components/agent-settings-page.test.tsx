@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, type ComponentProps } from "react";
+import { QueryClient, QueryClientProvider, notifyManager } from "@tanstack/react-query";
 import { createRoot, type Root } from "react-dom/client";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentChat } from "../agents/agent-service.js";
@@ -10,7 +11,13 @@ vi.mock("@tanstack/react-router", () => ({ useRouter: () => ({ invalidate: mocks
 vi.mock("../web/agents.js", () => ({ deleteAgent: mocks.remove }));
 vi.mock("../web/risk.js", () => ({ saveRiskSettings: mocks.save }));
 vi.mock("sonner", () => ({ toast: { success: mocks.success } }));
-import { AgentSettingsPage } from "./agent-settings-page.js";
+import { AgentSettingsPage as AgentSettingsPageComponent } from "./agent-settings-page.js";
+notifyManager.setScheduler((callback) => { queueMicrotask(callback); return () => {}; });
+let queryClient: QueryClient;
+function AgentSettingsPage({ risk, ...props }: ComponentProps<typeof AgentSettingsPageComponent> & { risk?: RiskSettings }) {
+  if (risk) queryClient.setQueryData(["risk", props.initial.agent.id], risk);
+  return <QueryClientProvider client={queryClient}><AgentSettingsPageComponent {...props} /></QueryClientProvider>;
+}
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const initial: AgentChat = {
   agent: { id: "agent-fixture", name: "Research", userId: "owner", state: "ready", conversationId: 1, initialProvider: null, initialModelId: null, error: null, tradingAccountAddress: null, creationRequestId: "fixture", createdAt: 0, updatedAt: 0 },
@@ -35,13 +42,15 @@ describe("Agent settings", () => {
   });
   beforeEach(async () => {
     vi.resetAllMocks();
-    mocks.instruments.mockResolvedValue({ ok: true, data: ["BTC", "ETH", "SOL"] });
-    mocks.save.mockImplementation(async ({ data }: { data: { settings: RiskSettings } }) => ({ ok: true, data: data.settings }));
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } } });
+    queryClient.setQueryData(["risk", initial.agent.id], { tradingEnabled: false, allowedInstruments: null, maxOrderNotional: null, maxTotalNotional: null });
+    mocks.instruments.mockResolvedValue(["BTC", "ETH", "SOL"]);
+    mocks.save.mockImplementation(async ({ data }: { data: { settings: RiskSettings } }) => data.settings);
     vi.stubGlobal("EventSource", eventSource);
     container = document.createElement("div"); document.body.append(container); root = createRoot(container);
     await act(async () => root.render(<AgentSettingsPage initial={initial} />));
   });
-  afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
+  afterEach(async () => { await act(async () => root.unmount()); container.remove(); queryClient.clear(); vi.unstubAllGlobals(); });
   async function change(label: string, value: string) {
     await act(async () => {
       const element = container.querySelector<HTMLInputElement>(`[aria-label="${label}"]`)!;
@@ -66,7 +75,12 @@ describe("Agent settings", () => {
   const saveButton = () => [...container.querySelectorAll("button")].find((button) => button.textContent === "Save risk settings" || button.textContent === "Saving…");
   async function save() { await act(async () => { saveButton()!.click(); }); }
   it("requires exact name confirmation and navigates away after deletion", async () => {
-    mocks.remove.mockResolvedValue({ ok: true, data: { deleted: true } });
+    mocks.remove.mockResolvedValue({ deleted: true });
+    const domains = ["subagents", "memories", "insights", "artifacts", "chart-instruments", "chart-layouts", "chart-history", "chart-fills"];
+    for (const key of domains) {
+      queryClient.setQueryData([key, initial.agent.id, "fixture"], []);
+      queryClient.setQueryData([key, "other-agent", "fixture"], []);
+    }
     const button = (text: string) => [...container.querySelectorAll("button")].find((button) => button.textContent === text)!;
     await act(async () => button("Delete agent").click());
     expect(button("Permanently delete agent").disabled).toBe(true);
@@ -76,11 +90,15 @@ describe("Agent settings", () => {
     await act(async () => button("Permanently delete agent").click());
     expect(mocks.remove).toHaveBeenCalledWith({ data: { id: initial.agent.id, confirmation: initial.agent.name } });
     expect(mocks.navigate).toHaveBeenCalledWith({ to: "/agents" });
-    expect(mocks.invalidate).toHaveBeenCalledOnce();
+    for (const key of domains) {
+      expect(queryClient.getQueryData([key, initial.agent.id, "fixture"])).toBeUndefined();
+      expect(queryClient.getQueryData([key, "other-agent", "fixture"])).toEqual([]);
+    }
+    expect(mocks.invalidate).not.toHaveBeenCalled();
     expect(container.textContent).toContain("Existing exchange orders and positions are not changed");
   });
   it("preserves confirmation and supports retry after deletion fails", async () => {
-    mocks.remove.mockResolvedValue({ ok: false, error: "Deletion incomplete. Retry deletion." });
+    mocks.remove.mockRejectedValue(new Error("Deletion incomplete. Retry deletion."));
     const button = (text: string) => [...container.querySelectorAll("button")].find((button) => button.textContent === text)!;
     await act(async () => button("Delete agent").click());
     await change("Agent name confirmation", initial.agent.name);
@@ -144,7 +162,7 @@ describe("Agent settings", () => {
     await selectMode("Max total notional", false);
     await save();
     expect(mocks.save).toHaveBeenLastCalledWith({ data: { agentId: initial.agent.id, settings: { tradingEnabled: true, allowedInstruments: null, maxOrderNotional: null, maxTotalNotional: null } } });
-    expect(mocks.invalidate).toHaveBeenCalledTimes(2);
+    expect(mocks.invalidate).not.toHaveBeenCalled();
   });
   it("defaults both limits to No limit with disabled amount inputs and USDC suffixes", async () => {
     for (const label of ["Max order notional", "Max total notional"]) {
@@ -205,7 +223,7 @@ describe("Agent settings", () => {
     }
     expect(saveButton()?.disabled).toBe(true);
     expect([...container.querySelectorAll("button")].find((button) => button.textContent === "Select instruments")?.disabled).toBe(true);
-    await act(async () => resolve({ ok: true, data: { tradingEnabled: false, allowedInstruments: null, maxOrderNotional: "100", maxTotalNotional: null } }));
+    await act(async () => resolve({ tradingEnabled: false, allowedInstruments: null, maxOrderNotional: "100", maxTotalNotional: null }));
     expect(saveButton()).toBeUndefined();
     expect(mode("Max order notional", false).matches(":disabled")).toBe(false);
   });
@@ -218,7 +236,7 @@ describe("Agent settings", () => {
     expect(checkbox.parentElement?.querySelector('svg[aria-hidden="true"]')?.classList.contains("peer-checked:opacity-100")).toBe(true);
   });
   it("preserves the draft when saving fails", async () => {
-    mocks.save.mockResolvedValue({ ok: false, error: "Unable to save" });
+    mocks.save.mockRejectedValue(new Error("Unable to save"));
     await selectMode("Max total notional", true);
     await change("Max total notional", "123.45");
     await save();

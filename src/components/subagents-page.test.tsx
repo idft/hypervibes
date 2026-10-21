@@ -1,15 +1,17 @@
 // @vitest-environment jsdom
 import { act } from "react";
+import { QueryClient, QueryClientProvider, notifyManager } from "@tanstack/react-query";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRow } from "../db/subagent-schema.js";
 import { templateDraft } from "../agents/subagent-templates.js";
 import { workerTriggers } from "../agents/worker-triggers.js";
-const mocks = vi.hoisted(() => ({ invalidate: vi.fn(), importDefaultSubagents: vi.fn(), success: vi.fn() }));
-vi.mock("../web/subagents.js", () => ({ importDefaultSubagents: mocks.importDefaultSubagents, saveSubagentSection: vi.fn() }));
+const mocks = vi.hoisted(() => ({ invalidate: vi.fn(), importDefaultSubagents: vi.fn(), listSubagents: vi.fn(), success: vi.fn() }));
+vi.mock("../web/subagents.js", () => ({ importDefaultSubagents: mocks.importDefaultSubagents, listSubagents: mocks.listSubagents, saveSubagentSection: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { success: mocks.success } }));
 vi.mock("@tanstack/react-router", () => ({ useRouter: () => ({ invalidate: mocks.invalidate }), Link: ({ children }: { children: React.ReactNode }) => <a>{children}</a> }));
 import { SubagentsPage } from "./subagents-page.js";
+notifyManager.setScheduler((callback) => { queueMicrotask(callback); return () => {}; });
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const worker = (template: string, id: string): SubagentRow => {
   const draft = templateDraft(template, { provider: "test", modelId: "test-model", thinkingLevel: "" });
@@ -21,15 +23,18 @@ trader.triggers.researchSources = [analyst.id];
 const reviewer = worker("basic-review", "worker:reviewer");
 
 describe("default sub-agent import UI and connections", () => {
-  let root: Root, container: HTMLDivElement;
+  let root: Root, container: HTMLDivElement, client: QueryClient;
   const click = (label: string) => act(async () => { [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === label)!.click(); });
   beforeEach(async () => {
     vi.resetAllMocks();
+    client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } } });
+    client.setQueryData(["subagents", "agent", "list"], [analyst, trader, reviewer]);
+    mocks.listSubagents.mockResolvedValue([analyst, trader, reviewer]);
     container = document.createElement("div"); document.body.append(container); root = createRoot(container);
-    mocks.importDefaultSubagents.mockResolvedValue({ ok: true, data: [analyst, trader, reviewer] });
-    await act(async () => root.render(<SubagentsPage agentId="agent" definitions={[analyst, trader, reviewer]} />));
+    mocks.importDefaultSubagents.mockResolvedValue([analyst, trader, reviewer]);
+    await act(async () => root.render(<QueryClientProvider client={client}><SubagentsPage agentId="agent" /></QueryClientProvider>));
   });
-  afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
+  afterEach(async () => { await act(async () => root.unmount()); container.remove(); client.clear(); });
 
   it("shows actual source/recipient connections and configured account triggers, including paused state", () => {
     expect(container.textContent).toContain("Research from: Technical Analyst (paused)");
@@ -46,19 +51,19 @@ describe("default sub-agent import UI and connections", () => {
     await click("Import default sub-agents");
     await click("Import paused sub-agents");
     expect(mocks.importDefaultSubagents).toHaveBeenCalledWith({ data: { agentId: "agent", requestId: expect.any(String) } });
-    expect(mocks.invalidate).toHaveBeenCalledOnce();
+    expect(mocks.listSubagents).toHaveBeenCalledOnce();
     expect(mocks.success).toHaveBeenCalledWith("Default sub-agents imported. All start paused.");
     expect(container.textContent).not.toContain("Import paused sub-agents");
   });
   it("keeps the same request ID on failure and blocks duplicate in-flight submissions", async () => {
-    let settle!: (value: { ok: false; error: string }) => void;
-    mocks.importDefaultSubagents.mockReturnValueOnce(new Promise((resolve) => { settle = resolve; }));
+    let reject!: (reason: Error) => void;
+    mocks.importDefaultSubagents.mockReturnValueOnce(new Promise((_resolve, fail) => { reject = fail; }));
     await click("Import default sub-agents");
     await click("Import paused sub-agents");
     expect(container.textContent).toContain("Importing…");
     await click("Importing…");
     expect(mocks.importDefaultSubagents).toHaveBeenCalledOnce();
-    await act(async () => settle({ ok: false, error: "Temporary failure" }));
+    await act(async () => reject(new Error("Temporary failure")));
     expect(container.querySelector('[role="alert"]')?.textContent).toBe("Temporary failure");
     await click("Import paused sub-agents");
     expect(mocks.importDefaultSubagents.mock.calls[1]).toEqual(mocks.importDefaultSubagents.mock.calls[0]);

@@ -1,5 +1,8 @@
 // @vitest-environment jsdom
-import { act, type ReactNode } from "react";
+import { act, type ComponentProps, type ReactNode } from "react";
+import { QueryClient, QueryClientProvider, notifyManager } from "@tanstack/react-query";
+import { memoriesQueryOptions } from "../web/memory-queries.js";
+import type { listMemories } from "../web/memories.js";
 import type { MemoryDetail } from "../memory/memory-contracts.js";
 import type { SubagentRow } from "../db/subagent-schema.js";
 import { createRoot, type Root } from "react-dom/client";
@@ -9,8 +12,17 @@ const mocks = vi.hoisted(() => ({ listMemories: vi.fn(), getInsights: vi.fn(), r
 vi.mock("../web/memories.js", () => mocks);
 vi.mock("@tanstack/react-router", () => ({ Link: ({ to, params, children, className }: { to: string; params: Record<string, string>; children: ReactNode; className?: string }) => <a className={className} href={to.replace(/\$(\w+)/g, (_match, key: string) => encodeURIComponent(params[key]!))}>{children}</a> }));
 vi.mock("../web/artifacts.js", () => ({ readArtifact: mocks.readArtifact, changeArtifact: mocks.changeArtifact }));
-import { AgentMemoriesPage } from "./agent-memories-page.js";
-import { AgentMemoryDetailPage } from "./agent-memory-detail-page.js";
+import { AgentMemoriesPage as AgentMemoriesPageComponent } from "./agent-memories-page.js";
+import { AgentMemoryDetailPage as AgentMemoryDetailPageComponent } from "./agent-memory-detail-page.js";
+notifyManager.setScheduler((callback) => { queueMicrotask(callback); return () => {}; });
+let client: QueryClient;
+function AgentMemoriesPage({ initialMemories, ...props }: ComponentProps<typeof AgentMemoriesPageComponent> & { initialMemories?: Awaited<ReturnType<typeof listMemories>> }) {
+  if (initialMemories) client.setQueryData(memoriesQueryOptions(props.agentId).queryKey, initialMemories);
+  return <QueryClientProvider client={client}><AgentMemoriesPageComponent {...props} /></QueryClientProvider>;
+}
+function AgentMemoryDetailPage(props: ComponentProps<typeof AgentMemoryDetailPageComponent>) {
+  return <QueryClientProvider client={client}><AgentMemoryDetailPageComponent {...props} /></QueryClientProvider>;
+}
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const metadata = { correctedBy: null, supersededBy: null, ref: "m1", status: "stale", kind: "research", topic: "trend_setup", instrument: "BTC", interval: "1h", summary: "<img src=x onerror=alert(1)>", createdAt: 1000, evidenceAsOf: 0, validUntil: 1000, producerSubagentId: null, sourceRunId: null, retractedAt: null, retractionReason: null };
 const current = { scope: { kind: "agent" }, version: 1, content: "Current guidance" };
@@ -22,17 +34,18 @@ describe("Agent memory and insight UI", () => {
   const dialogMethods = Object.fromEntries(["showModal", "close"].map((key) => [key, Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, key)]));
   beforeEach(() => {
     vi.resetAllMocks();
+    client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } } });
     Object.defineProperties(HTMLDialogElement.prototype, {
       showModal: { configurable: true, value(this: HTMLDialogElement) { this.open = true; } },
       close: { configurable: true, value(this: HTMLDialogElement) { this.open = false; } },
     });
     container = document.createElement("div"); document.body.append(container); root = createRoot(container);
-    mocks.listMemories.mockResolvedValue({ ok: true, data: { items: [metadata], nextCursor: { createdAt: 1000, ref: "m1" } } });
+    mocks.listMemories.mockResolvedValue({ items: [metadata], nextCursor: { createdAt: 1000, ref: "m1" } });
     detail = { ...metadata, kind: "research", conversationId: null, toolTaskId: null, content: "<script>bad()</script>", payload: { version: 1, bias: "long" }, links: [{ ref: "m2", relation: "based_on" }], artifactIds: [] };
-    mocks.getInsights.mockResolvedValue({ ok: true, data });
+    mocks.getInsights.mockResolvedValue(data);
   });
   afterEach(async () => {
-    await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks();
+    await act(async () => root.unmount()); container.remove(); client.clear(); vi.restoreAllMocks();
     if (clipboardDescriptor) Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
     else Reflect.deleteProperty(navigator, "clipboard");
     for (const [key, descriptor] of Object.entries(dialogMethods)) {
@@ -161,6 +174,14 @@ describe("Agent memory and insight UI", () => {
     await click("Apply filters");
     expect(mocks.listMemories).toHaveBeenLastCalledWith({ data: { agentId: "agent", filters: {} } });
   });
+  it("paginates the applied filters, not an unsubmitted filter draft", async () => {
+    await act(async () => root.render(<AgentMemoriesPage agentId="agent" workers={[]} />));
+    await edit(container.querySelector<HTMLInputElement>('[aria-label="Search memory summaries"]')!, "Unsubmitted draft");
+    await click("Next page");
+    expect(mocks.listMemories).toHaveBeenLastCalledWith({ data: { agentId: "agent", filters: { cursor: { createdAt: 1000, ref: "m1" } } } });
+    await click("Apply filters");
+    expect(mocks.listMemories).toHaveBeenLastCalledWith({ data: { agentId: "agent", filters: { query: "Unsubmitted draft" } } });
+  });
   it("shows fresh status in green beside the detail title copy button", async () => {
     detail = { ...detail, status: "fresh" };
     await renderDetail();
@@ -191,7 +212,7 @@ describe("Agent memory and insight UI", () => {
   });
   it("colors memory statuses and displays instrument icons with an agent-wide fallback", async () => {
     const statuses = ["fresh", "stale", "retracted", "invalid_evidence", "durable"];
-    mocks.listMemories.mockResolvedValue({ ok: true, data: { items: statuses.map((status, index) => ({ ...metadata, ref: `m${index + 1}`, status, instrument: index === 0 ? "BTC" : null })), nextCursor: null } });
+    mocks.listMemories.mockResolvedValue({ items: statuses.map((status, index) => ({ ...metadata, ref: `m${index + 1}`, status, instrument: index === 0 ? "BTC" : null })), nextCursor: null });
     await act(async () => root.render(<AgentMemoriesPage agentId="agent" workers={[]} />));
     const rows = [...container.querySelectorAll("tbody tr")];
     const colors = ["text-emerald-300", "text-yellow-300", "text-zinc-400", "text-red-300", "text-violet-300"];
@@ -220,7 +241,7 @@ describe("Agent memory and insight UI", () => {
   it("excludes archived sub-agents from producer and insight scope options while preserving publication names", async () => {
     const worker: SubagentRow = { id: "active", agentId: "agent", kind: "worker", name: "Active analyst", description: "", instructions: "", provider: "test", modelId: "test", thinkingLevel: "", tools: [], triggers: { inboxEnabled: false, workerDelegates: [], researchSources: [], fills: false, orderChanges: false }, templateOrigin: null, enabled: true, archived: false, delegatable: true, persistent: false, conversationId: null, schedule: "", delaySeconds: 1, nextRunAt: null, completion: "save", timeoutSeconds: 900, createdAt: 0, updatedAt: 0 };
     const archived = { ...worker, id: "archived", name: "Archived analyst", archived: true };
-    mocks.listMemories.mockResolvedValue({ ok: true, data: { items: [{ ...metadata, producerSubagentId: archived.id }], nextCursor: null } });
+    mocks.listMemories.mockResolvedValue({ items: [{ ...metadata, producerSubagentId: archived.id }], nextCursor: null });
     await act(async () => root.render(<AgentMemoriesPage agentId="agent" workers={[worker, archived]} />));
     const producer = [...container.querySelectorAll("select")].find((select) => select.parentElement?.textContent?.startsWith("Producer"))!;
     expect([...producer.options].map((option) => [option.value, option.textContent])).toEqual([["", "All"], ["active", "Active analyst"]]);
@@ -229,13 +250,15 @@ describe("Agent memory and insight UI", () => {
     const scope = container.querySelector('nav[aria-label="Insights scope"]')!;
     expect([...scope.querySelectorAll("button")].map((button) => button.textContent)).toEqual(["Global", "Active analyst"]);
     expect(scope.querySelector('[aria-current="true"]')?.textContent).toBe("Global");
-    mocks.getInsights.mockResolvedValueOnce({ ok: true, data: { ...data, current: { ...current, content: "Analyst guidance" } } });
+    mocks.getInsights.mockResolvedValueOnce({ ...data, current: { ...current, content: "Analyst guidance" } });
     await click("Active analyst");
     expect(mocks.getInsights).toHaveBeenLastCalledWith({ data: { agentId: "agent", scope: { kind: "worker", subagentId: "active" }, history: true } });
     expect(scope.querySelector('[aria-current="true"]')?.textContent).toBe("Active analyst");
     expect(container.querySelector('[aria-label="Latest insights"]')?.textContent).toContain("Analyst guidance");
     await click("Global");
-    expect(mocks.getInsights).toHaveBeenLastCalledWith({ data: { agentId: "agent", scope: { kind: "agent" }, history: true } });
+    expect(mocks.getInsights).toHaveBeenCalledTimes(2);
+    expect(container.querySelector('[aria-label="Latest insights"]')?.textContent).toContain("Current guidance");
+    expect(container.querySelector('[aria-label="Latest insights"]')?.textContent).not.toContain("Analyst guidance");
   });
   it("applies filters to a fresh page and displays an empty result", async () => {
     await act(async () => root.render(<AgentMemoriesPage agentId="agent" workers={[]} />));
@@ -245,7 +268,7 @@ describe("Agent memory and insight UI", () => {
     await act(async () => { kind.value = "research"; kind.dispatchEvent(new Event("change", { bubbles: true })); });
     await edit(container.querySelector<HTMLInputElement>('[aria-label="Search memory summaries"]')!, "support");
     expect(mocks.listMemories).toHaveBeenCalledTimes(1);
-    mocks.listMemories.mockResolvedValue({ ok: true, data: { items: [], nextCursor: null } });
+    mocks.listMemories.mockResolvedValue({ items: [], nextCursor: null });
     await click("Apply filters");
     expect(mocks.listMemories).toHaveBeenLastCalledWith({ data: { agentId: "agent", filters: { kind: "research", query: "support" } } });
     expect(container.querySelector("tbody")?.textContent).toContain("No memories found");
@@ -258,7 +281,7 @@ describe("Agent memory and insight UI", () => {
   it("previews supporting artifacts in a modal with safe content, pagination, attachments and explicit downloads", async () => {
     detail = { ...detail, content: "Report", payload: {}, links: [], artifactIds: ["report"] };
     const preview = { id: "report", title: "Research report", description: "Evidence", mediaType: "text/plain", content: "<script>untrusted</script>", nextOffset: 100, attachments: [{ id: "chart", title: "Chart", mediaType: "image/png" }] };
-    mocks.readArtifact.mockResolvedValue({ ok: true, data: preview });
+    mocks.readArtifact.mockResolvedValue(preview);
     await renderDetail();
     await click("Supporting artifact report");
     const dialog = () => document.querySelector("dialog")!;
@@ -268,11 +291,11 @@ describe("Agent memory and insight UI", () => {
     expect(dialog().textContent).toContain("<script>untrusted</script>");
     expect(dialog().querySelector("script")).toBeNull();
     expect(dialog().querySelector("a")?.getAttribute("href")).toBe("/api/agents/agent/artifacts/report/content");
-    mocks.readArtifact.mockResolvedValueOnce({ ok: true, data: { ...preview, content: "More evidence", nextOffset: null } });
+    mocks.readArtifact.mockResolvedValueOnce({ ...preview, content: "More evidence", nextOffset: null });
     await modalClick("Next text portion");
     expect(mocks.readArtifact).toHaveBeenLastCalledWith({ data: { agentId: "agent", id: "report", offset: 100 } });
     expect(dialog().textContent).toContain("More evidence");
-    mocks.readArtifact.mockResolvedValueOnce({ ok: true, data: { ...preview, id: "chart", title: "Chart", mediaType: "image/png", nextOffset: null, attachments: [] } });
+    mocks.readArtifact.mockResolvedValueOnce({ ...preview, id: "chart", title: "Chart", mediaType: "image/png", nextOffset: null, attachments: [] });
     await modalClick("Chart");
     expect(dialog().querySelector("img")?.getAttribute("src")).toBe("/api/agents/agent/artifacts/chart/content?inline=1");
     await modalClick("Back to supporting artifact");
@@ -283,32 +306,32 @@ describe("Agent memory and insight UI", () => {
   it("manages retention and deletion in the modal while enforcing memory protection", async () => {
     detail = { ...detail, content: "Report", payload: {}, links: [], artifactIds: ["report"] };
     const preview = { id: "report", title: "Report", description: "", mediaType: "text/plain", content: "Evidence", nextOffset: null, attachments: [], expiresAt: 1000, protectedByMemory: false };
-    mocks.readArtifact.mockResolvedValue({ ok: true, data: preview });
-    mocks.changeArtifact.mockResolvedValue({ ok: true, data: { updated: true } });
+    mocks.readArtifact.mockResolvedValue(preview);
+    mocks.changeArtifact.mockResolvedValue({ updated: true });
     await renderDetail();
     await click("Supporting artifact report");
     const modalButton = (label: string) => [...document.querySelectorAll<HTMLButtonElement>("dialog button")].find((button) => button.textContent === label)!;
     const modalClick = async (label: string) => act(async () => modalButton(label).click());
-    mocks.readArtifact.mockResolvedValue({ ok: true, data: { ...preview, expiresAt: null } });
+    mocks.readArtifact.mockResolvedValue({ ...preview, expiresAt: null });
     await modalClick("Keep / Pin");
     expect(mocks.changeArtifact).toHaveBeenLastCalledWith({ data: { agentId: "agent", id: "report", action: "retain" } });
-    mocks.readArtifact.mockResolvedValue({ ok: true, data: preview });
+    mocks.readArtifact.mockResolvedValue(preview);
     await modalClick("Expire in seven days");
     expect(mocks.changeArtifact).toHaveBeenLastCalledWith({ data: { agentId: "agent", id: "report", action: "expire" } });
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     await modalClick("Delete");
     expect(mocks.changeArtifact).toHaveBeenCalledTimes(2);
     confirm.mockReturnValue(true);
-    mocks.changeArtifact.mockResolvedValueOnce({ ok: false, error: "Artifact is protected" });
+    mocks.changeArtifact.mockRejectedValueOnce(new Error("Artifact is protected"));
     await modalClick("Delete");
     expect(document.querySelector("dialog [role=alert]")?.textContent).toBe("Artifact is protected");
-    mocks.readArtifact.mockResolvedValue({ ok: true, data: { ...preview, protectedByMemory: true, expiresAt: null } });
+    mocks.readArtifact.mockResolvedValue({ ...preview, protectedByMemory: true, expiresAt: null });
     await modalClick("Keep / Pin");
     expect(modalButton("Expire in seven days").disabled).toBe(true);
     expect(modalButton("Delete").disabled).toBe(true);
     expect(modalButton("Delete").title).toContain("Evidence referenced by memory");
     await act(async () => modalButton("Close").click());
-    mocks.readArtifact.mockResolvedValue({ ok: true, data: preview });
+    mocks.readArtifact.mockResolvedValue(preview);
     await click("Supporting artifact report");
     await modalClick("Delete");
     expect(mocks.changeArtifact).toHaveBeenLastCalledWith({ data: { agentId: "agent", id: "report", action: "delete" } });
@@ -316,7 +339,7 @@ describe("Agent memory and insight UI", () => {
   });
   it("shows artifact read errors in the modal and allows closing it", async () => {
     detail = { ...detail, content: "Report", payload: {}, links: [], artifactIds: ["missing"] };
-    mocks.readArtifact.mockResolvedValue({ ok: false, error: "Artifact not found" });
+    mocks.readArtifact.mockRejectedValue(new Error("Artifact not found"));
     await renderDetail();
     await click("Supporting artifact missing");
     expect(document.querySelector("dialog [role=alert]")?.textContent).toBe("Artifact not found");
@@ -356,18 +379,19 @@ describe("Agent memory and insight UI", () => {
     expect(mocks.replaceInsights).not.toHaveBeenCalled();
   });
   it("paginates revision metadata without replacing the latest content", async () => {
-    mocks.getInsights.mockResolvedValueOnce({ ok: true, data: { ...data, history: { ...data.history, nextBeforeVersion: 1 } } });
+    mocks.getInsights.mockResolvedValueOnce({ ...data, history: { ...data.history, nextBeforeVersion: 1 } });
     await act(async () => root.render(<AgentMemoriesPage agentId="agent" workers={[]} initialTab="insights" />));
     await click("Older revisions");
     expect(mocks.getInsights).toHaveBeenLastCalledWith({ data: { agentId: "agent", scope: { kind: "agent" }, history: true, beforeVersion: 1 } });
     expect(container.querySelector("pre")?.textContent).toBe("Current guidance");
   });
   it("shows a simple empty state and insight loading errors", async () => {
-    mocks.getInsights.mockResolvedValueOnce({ ok: true, data: { current: { ...current, version: 0, content: "" }, head: null, revision: null, history: { items: [], nextBeforeVersion: null } } });
+    mocks.getInsights.mockResolvedValueOnce({ current: { ...current, version: 0, content: "" }, head: null, revision: null, history: { items: [], nextBeforeVersion: null } });
     await act(async () => root.render(<AgentMemoriesPage agentId="agent" workers={[]} initialTab="insights" />));
     expect(container.querySelector("pre")?.textContent).toBe("No insights yet.");
     expect(container.querySelector("details")?.textContent).toContain("No revisions yet.");
-    mocks.getInsights.mockResolvedValueOnce({ ok: false, error: "Unable to read insights" });
+    client.removeQueries({ queryKey: ["insights", "agent"] });
+    mocks.getInsights.mockRejectedValueOnce(new Error("Unable to read insights"));
     await act(async () => root.render(<AgentMemoriesPage key="error" agentId="agent" workers={[]} initialTab="insights" />));
     expect(container.querySelector('[role="alert"]')?.textContent).toBe("Unable to read insights");
     expect(container.querySelector('[aria-label="Latest insights"]')?.textContent).toContain("Insights unavailable.");

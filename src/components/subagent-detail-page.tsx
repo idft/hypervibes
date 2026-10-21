@@ -1,14 +1,14 @@
 import { useRouter } from "@tanstack/react-router";
 import { useRef, useState } from "react";
+import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import { cacheSubagent, invalidateSubagentLists, subagentQueryOptions } from "../web/subagent-queries.js";
 import { toast } from "sonner";
-import type { SubagentRow, SubagentRun } from "../db/subagent-schema.js";
 import type { ModelChoice } from "../providers/provider-service.js";
 import { defaultMainInstructions, type AssignmentSettings, type SubagentInput, type SubagentSections } from "../agents/subagent-input.js";
 import { archiveSubagent, runSubagent, saveSubagentAssignments, saveSubagentIdentity, saveSubagentSection, saveSubagentTools, stopSubagentRun, unarchiveSubagent } from "../web/subagents.js";
 import { ModelPicker, modelKey } from "./model-picker.js";
 import { ProviderLogo } from "./provider-logo.js";
 import { WorkerTriggerConfig } from "./worker-trigger-config.js";
-import type { InboxRequestSummary, RunPagination } from "../agents/subagent-history.js";
 import { useSubagentRuns } from "./use-subagent-runs.js";
 import { SubagentRunHistory } from "./subagent-run-history.js";
 import { RunSubagentDialog } from "./run-subagent-dialog.js";
@@ -18,12 +18,16 @@ import { AssignmentConfig, ScheduleConfig, SubagentIdentity, ToolPicker } from "
 const panel = "space-y-4 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6";
 const inputClass = "mt-2 block w-full rounded-lg border border-zinc-700 bg-zinc-950 p-3 text-sm text-white";
 const button = "cursor-pointer rounded-full bg-violet-600 px-4 py-2 text-sm text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50";
-export function SubagentDetailPage({ agentId, initial, choices }: { agentId: string; initial: { definition: SubagentRow; runs: SubagentRun[]; pagination?: RunPagination; schedulerError: string | null; workers?: { id: string; name: string; archived?: boolean; tools?: string[] }[]; inbox?: InboxRequestSummary[] }; choices: ModelChoice[] }) {
+export function SubagentDetailPage({ agentId, subagentId, choices }: { agentId: string; subagentId: string; choices: ModelChoice[] }) {
   const router = useRouter();
-  const [definition, setDefinition] = useState(initial.definition);
+  const client = useQueryClient();
+  const { data: initial, error: refreshError } = useSuspenseQuery(subagentQueryOptions(agentId, subagentId));
+  const definition = initial.definition;
   const [form, setForm] = useState<SubagentInput>(initial.definition);
   const [task, setTask] = useState("");
-  const [pending, setPending] = useState(false), [error, setError] = useState("");
+  const mutation = useMutation({ mutationFn: (operation: () => Promise<void>) => operation() });
+  const pending = mutation.isPending;
+  const error = mutation.error?.message ?? refreshError?.message;
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [runOpen, setRunOpen] = useState(false);
   const inFlight = useRef(false), assignmentId = useRef<{ task: string; id: string } | null>(null);
@@ -33,102 +37,93 @@ export function SubagentDetailPage({ agentId, initial, choices }: { agentId: str
   const selected = choices.find((choice) => modelKey(choice) === modelKey(form));
   const set = <K extends keyof SubagentInput>(key: K, value: SubagentInput[K]) => setForm((current) => ({ ...current, [key]: value }));
   const instructionsChanged = form.instructions !== definition.instructions;
+  async function operate(operation: () => Promise<void>) {
+    // Retain the synchronous re-entry guard; Query owns pending/error state.
+    if (inFlight.current) throw new Error("An operation is already in progress. Please retry.");
+    inFlight.current = true;
+    try { await mutation.mutateAsync(operation); }
+    finally { inFlight.current = false; }
+  }
   async function saveSection<K extends keyof SubagentSections>(section: K, settings: SubagentSections[K]) {
-    if (inFlight.current || definition.archived) throw new Error("Settings cannot be changed right now. Please retry.");
-    inFlight.current = true; setPending(true);
-    try {
-      const result = await saveSubagentSection({ data: { agentId, id: definition.id, section, settings } });
-      if (!result.ok) throw new Error(result.error);
-      const row = result.data;
+    if (definition.archived) throw new Error("Settings cannot be changed right now. Please retry.");
+    await operate(async () => {
+      const row = await saveSubagentSection({ data: { agentId, id: definition.id, section, settings } });
       const saved = section === "enabled" ? { enabled: row.enabled } : section === "instructions" ? { instructions: row.instructions }
         : section === "model" ? { provider: row.provider, modelId: row.modelId, thinkingLevel: row.thinkingLevel }
         : section === "triggers" ? { triggers: row.triggers } : { schedule: row.schedule, delaySeconds: row.delaySeconds, completion: row.completion };
-      setDefinition(row); setForm((current) => ({ ...current, ...saved }));
+      setForm((current) => ({ ...current, ...saved }));
+      await cacheSubagent(client, agentId, row);
       toast.success(section === "enabled" ? row.enabled ? "Sub-agent enabled" : "Sub-agent paused" : section === "instructions" ? "Instructions updated" : section === "model" ? "Model updated" : "Schedule updated");
-    } finally { inFlight.current = false; setPending(false); }
+    });
   }
   async function toggleEnabled() {
-    setError("");
     try { await saveSection("enabled", { enabled: !form.enabled }); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to change enabled status. Please retry."); }
+    catch { /* Query displays the error. */ }
   }
   async function saveInstructions() {
-    setError("");
     try { await saveSection("instructions", { instructions: form.instructions }); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to save instructions. Please retry."); }
+    catch { /* Query displays the error and preserves the draft. */ }
   }
   async function saveAssignments(settings: AssignmentSettings) {
-    if (inFlight.current || definition.archived) throw new Error("Settings cannot be changed right now. Please retry.");
-    inFlight.current = true; setPending(true);
-    try {
-      const result = await saveSubagentAssignments({ data: { agentId, id: definition.id, settings } });
-      if (!result.ok) throw new Error(result.error);
-      const { delegatable, persistent, timeoutSeconds } = result.data;
-      setDefinition(result.data);
+    if (definition.archived) throw new Error("Settings cannot be changed right now. Please retry.");
+    await operate(async () => {
+      const row = await saveSubagentAssignments({ data: { agentId, id: definition.id, settings } });
+      const { delegatable, persistent, timeoutSeconds } = row;
       setForm((current) => ({ ...current, delegatable, persistent, timeoutSeconds }));
+      await cacheSubagent(client, agentId, row);
       toast.success("Assignment settings updated");
-    } finally { inFlight.current = false; setPending(false); }
+    });
   }
   async function saveIdentity(identity: Pick<SubagentInput, "name" | "description">) {
-    if (inFlight.current || definition.archived) throw new Error("Settings cannot be changed right now. Please retry.");
-    inFlight.current = true; setPending(true);
-    try {
-      const result = await saveSubagentIdentity({ data: { agentId, id: definition.id, ...identity } });
-      if (!result.ok) throw new Error(result.error);
-      setDefinition(result.data);
-      setForm((current) => ({ ...current, name: result.data.name, description: result.data.description }));
+    if (definition.archived) throw new Error("Settings cannot be changed right now. Please retry.");
+    await operate(async () => {
+      const row = await saveSubagentIdentity({ data: { agentId, id: definition.id, ...identity } });
+      setForm((current) => ({ ...current, name: row.name, description: row.description }));
+      await cacheSubagent(client, agentId, row);
       toast.success("Name and description updated");
-    } finally { inFlight.current = false; setPending(false); }
+    });
   }
   async function saveTools(tools: string[]) {
-    if (inFlight.current || definition.archived) throw new Error("Settings cannot be changed right now. Please retry.");
-    inFlight.current = true; setPending(true);
-    try {
-      const result = await saveSubagentTools({ data: { agentId, id: definition.id, tools } });
-      if (!result.ok) throw new Error(result.error);
-      setDefinition(result.data);
-      setForm((current) => ({ ...current, tools: result.data.tools }));
+    if (definition.archived) throw new Error("Settings cannot be changed right now. Please retry.");
+    await operate(async () => {
+      const row = await saveSubagentTools({ data: { agentId, id: definition.id, tools } });
+      setForm((current) => ({ ...current, tools: row.tools }));
+      await cacheSubagent(client, agentId, row);
       toast.success("Tools updated");
-    } finally { inFlight.current = false; setPending(false); }
+    });
   }
   async function startRun() {
-    if (inFlight.current || definition.archived) throw new Error("This worker is unavailable for new assignments.");
-    inFlight.current = true; setPending(true); setError("");
-    try {
+    if (definition.archived) throw new Error("This worker is unavailable for new assignments.");
+    await operate(async () => {
       if (assignmentId.current?.task !== task) assignmentId.current = { task, id: crypto.randomUUID() };
-      let result;
-      try { result = await runSubagent({ data: { agentId, id: definition.id, task, requestId: assignmentId.current!.id } }); }
-      catch { throw new Error("Unable to confirm the assignment. Retry with the same task to reuse its request ID."); }
-      if (!result.ok) throw new Error(result.error);
+      const run = await runSubagent({ data: { agentId, id: definition.id, task, requestId: assignmentId.current.id } });
       assignmentId.current = null; setRunOpen(false); setTask("");
+      await invalidateSubagentLists(client, agentId);
       toast.success("Assignment started");
-      await router.navigate({ to: "/agents/$agentId/sub-agents/$subagentId/runs/$runId", params: { agentId, subagentId: definition.id, runId: result.data.id } });
-    } finally { inFlight.current = false; setPending(false); }
+      await router.navigate({ to: "/agents/$agentId/sub-agents/$subagentId/runs/$runId", params: { agentId, subagentId: definition.id, runId: run.id } });
+    });
   }
   async function perform(action: "archive" | "unarchive" | "stop", runId = "") {
     if (inFlight.current) return;
-    inFlight.current = true; setPending(true); setError("");
     try {
-      if (action === "stop") {
-        const result = await stopSubagentRun({ data: { agentId, runId } });
-        if (!result.ok) { setError(result.error); return; }
-        toast.success("Assignment stopped", { description: "Existing exchange orders were not cancelled." });
-      } else if (action === "unarchive") {
-        const result = await unarchiveSubagent({ data: { agentId, id: definition.id } });
-        if (!result.ok) { setError(result.error); return; }
-        setDefinition(result.data); setForm(result.data);
-        toast.success("Sub-agent unarchived", { description: "Restored paused. Enable it when ready." });
-        await router.invalidate();
-      } else {
-        const result = await archiveSubagent({ data: { agentId, id: definition.id } });
-        if (!result.ok) { setError(result.error); return; }
-        setDefinition((current) => ({ ...current, archived: true, enabled: false })); setForm((current) => ({ ...current, enabled: false })); toast.success("Sub-agent archived", { description: "History is preserved." });
-        await router.invalidate();
-        await router.navigate({ to: "/agents/$agentId/sub-agents", params: { agentId } });
-        return;
-      }
-    } catch { setError("Unable to complete the operation. Reload to check current state."); }
-    finally { inFlight.current = false; setPending(false); }
+      await operate(async () => {
+        if (action === "stop") {
+          await stopSubagentRun({ data: { agentId, runId } });
+          toast.success("Assignment stopped", { description: "Existing exchange orders were not cancelled." });
+          await invalidateSubagentLists(client, agentId);
+        } else if (action === "unarchive") {
+          const row = await unarchiveSubagent({ data: { agentId, id: definition.id } });
+          setForm(row);
+          await cacheSubagent(client, agentId, row);
+          toast.success("Sub-agent unarchived", { description: "Restored paused. Enable it when ready." });
+        } else {
+          await archiveSubagent({ data: { agentId, id: definition.id } });
+          await cacheSubagent(client, agentId, { ...definition, archived: true, enabled: false });
+          toast.success("Sub-agent archived", { description: "History is preserved." });
+          await router.navigate({ to: "/agents/$agentId/sub-agents", params: { agentId } });
+        }
+      });
+    } catch { /* Query retains the operation error. */ }
   }
   return <div className="w-full space-y-3">
     {definition.archived && !main && <section className={`${panel} flex flex-wrap items-center justify-between gap-3`}>
@@ -159,7 +154,7 @@ export function SubagentDetailPage({ agentId, initial, choices }: { agentId: str
         </div>
         <label className="block text-sm text-zinc-300">Instructions<textarea required rows={7} maxLength={32000} value={form.instructions} onChange={(event) => set("instructions", event.target.value)} className={inputClass} placeholder={main ? defaultMainInstructions : undefined} /></label>
         {instructionsChanged && <div className="flex justify-end gap-2">
-          <button type="button" onClick={() => { set("instructions", definition.instructions); setError(""); }} className="cursor-pointer rounded-full border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800">Reset</button>
+          <button type="button" onClick={() => { set("instructions", definition.instructions); mutation.reset(); }} className="cursor-pointer rounded-full border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800">Reset</button>
           <button type="button" disabled={!form.instructions.trim()} onClick={() => { void saveInstructions(); }} className={button}>Save instructions</button>
         </div>}
       </fieldset>
