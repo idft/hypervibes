@@ -50,7 +50,7 @@ export class MarketCharts {
   private readonly tasks = new Set<Promise<unknown>>();
   private readonly cache = new Map<string, { expires: number; task: Promise<ChartHistory> }>();
   private readonly researchCache = new Map<string, { expires: number; task: Promise<ChartCandle[]> }>();
-  private universe?: { expires: number; task: Promise<string[]> };
+  private universe?: { expires: number; task: Promise<{ symbol: string; sizeDecimals: number }[]> };
   constructor(transport: HttpTransport, private readonly factory: CandleFeedFactory) { this.info = new InfoClient({ transport }); }
   private admit() { if (this.abort.signal.aborted) throw new HyperliquidError("Market data service is closed", 503); }
   private track<T>(task: Promise<T>): Promise<T> {
@@ -59,9 +59,13 @@ export class MarketCharts {
     return task;
   }
   instruments(): Promise<string[]> {
+    return this.instrumentDetails().then((items) => items.map((item) => item.symbol));
+  }
+  instrumentDetails(): Promise<{ symbol: string; sizeDecimals: number }[]> {
     this.admit();
     if (this.universe && this.universe.expires > Date.now()) return this.universe.task;
-    const task = this.track(this.info.meta({}, this.abort.signal).then((meta) => meta.universe.filter((asset) => !asset.isDelisted).map((asset) => asset.name).sort()));
+    const task = this.track(this.info.meta({ dex: "" }, this.abort.signal).then((meta) => meta.universe.filter((asset) => !asset.isDelisted)
+      .map((asset) => ({ symbol: asset.name, sizeDecimals: asset.szDecimals })).sort((a, b) => a.symbol.localeCompare(b.symbol))));
     this.universe = { expires: Date.now() + 60_000, task };
     void task.catch(() => { if (this.universe?.task === task) this.universe = undefined; });
     return task;

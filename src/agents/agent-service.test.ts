@@ -118,7 +118,7 @@ describe("per-Agent durable execution", () => {
 
   it("binds instrument discovery to each Agent and reads updated allowlists on subsequent calls", async () => {
     const one = await create(), two = await create("Second", randomUUID(), "other");
-    const catalog = vi.spyOn(runtime.hyperliquid.charts, "instruments").mockResolvedValue(["BTC", "ETH"]);
+    const catalog = vi.spyOn(runtime.hyperliquid.charts, "instrumentDetails").mockResolvedValue([{ symbol: "BTC", sizeDecimals: 5 }, { symbol: "ETH", sizeDecimals: 4 }]);
     for (const [index, [agent, owner, allowed]] of ([[one, "owner", "BTC"], [two, "other", "ETH"], [one, "owner", "ETH"]] as const).entries()) {
       await runtime.agents.risk.save(agent.id, { tradingEnabled: false, allowedInstruments: [allowed], maxOrderNotional: null, maxTotalNotional: null });
       const answer = `Catalog checked ${index}`;
@@ -127,7 +127,8 @@ describe("per-Agent durable execution", () => {
         (transcript) => {
           const result = transcript.messages.filter((message) => message.role === "toolResult").at(-1);
           expect(result).toMatchObject({ toolName: "list_instruments", isError: false, content: [{ type: "text", text: JSON.stringify({ instruments: [
-            { symbol: "BTC", allowedForTrading: allowed === "BTC" }, { symbol: "ETH", allowedForTrading: allowed === "ETH" },
+            { symbol: "BTC", allowedForTrading: allowed === "BTC", sizeDecimals: 5, sizeStep: "0.00001", priceMaxDecimals: 1, priceMaxSignificantFigures: 5, integerPricesAllowed: true, minOpeningNotional: "10" },
+            { symbol: "ETH", allowedForTrading: allowed === "ETH", sizeDecimals: 4, sizeStep: "0.0001", priceMaxDecimals: 2, priceMaxSignificantFigures: 5, integerPricesAllowed: true, minOpeningNotional: "10" },
           ] }) }] });
           return fauxAssistantMessage(answer);
         },

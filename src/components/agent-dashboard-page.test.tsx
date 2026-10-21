@@ -234,6 +234,37 @@ describe("Agent dashboard", () => {
     expect([...container.querySelectorAll("tbody img")].map((image) => image.getAttribute("src"))).toEqual(["/currency/BTC.svg", "/currency/ETH.svg"]);
     expect(container.textContent).toContain("@107");
   });
+  it("shows TP/SL trigger prices with financial formatting and exact fractions", async () => {
+    await act(async () => source().send({ ...initial, orders: [
+      { id: 1, coin: "BTC", side: "Sell", type: "Stop Market", size: "0.00024", triggerPrice: "83880.0", price: "75492.0" },
+      { id: 2, coin: "BTC", side: "Sell", type: "Take Profit Market", size: "0.00024", triggerPrice: "86420.0", price: "77778.0" },
+      { id: 3, coin: "BTC", side: "Buy", type: "Limit", size: "0.00024", price: "80000.1234" },
+      { id: 4, coin: "BTC", side: "Sell", type: "Stop Limit", size: "0.00024", triggerPrice: "83000.1234", price: "82900.1234" },
+    ] }));
+    const section = [...container.querySelectorAll("section")].find((section) => section.querySelector("h3")?.textContent === "Open orders")!;
+    expect(section.querySelector("thead")?.textContent).toContain("Price / trigger");
+    expect(section.textContent).not.toContain("Execution limit");
+    const rows = [...section.querySelectorAll("tbody tr")];
+    expect(rows.map((row) => row.querySelectorAll("td")[4]!.querySelector("span")?.textContent)).toEqual(["83,880.00", "86,420.00", "80,000.1234", "83,000.1234"]);
+    expect(rows.map((row) => row.querySelectorAll("td")[3]!.querySelector("span")?.textContent)).toEqual(["0.00024", "0.00024", "0.00024", "0.00024"]);
+    for (const row of rows) for (const index of [3, 4]) expect(row.querySelectorAll("td")[index]!.querySelector("span")?.className).toContain("font-mono");
+  });
+  it("formats position sizes, prices and P&L with separators and monospaced digits", async () => {
+    await act(async () => source().send({ ...initial, positions: [
+      { coin: "BTC", size: "-0.00000001", entryPrice: "100.00000001", unrealizedPnl: "-1.23456789", liquidationPrice: "1234.5", leverage: 2 },
+      { coin: "ETH", size: "2", entryPrice: "2500", unrealizedPnl: "0", liquidationPrice: null, leverage: 3 },
+    ] }));
+    const section = [...container.querySelectorAll("section")].find((section) => section.querySelector("h3")?.textContent === "Positions")!;
+    const first = section.querySelectorAll("tbody tr")[0]!;
+    expect(first.querySelectorAll("td")[1]!.querySelector("span")?.textContent).toBe("(0.00000001)");
+    expect(first.querySelectorAll("td")[3]!.querySelector("span")?.textContent).toBe("100.00000001");
+    expect(first.querySelectorAll("td")[4]!.querySelector("span")?.textContent).toBe("(1.2346)");
+    expect(first.querySelectorAll("td")[5]!.querySelector("span")?.textContent).toBe("1,234.50");
+    const second = section.querySelectorAll("tbody tr")[1]!;
+    expect(second.querySelectorAll("td")[1]!.querySelector("span")?.textContent).toBe("2.00");
+    expect(second.querySelectorAll("td")[5]!.querySelector("span")?.textContent).toBe("-");
+    for (const row of [first, second]) for (const index of [1, 3, 4, 5]) expect(row.querySelectorAll("td")[index]!.querySelector("span")?.className).toContain("font-mono");
+  });
   it("renders exact, signed unrealized P&L", async () => {
     const position = { coin: "BTC", size: "1", entryPrice: "100", unrealizedPnl: "0.1", liquidationPrice: null, leverage: 1 };
     await act(async () => source().send({ ...initial, positions: [position, { ...position, coin: "ETH", unrealizedPnl: "-0.3" }] }));

@@ -7,13 +7,19 @@ import type { OrderInput } from "./order-contracts.js";
 export interface ProtectedEntryInput { instrument: string; side: "buy" | "sell"; entry_style: "guarded_ioc" | "limit"; size: string; limit_price?: string; take_profit_price: string; stop_loss_price: string }
 export interface PositionProtectionInput { instrument: string; take_profit_price: string; stop_loss_price: string }
 
+/** Run before schema validation as well, so callers see the allowed values. */
+export function assertEntryStyle(value: unknown): void {
+  if (value !== "guarded_ioc" && value !== "limit") throw new HyperliquidError(`entry_style must be "guarded_ioc" or "limit"; received ${JSON.stringify(value) ?? "missing"}. Use "guarded_ioc" for a market-like 0.5%-guarded IOC entry, not "market". Use "limit" with an explicit limit_price for GTC.`);
+}
+
 /**
  * Read-only protected-entry planner. Strategy, sizing and protection levels
  * are model/worker decisions from instructions and insights; this only
  * enforces exact venue arithmetic and side sanity, never policy.
  */
 export async function prepareProtectedEntry(info: InfoClient, input: ProtectedEntryInput, signal: AbortSignal) {
-  if (!["buy", "sell"].includes(input.side) || !["guarded_ioc", "limit"].includes(input.entry_style)) throw new HyperliquidError("Unsupported entry side/style");
+  assertEntryStyle(input.entry_style);
+  if (!["buy", "sell"].includes(input.side)) throw new HyperliquidError('side must be "buy" or "sell"');
   if (input.entry_style === "guarded_ioc" && input.limit_price !== undefined) throw new HyperliquidError("Omit limit_price for guarded IOC planning");
   if (input.entry_style === "limit" && input.limit_price === undefined) throw new HyperliquidError("Explicit limit_price is required for limit planning");
   const entry = instrument(await instruments(info, signal), input.instrument);

@@ -104,20 +104,21 @@ describe("Code Mode research and artifacts", () => {
     { tradingEnabled: false, allowedInstruments: ["BTC"] },
     { tradingEnabled: true, allowedInstruments: ["BTC"] },
   ])("lists instruments using only the bound Agent's allowlist: %j", async (settings) => {
-    vi.spyOn(runtime.hyperliquid.charts, "instruments").mockResolvedValue(["BTC", "ETH"]);
+    vi.spyOn(runtime.hyperliquid.charts, "instrumentDetails").mockResolvedValue([{ symbol: "BTC", sizeDecimals: 5 }, { symbol: "ETH", sizeDecimals: 4 }]);
     const account = vi.spyOn(runtime.hyperliquid, "agentAccountStatus");
     await runtime.agents.risk.save(agentId, { ...settings, maxOrderNotional: "1", maxTotalNotional: "1" });
     await runtime.agents.risk.save(otherAgentId, { ...settings, allowedInstruments: ["ETH"] });
     const entries = await executeCall("list_instruments", {}, ["list_instruments"]);
     const result = entries.flatMap((entry) => entry.model ?? []).find((message) => message.role === "toolResult");
     expect(result).toMatchObject({ toolName: "list_instruments", isError: false, content: [{ type: "text", text: JSON.stringify({ instruments: [
-      { symbol: "BTC", allowedForTrading: true }, { symbol: "ETH", allowedForTrading: settings.allowedInstruments === null },
+      { symbol: "BTC", allowedForTrading: true, sizeDecimals: 5, sizeStep: "0.00001", priceMaxDecimals: 1, priceMaxSignificantFigures: 5, integerPricesAllowed: true, minOpeningNotional: "10" },
+      { symbol: "ETH", allowedForTrading: settings.allowedInstruments === null, sizeDecimals: 4, sizeStep: "0.0001", priceMaxDecimals: 2, priceMaxSignificantFigures: 5, integerPricesAllowed: true, minOpeningNotional: "10" },
     ] }) }] });
     expect(account).not.toHaveBeenCalled();
     expect((await runtime.agents.research.artifacts.list(agentId)).items).toEqual([]);
   });
   it("defaults to unrestricted instruments without saved risk settings and supports Code Mode", async () => {
-    vi.spyOn(runtime.hyperliquid.charts, "instruments").mockResolvedValue(["BTC", "ETH"]);
+    vi.spyOn(runtime.hyperliquid.charts, "instrumentDetails").mockResolvedValue([{ symbol: "BTC", sizeDecimals: 5 }, { symbol: "ETH", sizeDecimals: 4 }]);
     const entries = await execute(`text(await tools.list_instruments({}));`, ["codemode", "list_instruments"]);
     const result = entries.flatMap((entry) => entry.model ?? []).find((message) => message.role === "toolResult");
     expect(result).toMatchObject({ isError: false });
@@ -126,24 +127,31 @@ describe("Code Mode research and artifacts", () => {
     expect(toolActivity(entries)).toContainEqual(expect.objectContaining({ name: "↳ list_instruments", status: "ok" }));
   });
   it("rejects model-supplied Agent IDs before looking up the catalog", async () => {
-    const catalog = vi.spyOn(runtime.hyperliquid.charts, "instruments").mockResolvedValue(["BTC"]);
+    const catalog = vi.spyOn(runtime.hyperliquid.charts, "instrumentDetails").mockResolvedValue([{ symbol: "BTC", sizeDecimals: 5 }]);
     const entries = await executeCall("list_instruments", { agentId: otherAgentId }, ["list_instruments"]);
     const result = entries.flatMap((entry) => entry.model ?? []).find((message) => message.role === "toolResult");
     expect(result).toMatchObject({ isError: true });
     expect(catalog).not.toHaveBeenCalled();
   });
   it("returns an empty catalog without inventing instruments", async () => {
-    vi.spyOn(runtime.hyperliquid.charts, "instruments").mockResolvedValue([]);
+    vi.spyOn(runtime.hyperliquid.charts, "instrumentDetails").mockResolvedValue([]);
     const entries = await executeCall("list_instruments", {}, ["list_instruments"]);
     const result = entries.flatMap((entry) => entry.model ?? []).find((message) => message.role === "toolResult");
     expect(result).toMatchObject({ isError: false, content: [{ type: "text", text: '{"instruments":[]}' }] });
   });
   it("reports catalog failures instead of treating them as an empty list", async () => {
-    vi.spyOn(runtime.hyperliquid.charts, "instruments").mockRejectedValue(new Error("Market catalog unavailable"));
+    vi.spyOn(runtime.hyperliquid.charts, "instrumentDetails").mockRejectedValue(new Error("Market catalog unavailable"));
     const entries = await executeCall("list_instruments", {}, ["list_instruments"]);
     const result = entries.flatMap((entry) => entry.model ?? []).find((message) => message.role === "toolResult");
     expect(result).toMatchObject({ isError: true });
     expect(JSON.stringify(result)).toContain("Market catalog unavailable");
+  });
+  it("rejects unavailable exchange precision rather than inventing tradable steps", async () => {
+    vi.spyOn(runtime.hyperliquid.charts, "instrumentDetails").mockResolvedValue([{ symbol: "BTC", sizeDecimals: NaN }]);
+    const entries = await executeCall("list_instruments", {}, ["list_instruments"]);
+    const result = entries.flatMap((entry) => entry.model ?? []).find((message) => message.role === "toolResult");
+    expect(result).toMatchObject({ isError: true });
+    expect(JSON.stringify(result)).toContain("Exchange size precision unavailable");
   });
   it("runs real QuickJS, shares root-Agent artifacts, and retains nested-call summaries without an env", async () => {
     const entries = await execute(`const report = await tools.artifact_create({title:'Worker report',mediaType:'text/markdown',content:'# BTC',retained:true}); text(report.id); text((await tools.artifact_read({id:report.id})).content);`);

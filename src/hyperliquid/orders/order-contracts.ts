@@ -2,19 +2,21 @@ import { Type, type Static } from "@earendil-works/pi-ai";
 
 const object = { additionalProperties: false } as const;
 export const Decimal = Type.String({ pattern: "^(0|[1-9][0-9]*)(\\.[0-9]+)?$", maxLength: 80, description: "Exact plain decimal string, never a JSON number or exponent." });
+export const OrderSize = { ...Decimal, description: "Exact positive base-asset quantity, NOT USD notional. Read list_instruments sizeDecimals/sizeStep first; do not guess precision or silently increase the user's size/budget. For a USD budget, choose an expressible base quantity consistent with that budget." };
+export const OrderPrice = { ...Decimal, description: "Exact positive price string. Read list_instruments: fractional prices must satisfy BOTH priceMaxDecimals and priceMaxSignificantFigures; positive integer prices are exempt from these precision limits." };
 export const RequestId = Type.String({ minLength: 1, maxLength: 120, pattern: "^[a-zA-Z0-9_-]+$", description: "Unique logical request ID. Reuse with identical arguments on retry; never issue a new ID to retry an unknown outcome." });
 const SymbolName = Type.String({ minLength: 1, maxLength: 30, pattern: "^[A-Za-z0-9_-]+$", description: "Exact main-DEX perpetual symbol from exchange metadata (e.g. BTC). No spot or HIP-3 symbols." });
-const Trigger = Type.Object({ trigger_price: Decimal, limit_price: Type.Optional(Decimal), size: Type.Optional(Decimal) }, object);
+const Trigger = Type.Object({ trigger_price: OrderPrice, limit_price: Type.Optional(OrderPrice), size: Type.Optional(OrderSize) }, object);
 export const OrderInputSchema = Type.Object({
   symbol: SymbolName, side: Type.Union([Type.Literal("buy"), Type.Literal("sell")]),
-  order_type: Type.Union([Type.Literal("limit"), Type.Literal("market"), Type.Literal("take_profit"), Type.Literal("stop_loss")]),
-  size: Decimal, price: Type.Optional(Decimal), trigger_price: Type.Optional(Decimal),
-  time_in_force: Type.Optional(Type.Union([Type.Literal("gtc"), Type.Literal("ioc"), Type.Literal("alo")])),
+  order_type: Type.Union([Type.Literal("limit"), Type.Literal("market"), Type.Literal("take_profit"), Type.Literal("stop_loss")], { description: 'Use "limit" with price, "market" for a 0.5%-guarded IOC (omit price/time_in_force), or "take_profit"/"stop_loss" for standalone reduce-only triggers with trigger_price. This is not the planner entry_style field.' }),
+  size: OrderSize, price: Type.Optional(OrderPrice), trigger_price: Type.Optional(OrderPrice),
+  time_in_force: Type.Optional(Type.Union([Type.Literal("gtc"), Type.Literal("ioc"), Type.Literal("alo")], { description: 'Limit orders only: "gtc" (default), "ioc", or "alo". Omit for market orders and standalone triggers.' })),
   reduce_only: Type.Optional(Type.Boolean()),
   take_profits: Type.Optional(Type.Array(Trigger, { maxItems: 1, description: "At most one attached native OCO take-profit. Use a standalone reduce-only trigger for position-level protection." })),
   stop_losses: Type.Optional(Type.Array(Trigger, { maxItems: 1 })),
 }, object);
-export const SubmitSchema = Type.Object({ request_id: RequestId, decision_ref: Type.Optional(Type.String({ pattern: "^m[1-9][0-9]*$", maxLength: 17, description: "Optional decision memory reference for audit, not trading authority." })), orders: Type.Array(OrderInputSchema, { minItems: 1, maxItems: 20 }) }, object);
+export const SubmitSchema = Type.Object({ request_id: RequestId, decision_ref: Type.Optional(Type.String({ pattern: "^m[1-9][0-9]*$", maxLength: 17, description: "Optional reference to a decision that actually motivates this submission, for audit only, never trading authority. For a direct/manual user request with no memory-based rationale, omit this field; no research or decision memory is required. Do not attach an unrelated or previously blocked/skipped decision just to populate it." })), orders: Type.Array(OrderInputSchema, { minItems: 1, maxItems: 20 }) }, object);
 export const CancelInputSchema = Type.Object({ symbol: SymbolName, oid: Type.String({ pattern: "^[1-9][0-9]*$", maxLength: 16, description: "Exchange order ID as a decimal string." }) }, object);
 export const CancelSchema = Type.Object({ request_id: RequestId, orders: Type.Array(CancelInputSchema, { minItems: 1, maxItems: 100 }) }, object);
 export const CancelAllSchema = Type.Object({ request_id: RequestId, symbol: Type.Optional(SymbolName) }, object);

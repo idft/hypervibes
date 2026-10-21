@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addDecimals, compareDecimals, formatMoneyText, moneyParts, parseDecimal } from "./decimal.js";
+import { addDecimals, compareDecimals, formatAmountText, formatMoneyText, moneyParts, parseDecimal } from "./decimal.js";
 
 describe("string-decimal helpers", () => {
   it("parses only plain decimal strings", () => {
@@ -28,6 +28,17 @@ describe("string-decimal helpers", () => {
     expect(compareDecimals("x", "1")).toBeNull();
   });
 
+  it("formats amounts with exact fractions, at least 2 decimals and thousands separators", () => {
+    expect(formatAmountText("83880.0")).toBe("83,880.00");
+    expect(formatAmountText("1234567")).toBe("1,234,567.00");
+    expect(formatAmountText("0.00024")).toBe("0.00024");
+    expect(formatAmountText("0.12345")).toBe("0.12345");
+    expect(formatAmountText("-4.2")).toBe("(4.20)");
+    expect(formatAmountText("-0.00000001")).toBe("(0.00000001)");
+    expect(formatAmountText("-0.0")).toBe("(0.00)");
+    expect(formatAmountText(null)).toBe("-");
+    expect(formatAmountText("NaN")).toBe("-");
+  });
   it("formats money like the legacy account table", () => {
     expect(formatMoneyText("1234567.8")).toBe("1,234,567.8000");
     expect(formatMoneyText("0.5")).toBe("0.5000");

@@ -43,8 +43,17 @@ describe("read-only trading overlays", () => {
     const lines = accountPriceLines("BTC", snapshot, defaultChartOverlays, false);
     expect(lines.size).toBe(4);
     expect(lines.get("order:2")!.title).not.toContain("Pending");
-    expect(lines.get("order:3")!.title).toBe("Pending · Sell Stop Market trigger · Entire position · #3");
+    expect(lines.get("order:1")!.title).toBe("Sell Limit · 0.1 BTC");
+    expect(lines.get("order:2")!.title).toBe("Sell Stop Market trigger · 0.1 BTC");
+    expect(lines.get("order:3")!.title).toBe("Pending · Sell Stop Market trigger · Entire position");
     expect(lines.get("order:3")!.price).toBe(90);
+  });
+  it("omits order numbers from TP/SL labels while retaining distinct order identities", () => {
+    const snapshot = account();
+    snapshot.orders = [order(581892169057, { type: "Take Profit Market", triggerPrice: "110" }), order(581892169058)];
+    const lines = accountPriceLines("BTC", snapshot, defaultChartOverlays, false);
+    expect(lines.get("order:581892169057")).toMatchObject({ price: 110, title: "Sell Take Profit Market trigger · 0.1 BTC" });
+    expect(lines.get("order:581892169058")).toMatchObject({ price: 90, title: "Sell Stop Market trigger · 0.1 BTC" });
   });
   it("never plots flat positions, invalid prices or hidden sections", () => {
     const snapshot = account();

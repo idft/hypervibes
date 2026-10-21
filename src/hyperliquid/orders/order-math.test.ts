@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compare, decimal, guardPrice, price, size } from "./order-math.js";
+import { compare, decimal, guardPrice, precisionRules, price, size } from "./order-math.js";
 import { assertStringAmounts } from "./order-prepare.js";
 
 describe("exact order signing arithmetic", () => {
@@ -18,6 +18,16 @@ describe("exact order signing arithmetic", () => {
     expect(price("0.012345", 0)).toBe("0.012345");
     expect(() => price("1234.56", 0)).toThrow();
     expect(() => price("1.234", 5)).toThrow();
+  });
+  it("exposes exact venue increments and actionable precision errors without rounding", () => {
+    expect(precisionRules(5)).toEqual({ sizeDecimals: 5, sizeStep: "0.00001", priceMaxDecimals: 1, priceMaxSignificantFigures: 5, integerPricesAllowed: true, minOpeningNotional: "10" });
+    expect(precisionRules(0)).toMatchObject({ sizeStep: "1", priceMaxDecimals: 6 });
+    expect(precisionRules(6)).toMatchObject({ sizeStep: "0.000001", priceMaxDecimals: 0 });
+    for (const decimals of [-1, 7, NaN, 1.5]) expect(() => precisionRules(decimals)).toThrow("precision unavailable");
+    expect(() => size("0.000236", 5)).toThrow('received "0.000236"; at most 5 decimal places (size step 0.00001)');
+    expect(() => size("0.000236", 5)).toThrow("do not automatically increase");
+    expect(() => price("1234.56", 5)).toThrow("at most 1 decimal places AND 5 significant figures");
+    expect(() => price("1234.56", 5)).toThrow("Positive integer prices are exempt");
   });
   it("builds inward-rounded guarded IOC and market trigger prices exactly", () => {
     expect(guardPrice("100000", true, 5)).toBe("100500");

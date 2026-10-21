@@ -14,9 +14,13 @@ export function compare(left: string, right: string): number {
   const x = a.units * 10n ** BigInt(b.scale), y = b.units * 10n ** BigInt(a.scale);
   return x === y ? 0 : x < y ? -1 : 1;
 }
+export function precisionRules(sizeDecimals: number) {
+  if (!Number.isInteger(sizeDecimals) || sizeDecimals < 0 || sizeDecimals > 6) throw new HyperliquidError("Exchange size precision unavailable or unsupported", 502);
+  return { sizeDecimals, sizeStep: format(1n, sizeDecimals), priceMaxDecimals: 6 - sizeDecimals, priceMaxSignificantFigures: 5, integerPricesAllowed: true, minOpeningNotional: "10" };
+}
 export function size(value: string, decimals: number): string {
   const parsed = decimal(value);
-  if (parsed.scale > decimals) throw new HyperliquidError(`Size exceeds exchange precision (${decimals} decimal places).`);
+  if (parsed.scale > decimals) throw new HyperliquidError(`Size exceeds exchange precision: received ${JSON.stringify(value)}; at most ${decimals} decimal places (size step ${format(1n, decimals)}). Choose a valid base-asset size within the requested budget; do not automatically increase it.`);
   return parsed.text;
 }
 export function price(value: string, sizeDecimals: number): string {
@@ -24,7 +28,7 @@ export function price(value: string, sizeDecimals: number): string {
   // Integers are always permitted. Fractional perp prices have <=5 significant
   // figures and <=(6 - szDecimals) decimal places, per Hyperliquid's tick rules.
   if (parsed.scale && (parsed.scale > 6 - sizeDecimals || parsed.units.toString().length > 5)) {
-    throw new HyperliquidError("Price exceeds exchange tick/significant-figure precision.");
+    throw new HyperliquidError(`Price exceeds exchange tick/significant-figure precision: received ${JSON.stringify(value)}; fractional perpetual prices allow at most ${6 - sizeDecimals} decimal places AND 5 significant figures. Positive integer prices are exempt from both precision limits. Choose an explicit valid price consistent with the requested levels.`);
   }
   return parsed.text;
 }

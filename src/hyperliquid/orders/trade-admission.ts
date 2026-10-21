@@ -51,7 +51,7 @@ export class TradeAdmissionService {
     // for position quantity/side; disabling entries never blocks protective management.
     if (!entries.length) return;
     const settings = await this.risk.get(agentId);
-    if (!settings.tradingEnabled) throw new HyperliquidError("Trading is disabled in this Agent's risk settings", 409);
+    if (!settings.tradingEnabled) throw new HyperliquidError("Trading is disabled in this Agent's risk settings. Enable trading in the Agent's risk settings before opening exposure; enabling a worker does not bypass this shared gate.", 409);
     const mids = settings.maxOrderNotional || settings.maxTotalNotional ? await info.allMids({ dex: "" }, signal) : {};
     const quote = (coin: string) => {
       const value = mids[coin];

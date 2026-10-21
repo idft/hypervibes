@@ -19,7 +19,7 @@ describe("Shared candle market data", () => {
     feeds = [];
     fetcher = vi.fn(async (_url: unknown, init: RequestInit) => {
       const body = JSON.parse(String(init.body));
-      if (body.type === "meta") return Response.json({ universe: [{ name: "BTC" }, { name: "ETH" }, { name: "OLD", isDelisted: true }] });
+      if (body.type === "meta") return Response.json({ universe: [{ name: "ETH", szDecimals: 4 }, { name: "BTC", szDecimals: 5 }, { name: "OLD", szDecimals: 2, isDelisted: true }] });
       const { startTime, endTime } = body.req;
       return Response.json(Array.from({ length: 500 }, (_, i) => raw(startTime + i * width)).filter((candle) => candle.t <= endTime));
     });
@@ -34,6 +34,7 @@ describe("Shared candle market data", () => {
 
   it("validates perps and intervals using a shared cached universe", async () => {
     expect(await charts.instruments()).toEqual(["BTC", "ETH"]);
+    expect(await charts.instrumentDetails()).toEqual([{ symbol: "BTC", sizeDecimals: 5 }, { symbol: "ETH", sizeDecimals: 4 }]);
     expect(await charts.selection("BTC", "1h")).toEqual(selection);
     await expect(charts.selection("@1", "1h")).rejects.toThrow("perpetual");
     await expect(charts.selection("BTC", "3m")).rejects.toThrow("selection");

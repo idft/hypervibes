@@ -51,7 +51,7 @@ export function accountPriceLines(coin: string, snapshot: AgentDashboard | null,
     const quantity = order.positionTpsl ? "Entire position" : `${order.size} ${coin}`;
     result.set(`order:${order.id}`, { price, color: stale ? "#a1a1aa" : order.side === "Buy" ? buyColor : sellColor, lineWidth: 1,
       lineStyle: order.triggerPrice === undefined ? LineStyle.Dashed : LineStyle.Dotted, axisLabelVisible: true,
-      title: `${stale ? "STALE · " : ""}${pending ? "Pending · " : ""}${order.side} ${order.type}${order.triggerPrice === undefined ? "" : " trigger"} · ${quantity} · #${order.id}` });
+      title: `${stale ? "STALE · " : ""}${pending ? "Pending · " : ""}${order.side} ${order.type}${order.triggerPrice === undefined ? "" : " trigger"} · ${quantity}` });
   }
   return result;
 }

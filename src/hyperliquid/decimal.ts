@@ -79,6 +79,18 @@ export function formatMoneyText(value: string | null): string {
   return parsed.negative && rounded !== 0n ? `(${formatted})` : formatted;
 }
 
+/** Formats an exchange amount for display: exact fraction preserved (padded to
+ * at least 2 decimals), thousands separators on the whole part, and negatives in
+ * parentheses. Never rounds; prices and sizes are exchange-exact. */
+export function formatAmountText(value: string | null): string {
+  if (!value) return "-";
+  const parsed = parseDecimal(value);
+  if (!parsed) return "-";
+  const fraction = parsed.fraction.length < 2 ? parsed.fraction.padEnd(2, "0") : parsed.fraction;
+  const grouped = parsed.whole.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  const body = `${grouped}.${fraction}`;  return parsed.negative ? `(${body})` : body;
+}
+
 /** Splits formatted money into the whole part and optional decimals. */
 export function moneyParts(value: string | null): { whole: string; decimals: string | null } {
   if (!value) return { whole: "-", decimals: null };

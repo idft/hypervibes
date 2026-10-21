@@ -6,6 +6,7 @@ import { defineExtension, defineTool, section } from "@earendil-works/pi-durable
 import type { SharedDatabase } from "../db/shared-database.js";
 import type { HyperliquidService } from "../hyperliquid/service.js";
 import type { RiskSettingsService } from "../hyperliquid/orders/risk-settings.js";
+import { precisionRules } from "../hyperliquid/orders/order-math.js";
 import { CallQueue } from "./call-queue.js";
 import { describeDataset } from "./evidence.js";
 import { ArtifactService, artifactTypes } from "./artifacts.js";
@@ -59,13 +60,13 @@ export class ResearchService {
     const tools = [
       defineTool({
         name: "list_instruments",
-        description: "List active Hyperliquid main-DEX perpetual symbols. allowedForTrading reflects only this Agent's instrument allowlist (unrestricted means all listed symbols are allowed), not trading enablement, collateral, notional limits or guaranteed order acceptance. Instruments outside the trading allowlist may still be researched. This catalog does not designate an analysis assignment.",
+        description: "List active Hyperliquid main-DEX perpetual symbols with exchange-derived size precision and price rules. Before planning/submitting, use sizeDecimals/sizeStep for base-asset quantity (not USD); fractional prices must satisfy BOTH priceMaxDecimals and priceMaxSignificantFigures. Positive integer prices are exempt from those price precision limits; there is no single fixed price tick. Sizes/prices must be exact decimal strings. minOpeningNotional is USD size × price, not a minimum size; never silently increase size to meet it. allowedForTrading reflects only this Agent's instrument allowlist (unrestricted means all listed symbols are allowed), not trading enablement, collateral, notional limits or guaranteed order acceptance. Instruments outside the trading allowlist may still be researched. This catalog does not designate an analysis assignment.",
         parameters: Type.Object({}, object), replay: "safe",
-        structuredOutputSchema: Type.Object({ instruments: Type.Array(Type.Object({ symbol: Type.String(), allowedForTrading: Type.Boolean() }, object)) }, object),
+        structuredOutputSchema: Type.Object({ instruments: Type.Array(Type.Object({ symbol: Type.String(), allowedForTrading: Type.Boolean(), sizeDecimals: Type.Integer({ minimum: 0, maximum: 6 }), sizeStep: Type.String({ description: "Exact base-asset size increment, as a decimal string." }), priceMaxDecimals: Type.Integer({ minimum: 0, maximum: 6 }), priceMaxSignificantFigures: Type.Literal(5), integerPricesAllowed: Type.Literal(true), minOpeningNotional: Type.String({ description: "Minimum opening order notional in USD, as a decimal string; not a minimum base-asset size." }) }, object)) }, object),
         execute: async () => {
-          const [symbols, settings] = await Promise.all([this.hyperliquid.charts.instruments(), this.risk.get(agentId)]);
+          const [instruments, settings] = await Promise.all([this.hyperliquid.charts.instrumentDetails(), this.risk.get(agentId)]);
           const allowed = settings.allowedInstruments === null ? null : new Set(settings.allowedInstruments);
-          return jsonResult({ instruments: symbols.map((symbol) => ({ symbol, allowedForTrading: allowed === null || allowed.has(symbol) })) });
+          return jsonResult({ instruments: instruments.map(({ symbol, sizeDecimals }) => ({ symbol, allowedForTrading: allowed === null || allowed.has(symbol), ...precisionRules(sizeDecimals) })) });
         },
       }),
       defineTool({ name: "research_candles", description: "Closed Hyperliquid perpetual candles, ascending UTC time in seconds; request start/end in milliseconds, end exclusive. Paginate using nextStart with the SAME end. Latest ~5,000 candles only; inspect coverage. Analytical numeric OHLCV, not monetary authority.", parameters: Type.Object({ ...selection, limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 2000 })), saveAs: Type.Optional(str(160)) }, object), replay: "safe", structuredOutputSchema: CandleResultSchema, execute: async (args, api, ctx) => respond(args.saveAs, api, ctx, async () => { const history = await this.hyperliquid.charts.researchHistory(args.coin, args.interval, args.start, args.end, args.limit ?? 500, ctx.abortSignal); return { ...history, dataset: describeDataset(history.candles) }; }, { instrument: args.coin, interval: args.interval }) }),

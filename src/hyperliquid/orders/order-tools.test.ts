@@ -15,7 +15,7 @@ const outcome: OperationResult = { operationId: "operation", requestId: "logical
 
 describe("Durable order tool contracts for nested/code-mode calls", () => {
   it("returns schema-validated structured outputs and reuses a keyed nested call", async () => {
-    const submit = vi.fn(async () => outcome);
+    const submit = vi.fn<OrderService["submit"]>(async () => outcome);
     const list = vi.fn(async () => ({ items: [], source: "open", observedAt: 1, nextOffset: null, coverage: "current snapshot" }));
     const service = { submit, list, executionHandle: async () => undefined } as unknown as OrderService;
     const registry = createRegistry();
@@ -30,6 +30,7 @@ describe("Durable order tool contracts for nested/code-mode calls", () => {
         results.push(await api.executeTool("list_orders", {}, ctx));
         results.push(await api.executeTool("submit_orders", { ...args, orders: [{ ...args.orders[0], size: 0.001 }] }, ctx));
         results.push(await api.executeTool("get_account", {}, ctx));
+        results.push(await api.executeTool("prepare_protected_entry", { instrument: "BTC", side: "buy", entry_style: "market", size: "0.00024", take_profit_price: "86420", stop_loss_price: "83880" }, ctx));
         return { output: [{ type: "text", text: "program complete" }] };
       },
     })] }));
@@ -40,13 +41,17 @@ describe("Durable order tool contracts for nested/code-mode calls", () => {
       const root = await harness.root(context, { agent: { model: { provider: "faux", modelId: "faux-1" }, modelTools: [(registry.snapshot().extension("program")!.tools!)[0]!] } });
       const settled = await (await root.submit({ type: "input", content: "Run program" }, context)).wait(context);
       expect(settled.status).toBe("done");
-      expect(results).toHaveLength(5);
+      expect(results).toHaveLength(6);
       expect(results[0]).toMatchObject({ isError: false, structuredOutput: outcome });
       expect(results[1]!.taskId).toBe(results[0]!.taskId);
       expect(results[2]).toMatchObject({ isError: false, structuredOutput: { items: [], source: "open" } });
       expect(results[3]!.isError).toBe(true);
       expect(results[4]).toMatchObject({ isError: false, structuredOutput: { address: null, spotUsdc: null, sections: { spot: { fresh: false } } } });
+      expect(results[5]!.isError).toBe(true);
+      expect(JSON.stringify(results[5])).toContain('entry_style must be \\"guarded_ioc\\" or \\"limit\\"');
+      expect(JSON.stringify(results[5])).toContain('not \\"market\\"');
       expect(submit).toHaveBeenCalledOnce();
+      expect(submit.mock.calls[0]![2]).not.toHaveProperty("decision_ref");
       expect(submit).toHaveBeenCalledWith("owner", "agent", expect.objectContaining({ request_id: "logical-request" }), expect.any(AbortSignal), undefined);
       expect(list).toHaveBeenCalledWith("owner", "agent", {}, expect.any(AbortSignal));
     } finally { await harness.close(context); }
@@ -65,6 +70,10 @@ describe("Durable order tool contracts for nested/code-mode calls", () => {
     const tools = createOrderTools({} as OrderService, "owner", "agent");
     expect(tools.find((tool) => tool.name === "submit_orders")!.description).toContain("$10 minimum order notional");
     expect(tools.find((tool) => tool.name === "submit_orders")!.description).toContain("Do not silently increase size");
+    expect(tools.find((tool) => tool.name === "submit_orders")!.description).toContain("A direct/manual operator request does not require consulting memories or creating a decision publication");
+    expect(tools.find((tool) => tool.name === "submit_orders")!.description).toContain("omit decision_ref");
+    const planner = tools.find((tool) => tool.name === "prepare_protected_entry")!;
+    expect(planner.parameters).toMatchObject({ properties: { entry_style: { description: expect.stringContaining('"market" is NOT a valid planner entry_style') }, size: { description: expect.stringContaining("NOT USD notional") } } });
     for (const tool of tools) {
       expect(tool.structuredOutputSchema).toBeDefined();
       expect(tool.callers).not.toEqual(["model"]);
