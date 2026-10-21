@@ -20,7 +20,7 @@ describe("persisted order admission boundary", () => {
   beforeEach(async () => {
     f = await memoryFixture(); now = f.now + 100000; sends = 0; failTransport = false; positions = []; resting = [];
     vi.spyOn(Date, "now").mockImplementation(() => now);
-    await f.db.run("INSERT INTO hv_subagents(id,agent_id,kind,name,instructions,provider,model_id,tools,created_at,updated_at) VALUES ('root','agent','orchestrator','Root','Observe','faux','faux',?,0,0)", JSON.stringify(["record_trade_decision", "submit_orders"]));
+    await f.db.run("INSERT INTO hv_subagents(id,agent_id,kind,name,instructions,provider,model_id,tools,created_at,updated_at) VALUES ('root','agent','orchestrator','Root','Observe','faux','faux',?,0,0)", JSON.stringify(["record_trade_decision", "submit_orders", "cancel_orders", "cancel_all_orders"]));
     root = (await applicationDatabase(f.db).select().from(hvSubagents).where(eq(hvSubagents.id, "root")).get())!;
     execution = new ExecutionContextService(f.db);
     vi.spyOn(execution, "resolve").mockImplementation(async (_agentId, api) => {
@@ -113,6 +113,21 @@ describe("persisted order admission boundary", () => {
     const second = await windowFillAudit(f.db, "agent", now, now + 1, 1, first.next!);
     expect(first.items).toHaveLength(1); expect(second.items).toHaveLength(1);
     expect(first.items[0]!.fillId).not.toBe(second.items[0]!.fillId);
+  });
+  it("records verified submit/cancel origins and does not reattribute request retries", async () => {
+    await enabled();
+    const a = await authority();
+    const submit = { request_id: "origin-entry", orders: [protectedOrder] };
+    await service.submit("owner", "agent", submit, undefined, a.handle);
+    const origin = await f.db.get("SELECT p.* FROM hv_order_request_provenance p JOIN hv_order_requests r ON r.id=p.request_id WHERE r.request_key='origin-entry'");
+    expect(origin).toMatchObject({ agent_id: "agent", producer_subagent_id: "root", source_run_id: null, conversation_id: 2, tool_task_id: 100 });
+    await service.submit("owner", "agent", submit, undefined, a.handle);
+    expect(await f.db.get("SELECT p.* FROM hv_order_request_provenance p JOIN hv_order_requests r ON r.id=p.request_id WHERE r.request_key='origin-entry'")).toEqual(origin);
+    // Empty cancel-all still records who captured the empty target set.
+    await service.cancelAll("owner", "agent", { request_id: "origin-cancel" }, undefined, a.handle);
+    expect(await f.db.get("SELECT p.producer_subagent_id,p.tool_task_id FROM hv_order_request_provenance p JOIN hv_order_requests r ON r.id=p.request_id WHERE r.request_key='origin-cancel'")).toMatchObject({ producer_subagent_id: "root", tool_task_id: 100 });
+    await expect(service.cancelAll("owner", "agent", { request_id: "forged-cancel" }, undefined, {})).rejects.toThrow("verified model execution");
+    expect(await f.db.get("SELECT id FROM hv_order_requests WHERE request_key='forged-cancel'")).toBeUndefined();
   });
   it("allows layering, shorts, and multiple orders without research, decisions or attached protection", async () => {
     await enabled();

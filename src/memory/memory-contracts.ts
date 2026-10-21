@@ -3,12 +3,13 @@ import { AgentError } from "../agents/agent-input.js";
 import { candleIntervals } from "../agents/candle-intervals.js";
 import { array, choice, fields, integer, object, text, unique } from "./validation.js";
 
-export const memoryToolNames = ["publish_research", "record_trade_decision", "publish_review", "list_memories", "get_memory", "get_trading_context", "get_insights", "append_insight", "replace_insights", "research_decisions"] as const;
+export const memoryToolNames = ["publish_research", "record_trade_decision", "publish_review", "list_memories", "get_memory", "get_trading_context", "get_insights", "append_insight", "replace_insights", "research_decisions", "research_execution_audit"] as const;
 export const memoryKinds = ["research", "decision", "review"] as const;
 export type MemoryKind = typeof memoryKinds[number];
 export const relations = ["based_on", "corrects", "supersedes", "reviews"] as const;
 export type MemoryRelation = typeof relations[number];
-export interface FillAttribution { fillId: string; time: number; exchangeOid: string | null; requestId: string | null; decisionRef: string | null }
+export interface ExecutionOrigin { producerSubagentId: string; sourceRunId: string | null; conversationId: number; toolTaskId: number }
+export interface FillAttribution { fillId: string; time: number; exchangeOid: string | null; requestId: string | null; decisionRef: string | null; origin: ExecutionOrigin | null }
 export interface MemoryLink { ref: string; relation: MemoryRelation }
 /** Optional analyst-authored data; no keys or analytical vocabulary are prescribed. */
 export type ResearchPayload = Record<string, JsonValue>;

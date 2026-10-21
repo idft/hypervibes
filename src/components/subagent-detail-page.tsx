@@ -148,7 +148,7 @@ export function SubagentDetailPage({ agentId, initial, choices }: { agentId: str
         <ModelPicker choices={choices} value={selected ? modelKey(form) : ""} thinkingLevel={form.thinkingLevel} onChange={async (value, thinkingLevel) => { const choice = choices.find((entry) => modelKey(entry) === value); if (choice) await saveSection("model", { provider: choice.provider, modelId: choice.modelId, thinkingLevel }); }} disabled={pending} />
         <div className={main ? "space-y-4" : "grid gap-6 md:grid-cols-2"}>
           <div className="min-w-0 space-y-4">
-            <ToolPicker tools={form.tools} main={main} onChange={saveTools} />
+            <ToolPicker tools={form.tools} onChange={saveTools} />
             {form.tools.includes("submit_orders") && !form.tools.includes("record_trade_decision") && <p role="status" className="text-sm text-amber-200">Trading readiness: record_trade_decision is not selected. Existing permissions were not widened; select it explicitly for attributable trade rationale.</p>}
           </div>
           {!main && <div className="min-w-0 space-y-6">

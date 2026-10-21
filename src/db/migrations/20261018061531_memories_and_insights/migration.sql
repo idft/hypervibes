@@ -146,4 +146,17 @@ CREATE INDEX `hv_memory_artifacts_evidence_idx` ON `hv_memory_artifacts` (`agent
 CREATE UNIQUE INDEX `hv_insight_revision_identity_idx` ON `hv_insight_revisions` (`agent_id`,`set_id`,`version`);--> statement-breakpoint
 CREATE UNIQUE INDEX `hv_insight_sets_identity_idx` ON `hv_insight_sets` (`agent_id`,`id`);--> statement-breakpoint
 CREATE UNIQUE INDEX `hv_insight_sets_agent_idx` ON `hv_insight_sets` (`agent_id`) WHERE "hv_insight_sets"."scope_kind" = 'agent';--> statement-breakpoint
-CREATE UNIQUE INDEX `hv_insight_sets_worker_idx` ON `hv_insight_sets` (`agent_id`,`subagent_id`) WHERE "hv_insight_sets"."scope_kind" = 'worker';
+CREATE UNIQUE INDEX `hv_insight_sets_worker_idx` ON `hv_insight_sets` (`agent_id`,`subagent_id`) WHERE "hv_insight_sets"."scope_kind" = 'worker';--> statement-breakpoint
+CREATE TABLE `hv_order_request_provenance` (
+	`request_id` text PRIMARY KEY,
+	`agent_id` text NOT NULL,
+	`producer_subagent_id` text NOT NULL,
+	`source_run_id` text,
+	`conversation_id` integer NOT NULL,
+	`tool_task_id` integer NOT NULL,
+	CONSTRAINT `fk_hv_order_request_provenance_agent_id_request_id_hv_order_requests_agent_id_id_fk` FOREIGN KEY (`agent_id`,`request_id`) REFERENCES `hv_order_requests`(`agent_id`,`id`),
+	CONSTRAINT `fk_hv_order_request_provenance_agent_id_producer_subagent_id_hv_subagents_agent_id_id_fk` FOREIGN KEY (`agent_id`,`producer_subagent_id`) REFERENCES `hv_subagents`(`agent_id`,`id`),
+	CONSTRAINT `fk_hv_order_request_provenance_agent_id_source_run_id_producer_subagent_id_hv_subagent_runs_agent_id_id_subagent_id_fk` FOREIGN KEY (`agent_id`,`source_run_id`,`producer_subagent_id`) REFERENCES `hv_subagent_runs`(`agent_id`,`id`,`subagent_id`)
+);
+--> statement-breakpoint
+CREATE INDEX `hv_order_provenance_run_idx` ON `hv_order_request_provenance` (`agent_id`,`source_run_id`);

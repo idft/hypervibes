@@ -16,6 +16,8 @@ export type ActionRow = typeof hvOrderActions.$inferSelect;
 export type ItemRow = typeof hvOrderItems.$inferSelect;
 
 import { canonical } from "../../canonical.js";
+import { hvOrderRequestProvenance } from "../../db/order-provenance-schema.js";
+import { assertActiveActor, type MemoryActor } from "../../memory/operations.js";
 export { canonical } from "../../canonical.js";
 export function active(view: OrderView): boolean {
   return view.commandStatus === "unknown" || ["open", "waitingForFill", "waitingForTrigger", "triggered"].includes(view.orderStatus);
@@ -27,8 +29,8 @@ export class OrderStore {
   actions(id: string) { return this.db.select().from(hvOrderActions).where(eq(hvOrderActions.requestId, id)).orderBy(asc(hvOrderActions.ordinal)).all(); }
   items(actionId: string) { return this.db.select().from(hvOrderItems).where(eq(hvOrderItems.actionId, actionId)).orderBy(asc(hvOrderItems.ordinal)).all(); }
   async allItems(requestId: string) { return (await Promise.all((await this.actions(requestId)).map((action) => this.items(action.id)))).flat(); }
-  async prepare(agentId: string, account: string, key: string, kind: string, input: unknown, actions: PreparedAction[]) {
-    return this.database.appTransaction(async (db) => {
+  async prepare(agentId: string, account: string, key: string, kind: string, input: unknown, actions: PreparedAction[], origin?: MemoryActor) {
+    return this.database.appTransaction(async (db, tx) => {
       const existing = await db.select().from(hvOrderRequests).where(and(eq(hvOrderRequests.agentId, agentId), eq(hvOrderRequests.requestKey, key))).get();
       if (existing) {
         this.matches(existing, account, kind, input);
@@ -37,6 +39,11 @@ export class OrderStore {
       const now = Date.now();
       const row: RequestRow = { id: randomUUID(), agentId, account, requestKey: key, kind, input: canonical(input), createdAt: now };
       await db.insert(hvOrderRequests).values(row).run();
+      if (origin) {
+        if (origin.agentId !== agentId || !origin.subagentId || origin.conversationId === null || origin.toolTaskId === null) throw new HyperliquidError("Invalid execution provenance", 403);
+        await assertActiveActor(tx, origin);
+        await db.insert(hvOrderRequestProvenance).values({ requestId: row.id, agentId, producerSubagentId: origin.subagentId, sourceRunId: origin.runId, conversationId: origin.conversationId, toolTaskId: origin.toolTaskId }).run();
+      }
       for (const [ordinal, action] of actions.entries()) {
         const actionId = randomUUID();
         await db.insert(hvOrderActions).values({ id: actionId, requestId: row.id, ordinal, payload: JSON.stringify(action.payload), state: "prepared", expiresAt: now + 60_000, updatedAt: now }).run();

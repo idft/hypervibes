@@ -105,20 +105,20 @@ export class OrderService {
     return this.mutate(userId, agentId, input.request_id, "submit", input, signal,
       (authority, abort) => prepareSubmit(this.info, input.request_id, input.orders, authority.builder, abort), execution);
   }
-  cancel(userId: string, agentId: string, input: CancelInput, signal?: AbortSignal) {
+  cancel(userId: string, agentId: string, input: CancelInput, signal?: AbortSignal, execution?: OrderExecutionHandle) {
     assertStringAmounts(input);
     if (!Array.isArray(input.orders) || input.orders.length < 1 || input.orders.length > 100) throw new HyperliquidError("Cancel 1–100 orders per request.");
     return this.mutate(userId, agentId, input.request_id, "cancel", input, signal,
-      (authority, abort) => this.prepareCancel(authority.account, input.request_id, input.orders, abort));
+      (authority, abort) => this.prepareCancel(authority.account, input.request_id, input.orders, abort), execution);
   }
-  cancelAll(userId: string, agentId: string, input: CancelAllInput, signal?: AbortSignal) {
+  cancelAll(userId: string, agentId: string, input: CancelAllInput, signal?: AbortSignal, execution?: OrderExecutionHandle) {
     return this.mutate(userId, agentId, input.request_id, "cancel_all", input, signal, async (authority, abort) => {
       const orders = (await this.info.frontendOpenOrders({ user: authority.account as `0x${string}`, dex: "" }, abort))
         .filter((order) => isPerpetual(order.coin) && (!input.symbol || order.coin === input.symbol));
       if (orders.length > 100) throw new HyperliquidError("More than 100 open orders; cancel explicit bounded batches instead.");
       if (!orders.length) return [];
       return this.prepareCancel(authority.account, input.request_id, orders.map((order) => ({ symbol: order.coin, oid: String(order.oid) })), abort);
-    });
+    }, execution);
   }
   private async prepareCancel(account: string, key: string, inputs: { symbol: string; oid: string }[], signal: AbortSignal): Promise<PreparedAction[]> {
     const meta = await instruments(this.info, signal);
@@ -157,7 +157,9 @@ export class OrderService {
         if (authority.account !== account) throw new HyperliquidError("Account assignment changed", 409);
         const prepared = await prepare(authority, signal);
         if (kind === "submit" && this.admission) await this.admission.validate(agentId, this.info, account, signal, prepared, execution);
-        request = await this.store.prepare(agentId, account, key, kind, input, prepared);
+        const capability = kind === "submit" ? "submit_orders" : kind === "cancel" ? "cancel_orders" : "cancel_all_orders";
+        const origin = this.admission?.origin(agentId, execution, capability);
+        request = await this.store.prepare(agentId, account, key, kind, input, prepared, origin);
       }
       // The same request lock is also used by background reconciliation.
       const captured = request;

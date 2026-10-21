@@ -58,7 +58,7 @@ describe("sub-agent run history and details", () => {
   it("shows snapshotted instructions, full transcript, tools and prior context without duplicated sections", async () => {
     await act(async () => root.render(<SubagentRunPage initial={initial} />));
     expect(document.querySelector("dialog")).toBeNull();
-    const instructionsButton = [...container.querySelectorAll("button")].find((button) => button.textContent === "Instructions at execution")!;
+    const instructionsButton = container.querySelector<HTMLButtonElement>('[aria-label="Instructions at execution"]')!;
     await act(async () => instructionsButton.click());
     const dialog = document.querySelector("dialog")!;
     expect(dialog.open).toBe(true);
@@ -93,7 +93,7 @@ describe("sub-agent run history and details", () => {
     expect(page.className).toContain("h-[calc(100dvh-4.5rem)]");
     expect(page.className).toContain("overflow-hidden");
     expect(header.className).toContain("shrink-0");
-    expect(header.textContent).toContain("Instructions at execution");
+    expect(header.querySelector('[aria-label="Instructions at execution"]')).not.toBeNull();
     expect(transcript.className).toContain("min-h-0 flex-1 overflow-y-auto");
     expect(transcript.textContent).toContain("Earlier assignment");
     expect(transcript.textContent).toContain("Full assistant response");
@@ -175,7 +175,7 @@ describe("sub-agent run history and details", () => {
     expect([...container.querySelectorAll("summary")].filter((item) => item.textContent?.includes("get_account"))).toHaveLength(1);
     expect(container.textContent).toContain("Considering the analysis");
     expect(panel.textContent).not.toContain("Considering the analysis");
-    expect(container.textContent).toContain("Stop assignment");
+    expect(container.textContent).toContain("Cancel");
   });
   it("labels failed scripts explicitly", async () => {
     await act(async () => root.render(<SubagentRunPage initial={{ ...initial, prior: [], entries: [entry(30, "pi.tool", [{ role: "toolResult", toolCallId: "failed", toolName: "codemode", content: [{ type: "text", text: "Script timed out" }], isError: true, timestamp: 1 }])] }} />));
@@ -198,7 +198,7 @@ describe("sub-agent run history and details", () => {
     expect([...container.querySelectorAll("button")].some((button) => button.textContent === "Refresh")).toBe(false);
     const live = { ...initial, run: { ...run, status: "running" as const, result: "", finishedAt: null } };
     await act(async () => source.dispatchEvent(new MessageEvent("run", { data: JSON.stringify(live) })));
-    expect(container.textContent).toContain("Stop assignment");
+    expect(container.textContent).toContain("Cancel");
     await act(async () => source.dispatchEvent(new MessageEvent("unavailable", { data: JSON.stringify({ message: "Reconnecting fixture" }) })));
     expect(container.querySelector('[role="status"]')?.textContent).toBe("Reconnecting fixture");
   });
@@ -248,14 +248,15 @@ describe("sub-agent run history and details", () => {
     mocks.stopSubagentRun.mockResolvedValue({ ok: true });
     await act(async () => root.render(<SubagentRunPage initial={active} />));
     const source = RunSource.instances.at(-1)!;
-    await act(async () => container.querySelector("button")!.click());
+    const cancel = () => [...container.querySelectorAll("button")].find((button) => button.textContent === "Cancel")!;
+    await act(async () => cancel().click());
     expect(mocks.stopSubagentRun).toHaveBeenCalledWith({ data: { agentId: run.agentId, runId: run.id } });
     await act(async () => source.dispatchEvent(new MessageEvent("run", { data: JSON.stringify({ ...active, run: { ...active.run, status: "cancelled", result: "Stopped by user" } }) })));
     expect(container.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("cancelled");
-    expect(container.textContent).not.toContain("Stop assignment");
+    expect(container.textContent).not.toContain("Cancel");
     mocks.stopSubagentRun.mockResolvedValue({ ok: false, error: "Unavailable" });
     await act(async () => source.dispatchEvent(new MessageEvent("run", { data: JSON.stringify(active) })));
-    await act(async () => container.querySelector("button")!.click());
+    await act(async () => cancel().click());
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("Unavailable");
   });
 });

@@ -237,7 +237,7 @@ describe("subagent definitions, execution and scheduling", () => {
     const agent = await createAgent(), other = await createAgent(), worker = await createWorker(agent.id);
     await expect(runtime.agents.subagents.detail("other", agent.id, worker.id)).rejects.toMatchObject({ status: 404 });
     await expect(detail(other.id, worker.id)).rejects.toMatchObject({ status: 404 });
-    for (const input of [settings({ tools: ["bash"] }), settings({ tools: ["research_ta"] }), settings({ tools: ["get_subagent_run"] }), settings({ schedule: "bad" }), settings({ timeoutSeconds: 0 }), { ...settings(), enabled: "true" }]) expect(() => subagentInput(input)).toThrow();
+    for (const input of [settings({ tools: ["bash"] }), settings({ tools: ["research_ta"] }), settings({ tools: ["invented_run_tool"] }), settings({ schedule: "bad" }), settings({ timeoutSeconds: 0 }), { ...settings(), enabled: "true" }]) expect(() => subagentInput(input)).toThrow();
     await expect(runtime.agents.subagents.run("other", agent.id, worker.id, "Do work", randomUUID())).rejects.toMatchObject({ status: 404 });
   });
 

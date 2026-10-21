@@ -133,7 +133,10 @@ export function SubagentRunPage({ initial }: { initial: RunDetail }) {
           <h2 aria-current="page" className="break-words text-lg font-medium text-white">Run {run.id}</h2>
           <RunStatus status={run.status} />
         </nav>
-        {(run.status === "queued" || run.status === "running") && <button type="button" disabled={pending} onClick={() => { void stop(); }} className={`${button} shrink-0 text-red-300`}>Stop assignment</button>}
+        <div className="flex shrink-0 items-center gap-2">
+          <button type="button" aria-label="Instructions at execution" title="Instructions at execution" onClick={() => setInstructionsOpen(true)} className="cursor-pointer rounded-full border border-zinc-700 p-2 text-zinc-300 hover:bg-zinc-800"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden="true" className="size-4"><path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" /></svg></button>
+          {(run.status === "queued" || run.status === "running") && <button type="button" disabled={pending} onClick={() => { void stop(); }} className="shrink-0 cursor-pointer rounded-full border border-red-500/60 px-4 py-2 text-sm text-red-400 hover:bg-red-500/10 disabled:cursor-wait disabled:opacity-50">Cancel</button>}
+        </div>
       </header>
       <hr className="border-zinc-800" />
       <p className="text-sm text-zinc-400">{run.source} · Created <RelativeTime timestamp={run.createdAt} />{run.finishedAt !== null && <> · Finished <RelativeTime timestamp={run.finishedAt} /></>}</p>
@@ -141,12 +144,12 @@ export function SubagentRunPage({ initial }: { initial: RunDetail }) {
       {connectionError && <p role="status" className="text-sm text-amber-200">{connectionError}</p>}
       {error && <p role="alert" className="text-sm text-red-300">{error}</p>}
       {detail.warnings?.map((warning, index) => <p key={`${warning.code}:${index}`} role="status" className="text-sm text-amber-200">{warning.code.replaceAll("_", " ")}: {warning.message}</p>)}
-      <button type="button" onClick={() => setInstructionsOpen(true)} className={button}>Instructions at execution</button>
       {instructionsOpen && <InstructionsDialog instructions={detail.context?.instructions ?? workerInstructions(run.config)} onClose={() => setInstructionsOpen(false)}><p className="text-xs text-zinc-400">Insights snapshot: {detail.context?.insightStatus ?? "legacy/none"}. Stopping does not cancel exchange orders.</p>{detail.context?.insights && <div className="flex flex-wrap gap-4 text-sm">{([detail.context.insights.agent, detail.context.insights.worker]).map((snapshot) => <a className="cursor-pointer text-violet-300" key={snapshot.scope.kind} href={`/agents/${run.agentId}/memories?scope=${snapshot.scope.kind === "worker" ? encodeURIComponent(snapshot.scope.subagentId) : ""}${snapshot.version ? `&version=${snapshot.version}` : ""}`}>{snapshot.scope.kind === "agent" ? "Agent-wide" : "Worker-specific"} insights v{snapshot.version}</a>)}</div>}{detail.publications?.length ? <div className="space-y-2">{detail.publications.map((publication) => <a key={publication.ref} className="block cursor-pointer text-sm text-violet-300" href={`/agents/${encodeURIComponent(run.agentId)}/memories/${encodeURIComponent(publication.ref)}`}>{publication.ref} · {publication.kind} · {publication.summary}</a>)}</div> : null}<p className="text-xs text-zinc-500">Allowed tools: {run.config.tools.join(", ") || "None"}</p></InstructionsDialog>}
     </section>
     <section ref={transcriptScroll} aria-label="Conversation transcript" className={`${panel} min-h-0 flex-1 overflow-y-auto overscroll-contain${transcriptReady ? "" : " invisible"}`}>
     <h2 className="font-medium text-white">Conversation transcript</h2>
     {detail.prior.length > 0 && <div><details><summary className="cursor-pointer font-medium text-white">Earlier conversation context · {detail.prior.length} entries</summary><p className="my-4 text-sm text-zinc-400">History preceding this assignment in the persistent conversation. Later assignments are not shown.</p><Transcript entries={detail.prior} agentId={run.agentId} /></details></div>}
-    {detail.entries.length ? <Transcript entries={detail.entries} agentId={run.agentId} tools={detail.tools} /> : <p className="text-sm text-zinc-500">No transcript entries yet.</p>}<div ref={transcriptEnd} /></section>
+    {detail.entries.length ? <Transcript entries={detail.entries} agentId={run.agentId} tools={detail.tools} /> : <p className="text-sm text-zinc-500">No transcript entries yet.</p>}
+    {(run.status === "queued" || run.status === "running") && <p role="status" className="flex items-center gap-2 pt-2 text-xs text-zinc-400"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="size-4 text-violet-400 animate-spin"><path d="M12 3a9 9 0 1 1-9 9" /></svg>{run.status === "queued" ? "Waiting to start" : "Thinking"}…</p>}<div ref={transcriptEnd} /></section>
   </div>;
 }

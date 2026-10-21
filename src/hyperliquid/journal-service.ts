@@ -96,6 +96,9 @@ export function exchangeHistory(transport: HttpTransport): HistoryFetcher {
 export class JournalService {
   private readonly workers = new Map<string, Worker>();
   private stopped = false;
+  private readonly shutdown = new AbortController();
+  private readonly syncs = new Map<string, Promise<void>>();
+  private readonly catchups = new Map<string, Promise<void>>();
   private readonly eventTasks = new Set<Promise<void>>();
   constructor(private readonly db: SharedDatabase, private readonly fetchHistory: HistoryFetcher, private readonly log?: FastifyBaseLogger, private readonly feedFactory?: JournalFeedFactory) {}
 
@@ -210,6 +213,7 @@ export class JournalService {
 
   async close() {
     this.stopped = true;
+    this.shutdown.abort();
     const workers = [...this.workers.values()];
     for (const worker of workers) {
       worker.controller.abort();
@@ -223,11 +227,60 @@ export class JournalService {
       if (feed) await feed.close().catch(() => {});
     }));
     this.workers.clear();
+    await Promise.allSettled([...this.syncs.values()]);
     await Promise.all(this.eventTasks);
   }
 
-  async syncAccount(account: string, signal: AbortSignal, now = Date.now(), fullScan = false) {
+  /** Shared with background repair: never overlap HTTP scans of one account. */
+  syncAccount(account: string, signal: AbortSignal, now = Date.now(), fullScan = false): Promise<void> {
     account = account.toLowerCase();
+    const key = account;
+    const task = (this.syncs.get(key) ?? Promise.resolve()).catch(() => {}).then(async () => {
+      signal.throwIfAborted();
+      await this.synchronize(key, signal, now, fullScan);
+    });
+    this.syncs.set(key, task);
+    const clean = () => { if (this.syncs.get(key) === task) this.syncs.delete(key); };
+    void task.then(clean, clean);
+    return task;
+  }
+
+  /** Bounded, single-flight catch-up. Failure leaves previously ingested evidence
+   * readable; the caller still checks actual coverage, never assumes success. */
+  async ensureThrough(account: string, end: number, cancellation?: AbortSignal) {
+    if (!Number.isSafeInteger(end) || end < 0 || end > Date.now()) return { attempted: false, limitation: "Review boundary is invalid or in the future; coverage is not guaranteed" };
+    account = account.toLowerCase();
+    if (this.stopped) return { attempted: false, limitation: "Journal is shutting down" };
+    const rows = await this.db.all<{ cursor: number; error: string | null; updated_at: number | null }>("SELECT cursor,error,updated_at FROM hv_journal_sync WHERE account=?", account);
+    if (rows.length === 3 && rows.every((row) => row.cursor >= end && row.updated_at !== null && !row.error)) {
+      await this.project(account);
+      return { attempted: false, limitation: null };
+    }
+    const deadline = AbortSignal.any([this.shutdown.signal, AbortSignal.timeout(20_000)]);
+    let task = this.catchups.get(account);
+    if (!task) {
+      task = this.syncAccount(account, deadline);
+      this.catchups.set(account, task);
+      const key = account, work = task;
+      const clean = () => { if (this.catchups.get(key) === work) this.catchups.delete(key); };
+      void work.then(clean, clean);
+    }
+    const signal = AbortSignal.any([deadline, ...(cancellation ? [cancellation] : [])]);
+    let abort: () => void = () => {};
+    try {
+      await Promise.race([task, new Promise<never>((_resolve, reject) => {
+        abort = () => reject(signal.reason);
+        signal.addEventListener("abort", abort, { once: true });
+        if (signal.aborted) abort();
+      })]);
+      return { attempted: true, limitation: null };
+    } catch {
+      cancellation?.throwIfAborted();
+      return { attempted: true, limitation: "Journal catch-up did not finish within its deadline; inspect coverage and disclose incomplete evidence" };
+    } finally { signal.removeEventListener("abort", abort); }
+  }
+
+  private async synchronize(account: string, signal: AbortSignal, now: number, fullScan: boolean) {
     await this.db.run("INSERT INTO hv_journal_accounts(account) VALUES (?) ON CONFLICT DO NOTHING", account);
     for (const stream of ["fill", "funding", "ledger"] as const) {
       if (signal.aborted) return;

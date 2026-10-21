@@ -114,6 +114,23 @@ describe("generated SQLite auth migrations", () => {
     expect(connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 
+  it("creates same-Agent order provenance in the existing migration chain", () => {
+    expect(migrateApplication(connection)).toEqual({ applied: 9, total: 9 });
+    connection.exec(`INSERT INTO hv_users(id,name,email) VALUES ('owner','Owner','owner@example.test');
+      INSERT INTO hv_agents(id,user_id,name,creation_request_id,created_at,updated_at) VALUES ('a','owner','A','a',1,1),('b','owner','B','b',1,1);
+      INSERT INTO hv_subagents(id,agent_id,kind,name,instructions,provider,model_id,tools,created_at,updated_at) VALUES ('worker-a','a','worker','A','Observe','faux','faux','[]',1,1),('other-a','a','worker','Other','Observe','faux','faux','[]',1,1),('worker-b','b','worker','B','Observe','faux','faux','[]',1,1);
+      INSERT INTO hv_subagent_runs(id,agent_id,subagent_id,request_id,source,task,config,created_at) VALUES ('run-a','a','worker-a','run-a','manual','Observe','{}',1),('run-b','b','worker-b','run-b','manual','Observe','{}',1);
+      INSERT INTO hv_order_requests(id,agent_id,account,request_key,kind,input,created_at) VALUES ('request-a','a','account','a','submit','{}',1),('request-b','b','account','b','cancel','{}',1);`);
+    const origin = connection.prepare("INSERT INTO hv_order_request_provenance(request_id,agent_id,producer_subagent_id,source_run_id,conversation_id,tool_task_id) VALUES (?,?,?,?,1,2)");
+    expect(() => origin.run("request-a", "a", "worker-b", "run-b")).toThrow();
+    expect(() => origin.run("request-b", "a", "worker-a", "run-a")).toThrow();
+    expect(() => origin.run("request-a", "a", "other-a", "run-a")).toThrow();
+    origin.run("request-a", "a", "worker-a", "run-a");
+    expect(() => origin.run("request-a", "a", "worker-a", "run-a")).toThrow();
+    expect(connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    expect(migrateApplication(connection)).toEqual({ applied: 0, total: 9 });
+  });
+
   it("rolls back a failed upgrade without marking it applied or damaging existing data", () => {
     const folder = join(directory, "migrations");
     cpSync(source, folder, { recursive: true });

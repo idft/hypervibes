@@ -38,7 +38,7 @@ describe("durable account journal", () => {
     fetcher = vi.fn(async (_account, stream, start, end) => rows.filter((e) => e.kind === stream && e.time >= start && e.time <= end).slice(0, 500));
     journal = new JournalService(db, fetcher);
   });
-  afterEach(async () => { await journal.close(); await db.close(); rmSync(directory, { recursive: true, force: true }); });
+  afterEach(async () => { await journal.close(); await db.close(); vi.useRealTimers(); vi.restoreAllMocks(); rmSync(directory, { recursive: true, force: true }); });
 
   it("samples rolling balance windows with a carried baseline, exact changes and quiet periods", async () => {
     const day = 86_400_000;
@@ -72,6 +72,47 @@ describe("durable account journal", () => {
     fetcher.mockRejectedValue(new Error("offline"));
     await journal.syncAccount(otherAccount, signal(), 100);
     expect(await journal.balanceHistory(otherAccount, 100)).toBeNull();
+  });
+
+  it("catches up stale HTTP cursors once for concurrent reviews without advancing them on pushes", async () => {
+    await journal.syncAccount(account, signal(), 1000);
+    await journal.ingest(account, "fill", [fill(1500)]);
+    await journal.project(account);
+    expect(await db.all("SELECT cursor FROM hv_journal_sync WHERE account=?", account)).toEqual([{ cursor: 1000 }, { cursor: 1000 }, { cursor: 1000 }]);
+    fetcher.mockClear(); rows = [fill(1500)];
+    const [first, second] = await Promise.all([journal.ensureThrough(account, 1999), journal.ensureThrough(account, 1999)]);
+    expect(first).toMatchObject({ attempted: true, limitation: null });
+    expect(second).toMatchObject({ attempted: true, limitation: null });
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect((await db.all<{ cursor: number }>("SELECT cursor FROM hv_journal_sync WHERE account=?", account)).every((row) => row.cursor >= 1999)).toBe(true);
+    expect(await journal.ensureThrough(account, 1999)).toMatchObject({ attempted: false });
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+  it("retains readable evidence and explicit sync errors after failed catch-up", async () => {
+    await journal.syncAccount(account, signal(), 1000);
+    rows = [deposit(1)]; await journal.ingest(account, "ledger", rows);
+    fetcher.mockRejectedValue(new Error("offline"));
+    await journal.ensureThrough(account, 1999);
+    expect((await journal.page(account, "activity", 1)).activity).toHaveLength(1);
+    expect((await db.all<{ cursor: number; error: string }>("SELECT cursor,error FROM hv_journal_sync WHERE account=?", account)).every((row) => row.cursor === 1000 && row.error.includes("failed"))).toBe(true);
+  });
+  it("bounds catch-up to twenty seconds and rejects future review boundaries", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+      expect(ms).toBe(20_000);
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new Error("deadline")), ms);
+      return controller.signal;
+    });
+    expect(await journal.ensureThrough(account, Date.now() + 1)).toMatchObject({ attempted: false, limitation: expect.stringContaining("future") });
+    fetcher.mockImplementation(async (_account, _stream, _start, _end, signal) => new Promise((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      if (signal.aborted) reject(signal.reason);
+    }));
+    const pending = journal.ensureThrough(account, Date.now());
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(await pending).toMatchObject({ attempted: true, limitation: expect.stringContaining("deadline") });
   });
 
   it("backfills every page, checkpoints empty streams and deduplicates overlapping imports", async () => {

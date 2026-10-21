@@ -6,6 +6,18 @@
     "eaadcafc-b182-441f-b38e-16ab13370274"
   ],
   "ddl": [
+    { "name": "hv_order_request_provenance", "entityType": "tables" },
+    { "type": "text", "notNull": false, "autoincrement": false, "default": null, "generated": null, "name": "request_id", "entityType": "columns", "table": "hv_order_request_provenance" },
+    { "type": "text", "notNull": true, "autoincrement": false, "default": null, "generated": null, "name": "agent_id", "entityType": "columns", "table": "hv_order_request_provenance" },
+    { "type": "text", "notNull": true, "autoincrement": false, "default": null, "generated": null, "name": "producer_subagent_id", "entityType": "columns", "table": "hv_order_request_provenance" },
+    { "type": "text", "notNull": false, "autoincrement": false, "default": null, "generated": null, "name": "source_run_id", "entityType": "columns", "table": "hv_order_request_provenance" },
+    { "type": "integer", "notNull": true, "autoincrement": false, "default": null, "generated": null, "name": "conversation_id", "entityType": "columns", "table": "hv_order_request_provenance" },
+    { "type": "integer", "notNull": true, "autoincrement": false, "default": null, "generated": null, "name": "tool_task_id", "entityType": "columns", "table": "hv_order_request_provenance" },
+    { "columns": ["request_id"], "nameExplicit": false, "name": "hv_order_request_provenance_pk", "table": "hv_order_request_provenance", "entityType": "pks" },
+    { "columns": ["agent_id", "request_id"], "tableTo": "hv_order_requests", "columnsTo": ["agent_id", "id"], "onUpdate": "NO ACTION", "onDelete": "NO ACTION", "nameExplicit": false, "name": "fk_hv_order_request_provenance_agent_id_request_id_hv_order_requests_agent_id_id_fk", "entityType": "fks", "table": "hv_order_request_provenance" },
+    { "columns": ["agent_id", "producer_subagent_id"], "tableTo": "hv_subagents", "columnsTo": ["agent_id", "id"], "onUpdate": "NO ACTION", "onDelete": "NO ACTION", "nameExplicit": false, "name": "fk_hv_order_request_provenance_agent_id_producer_subagent_id_hv_subagents_agent_id_id_fk", "entityType": "fks", "table": "hv_order_request_provenance" },
+    { "columns": ["agent_id", "source_run_id", "producer_subagent_id"], "tableTo": "hv_subagent_runs", "columnsTo": ["agent_id", "id", "subagent_id"], "onUpdate": "NO ACTION", "onDelete": "NO ACTION", "nameExplicit": false, "name": "fk_hv_order_request_provenance_agent_id_source_run_id_producer_subagent_id_hv_subagent_runs_agent_id_id_subagent_id_fk", "entityType": "fks", "table": "hv_order_request_provenance" },
+    { "columns": [{ "value": "agent_id", "isExpression": false }, { "value": "source_run_id", "isExpression": false }], "isUnique": false, "where": null, "origin": "manual", "name": "hv_order_provenance_run_idx", "entityType": "indexes", "table": "hv_order_request_provenance" },
     {
       "name": "hv_auth_accounts",
       "entityType": "tables"

@@ -19,6 +19,7 @@ import { bodyHash, canonical } from "../canonical.js";
 import { subagentTemplate } from "./subagent-templates.js";
 import { workerTriggers, type WorkerRequestPayload, type WorkerTriggers } from "./worker-triggers.js";
 import { requestBatch, inboxAssignment } from "./worker-inbox.js";
+import { inspectRun, listRuns } from "./run-inspection.js";
 import { assertActiveActor, type MemoryActor } from "../memory/operations.js";
 import { assignment, defaultMainInstructions, mainToolNames, nextCandleRun, normalizeDelegationTools, subagentInput, type AssignmentSettings } from "./subagent-input.js";
 
@@ -522,6 +523,13 @@ export class SubagentService {
     }, signal);
   }
   private requestReceipt(row: WorkerRequest) { return { id: row.id, status: row.runId ? "dispatched" : row.discardedReason ? "discarded" : "pending", runId: row.runId }; }
+  listRunEvidence(agentId: string, input: unknown) { return listRuns(this.database, agentId, input); }
+  async readRunEvidence(agentId: string, id: string, input: unknown) {
+    const request = await this.db.select().from(hvWorkerRequests).where(and(eq(hvWorkerRequests.agentId, agentId), eq(hvWorkerRequests.id, id))).get();
+    if (request && !request.runId) return { request: { id: request.id, subagentId: request.subagentId, createdAt: request.createdAt, discardedReason: request.discardedReason }, run: null };
+    const run = await this.internalRun(agentId, request?.runId ?? id);
+    return { ...(request ? { requestId: request.id } : {}), ...await inspectRun(this.database, this.execution, this.binding(agentId).harness, agentId, run, input) };
+  }
   async assignmentStatus(agentId: string, id: string) {
     const request = await this.db.select().from(hvWorkerRequests).where(and(eq(hvWorkerRequests.agentId, agentId), eq(hvWorkerRequests.id, id))).get();
     const view = (run: SubagentRun) => ({ id: run.id, subagentId: run.subagentId, status: run.status, task: run.task, result: run.result, createdAt: run.createdAt, finishedAt: run.finishedAt });

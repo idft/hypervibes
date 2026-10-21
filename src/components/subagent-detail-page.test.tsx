@@ -341,7 +341,9 @@ describe("subagent pages", () => {
     expect(document.querySelector("dialog")!.textContent).toContain("Hyperliquid");
     expect(document.querySelector("dialog")!.textContent).toContain("delegate_subagent");
     expect(document.querySelector("dialog")!.textContent).toContain("list_subagents");
-    expect(document.querySelector("dialog")!.textContent).not.toContain("get_subagent_run");
+    expect(document.querySelector("dialog")!.textContent).toContain("get_subagent_run");
+    expect(document.querySelector("dialog")!.textContent).toContain("list_subagent_runs");
+    expect(document.querySelector("dialog")!.textContent).toContain("research_execution_audit");
     await act(async () => { (document.querySelector("dialog input[type=checkbox]") as HTMLInputElement).click(); });
     await click("Cancel");
     expect(container.textContent).toContain("No tools allowed");
@@ -400,7 +402,7 @@ describe("subagent pages", () => {
     await click("All tools in Hyperliquid");
     await click("All tools in Hyperliquid");
     await click("All tools in HyperVibes · Subagents");
-    expect(document.querySelectorAll("dialog input[type=checkbox]:checked")).toHaveLength(hyperliquidToolNames.length + 3);
+    expect(document.querySelectorAll("dialog input[type=checkbox]:checked")).toHaveLength(hyperliquidToolNames.length + 4);
     const search = document.querySelector("dialog input[type=search]")!;
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(search, "get_account");
@@ -409,13 +411,13 @@ describe("subagent pages", () => {
     expect(document.querySelectorAll("dialog input[type=checkbox]")).toHaveLength(1);
     await click("No tools in Hyperliquid");
     expect(document.querySelectorAll("dialog input[type=checkbox]:checked")).toHaveLength(0);
-    expect(document.querySelector("dialog")!.textContent).toContain("3 selected");
+    expect(document.querySelector("dialog")!.textContent).toContain("4 selected");
     await click("All tools in Hyperliquid");
-    expect(document.querySelector("dialog")!.textContent).toContain(`${hyperliquidToolNames.length + 3} selected`);
+    expect(document.querySelector("dialog")!.textContent).toContain(`${hyperliquidToolNames.length + 4} selected`);
     await click("No tools in Hyperliquid");
     await click("Apply");
     expect(mocks.saveSubagent).not.toHaveBeenCalled();
-    expect(mocks.saveSubagentTools.mock.calls[0]![0].data.tools).toEqual(["list_subagents", "delegate_subagent", "get_subagent_run"]);
+    expect(mocks.saveSubagentTools.mock.calls[0]![0].data.tools).toEqual(["list_subagents", "delegate_subagent", "list_subagent_runs", "get_subagent_run"]);
   });
   it("keeps failed tool edits open for retry without changing the saved summary", async () => {
     await render();

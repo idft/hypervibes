@@ -177,6 +177,13 @@ export class HyperliquidService {
     return agent.tradingAccountAddress;
   }
 
+  /** Internal Agent-bound research capability; no exchange mutation or signing. */
+  async catchUpJournal(id: string, end: number, signal?: AbortSignal) {
+    const agent = await this.db.select({ account: hvAgents.tradingAccountAddress }).from(hvAgents).where(eq(hvAgents.id, id)).get();
+    if (!agent?.account) throw new HyperliquidError("Agent has no trading account", 409);
+    return this.journal ? this.journal.ensureThrough(agent.account, end, signal) : { attempted: false, limitation: "Journal synchronization is unavailable" };
+  }
+
   async agentTradingAccount(userId: string, id: string) {
     if (this.stopped) throw new HyperliquidError("Hyperliquid service is closed", 503);
     return this.dashboardAccount(userId, id);

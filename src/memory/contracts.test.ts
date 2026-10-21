@@ -28,6 +28,16 @@ describe("memory and insight contracts", () => {
       expect(() => validateToolArguments(tool, { type: "toolCall", id: "publish", name: tool.name, arguments: input })).not.toThrow();
     }
   });
+  it("explains evidence timestamp units and direct Code Mode publication without manual copying", () => {
+    const description = JSON.stringify(ResearchInputSchema.properties.evidenceAsOf);
+    expect(description).toContain("MILLISECONDS");
+    expect(description).toContain("last.time * 1000 + intervalMs");
+    expect(description).toContain("checking returned candles reach that boundary");
+    expect(description).toContain("await tools.publish_research");
+    expect(description).toContain("Never hand-copy");
+    expect(description).toContain("store/load");
+    expect(description).toContain("not in the future");
+  });
   it("describes research validity as an absolute deadline, not a duration", () => {
     const description = JSON.stringify(ResearchInputSchema.properties.requestedValidUntil);
     expect(description).toContain("absolute Unix timestamp in UTC milliseconds, NOT a duration");

@@ -79,7 +79,7 @@ describe("per-Agent durable execution", () => {
     const agent = await create();
     const harness = await opened.mock.results[0]!.value as Harness;
     const root = await harness.root(context);
-    const toolNames = ["get_account", "get_market_snapshot", "prepare_protected_entry", "prepare_position_protection", "get_protection_status", "submit_orders", "cancel_orders", "cancel_all_orders", "list_orders", "get_order", "get_order_request", "list_subagents", "delegate_subagent", "get_subagent_run", "record_trade_decision", "list_memories", "get_memory", "get_trading_context", "list_instruments"];
+    const toolNames = ["get_account", "get_market_snapshot", "prepare_protected_entry", "prepare_position_protection", "get_protection_status", "submit_orders", "cancel_orders", "cancel_all_orders", "list_orders", "get_order", "get_order_request", "list_subagents", "delegate_subagent", "list_subagent_runs", "get_subagent_run", "record_trade_decision", "list_memories", "get_memory", "get_trading_context", "list_instruments"];
     expect((await root.agent(context)).tools.map((tool) => tool.name)).toEqual(toolNames);
     await root.configure({ extensions: [], tools: [], instructions: "Trading and live exchange data are not configured." }, context);
     await runtime.close();

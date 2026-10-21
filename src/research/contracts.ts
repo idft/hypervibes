@@ -28,6 +28,7 @@ export const JournalResultSchema = Type.Union([Type.Object({
   trades: Type.Optional(Type.Array(trade, { maxItems: 1000 })), next: Type.Union([Type.Object({ time, id: Type.String() }), Type.Null()]),
   performance: Type.Object({ scope: Type.String(), closed: time, knownNetCount: time, knownNetSum: Type.String(), knownNetWins: time, grossPnl: Type.String(), fees: Type.String() }),
   coverage: Type.Object({ complete: Type.Boolean(), historyLimited: Type.Boolean(), filter: Type.String(), truncated: Type.Boolean(),
+    catchUp: Type.Optional(Type.Object({ attempted: Type.Boolean(), limitation: Type.Union([Type.String(), Type.Null()]) })),
     sync: Type.Array(Type.Object({ stream: Type.String(), cursor: time, updated_at: nullableTime, error: Type.Union([Type.String(), Type.Null()]) })),
   }),
 }), ExportSchema]);

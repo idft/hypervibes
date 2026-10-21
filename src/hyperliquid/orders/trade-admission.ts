@@ -32,6 +32,12 @@ export class TradeAdmissionService {
     if (!value || value.actor.agentId !== agentId) throw new HyperliquidError("A verified model execution handle is required for model order mutations", 403);
     return value;
   }
+  /** Only the trusted handle can supply request provenance, never model arguments. */
+  origin(agentId: string, handle: OrderExecutionHandle | undefined, capability: string) {
+    const { actor, tools } = this.authority(agentId, handle);
+    if (!tools.includes(capability)) throw new HyperliquidError("Order mutation permission not selected", 403);
+    return actor;
+  }
   /** Read-only planners need identity, not submit_orders permission. */
   planning(agentId: string, handle?: OrderExecutionHandle) { this.authority(agentId, handle); }
 
