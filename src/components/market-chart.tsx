@@ -5,11 +5,14 @@ import { mergeChartCandles, intervalMillis, type ChartCandle, type ChartSnapshot
 import type { ChartCapture, ChartDrawing, ChartLayout, ChartPoint, DrawingKind } from "../charts/contracts.js";
 import { getChartHistory } from "../web/charts.js";
 import { ChartDrawings, type ChartProjection } from "./chart-drawings.js";
+import { defaultChartOverlays, type ChartOverlayVisibility } from "../charts/trading-contracts.js";
+import { createTradingOverlays, type FillHover } from "../charts/trading-overlays.js";
+import { useChartAccount } from "./use-chart-account.js";
 
 export interface MarketChartHandle { capture: (layout: ChartLayout, selectedDrawingId: string, image: boolean) => Promise<ChartCapture> }
-interface ActiveChart { chart: IChartApi; price: ISeriesApi<"Candlestick">; candles: ChartCandle[]; status: ChartSnapshot["status"] }
-export function MarketChart({ id, layout, tool, selected, disabled, statusHost, onSelect, onSave, onDrawn, onEdit, ref }: {
-  id: string; layout: ChartLayout; tool: DrawingKind | "select"; selected: string; disabled: boolean; statusHost: HTMLElement | null;
+interface ActiveChart { chart: IChartApi; price: ISeriesApi<"Candlestick">; candles: ChartCandle[]; status: ChartSnapshot["status"]; overlays: ReturnType<typeof createTradingOverlays> }
+export function MarketChart({ id, layout, tool, selected, disabled, statusHost, overlayVisibility = defaultChartOverlays, onSelect, onSave, onDrawn, onEdit, ref }: {
+  id: string; layout: ChartLayout; tool: DrawingKind | "select"; selected: string; disabled: boolean; statusHost: HTMLElement | null; overlayVisibility?: ChartOverlayVisibility;
   onSelect: (id: string) => void; onSave: (drawing: ChartDrawing) => Promise<number | undefined>; onDrawn: () => void; onEdit: () => void; ref: Ref<MarketChartHandle>;
 }) {
   const host = useRef<HTMLDivElement>(null), svg = useRef<SVGSVGElement>(null), active = useRef<ActiveChart | null>(null);
@@ -17,6 +20,7 @@ export function MarketChart({ id, layout, tool, selected, disabled, statusHost, 
   const [error, setError] = useState("");
   const [historyStatus, setHistoryStatus] = useState("Loading candles…");
   const [retry, setRetry] = useState(0), [frame, setFrame] = useState(0);
+  const [hover, setHover] = useState<FillHover | null>(null);
   const { coin, interval } = layout.document;
   useEffect(() => {
     const element = host.current;
@@ -32,7 +36,8 @@ export function MarketChart({ id, layout, tool, selected, disabled, statusHost, 
     price.priceScale().applyOptions({ scaleMargins: { top: 0.06, bottom: 0.25 } });
     const volume = chart.addSeries(HistogramSeries, { priceFormat: { type: "volume" }, priceScaleId: "volume" });
     volume.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 }, visible: false });
-    const state: ActiveChart = { chart, price, candles: [], status: "connecting" };
+    const overlays = createTradingOverlays(chart, price, setHover);
+    const state: ActiveChart = { chart, price, candles: [], status: "connecting", overlays };
     active.current = state;
     const redraw = () => {
       if (raf || disposed) return;
@@ -102,10 +107,19 @@ export function MarketChart({ id, layout, tool, selected, disabled, statusHost, 
     return () => {
       disposed = true; active.current = null; cancelAnimationFrame(raf); source.close();
       element.removeEventListener("pointermove", redraw); element.removeEventListener("wheel", redraw);
-      chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRange); chart.timeScale().unsubscribeSizeChange(redraw); chart.unsubscribeCrosshairMove(redraw); chart.remove();
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRange); chart.timeScale().unsubscribeSizeChange(redraw); chart.unsubscribeCrosshairMove(redraw); overlays.close(); chart.remove();
     };
   }, [id, coin, interval, retry]);
   const state = active.current;
+  const candles = state?.candles;
+  const step = intervalMillis[interval] / 1000;
+  const account = useChartAccount(id, coin, (candles?.[0]?.time ?? 0) * 1000, candles?.length ? (candles.at(-1)!.time + step) * 1000 : 0, overlayVisibility);
+  useEffect(() => {
+    if (state && state === active.current && candles) state.overlays.trades(overlayVisibility.trades ? account.fills : [], candles, step);
+  }, [state, candles, step, account.fills, overlayVisibility.trades]);
+  useEffect(() => {
+    if (state && state === active.current) state.overlays.account(coin, account.snapshot, overlayVisibility, account.interrupted);
+  }, [state, coin, account.snapshot, account.interrupted, overlayVisibility]);
   // Frame advances on chart range, scale, pointer, size or candle updates—not on every animation frame.
   const projection = state ? projectChart(state, intervalMillis[interval] / 1000) : null;
   const handle: MarketChartHandle = { capture: async (frozenLayout, selectedDrawingId, includeImage) => {
@@ -137,6 +151,13 @@ export function MarketChart({ id, layout, tool, selected, disabled, statusHost, 
     <div className="relative min-h-64 flex-1 overflow-hidden rounded-xl border border-zinc-800" aria-label={`${coin} ${interval} candlestick and volume chart`}>
       {/* Contain the library's positive canvas z-indices below the drawing overlay. */}
       <div ref={host} className="absolute inset-0 z-0" />
+      {account.messages.length > 0 && <div role="status" aria-label="Account overlay status" className="pointer-events-none absolute left-2 top-2 z-20 max-w-[calc(100%-5rem)] rounded bg-zinc-950/85 px-2 py-1 text-xs text-amber-200">
+        {account.messages.join(" · ")}{account.canRetry && <> <button type="button" className="pointer-events-auto cursor-pointer underline" onClick={account.retry}>Retry account data</button></>}
+      </div>}
+      {hover && overlayVisibility.trades && <div role="tooltip" aria-label="Trade fill" className="pointer-events-none absolute z-20 max-w-72 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-xs text-zinc-200 shadow-xl" style={{ left: Math.max(0, Math.min(hover.x + 12, (projection?.width ?? 300) - 280)), top: Math.max(0, Math.min(hover.y + 12, (projection?.height ?? 100) - 70)) }}>
+        <p className={hover.fill.side === "Buy" ? "text-emerald-400" : "text-red-400"}>{hover.fill.side} · {hover.fill.size} {coin} @ {hover.fill.price}</p>
+        <time dateTime={new Date(hover.fill.time).toISOString()}>{new Date(hover.fill.time).toLocaleString()}</time>
+      </div>}
       {projection && <ChartDrawings key={`${layout.id}/${coin}/${interval}/${tool}`} document={layout.document} revision={layout.revision} projection={projection} tool={tool} selected={selected} disabled={disabled} svgRef={svg} onSelect={onSelect} onSave={onSave} onDrawn={onDrawn} onEdit={onEdit} />}
     </div>
   </div>;

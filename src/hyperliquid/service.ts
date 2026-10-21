@@ -6,6 +6,7 @@ import { hvWalletAddresses } from "../db/auth-schema.js";
 import { HttpTransport, InfoClient } from "@nktkas/hyperliquid";
 import { loadAccountStatus } from "./account-status.js";
 import type { JournalService } from "./journal-service.js";
+import type { ChartFillRange } from "../charts/trading-contracts.js";
 import { loadAgentDashboard, type AgentDashboard } from "./agent-dashboard.js";
 import { LiveDashboards, type AccountFeedFactory } from "./live-dashboard.js";
 import { agentId } from "../agents/agent-input.js";
@@ -268,6 +269,12 @@ export class HyperliquidService {
     const address = await this.dashboardAccount(userId, id);
     if (!this.journal) throw new HyperliquidError("Journal is unavailable", 503);
     return this.journal.page(address, view, page);
+  }
+
+  async chartFills(userId: string, id: string, coin: string, range: ChartFillRange) {
+    const address = await this.dashboardAccount(userId, id);
+    if (!this.journal) throw new HyperliquidError("Journal is unavailable", 503);
+    return this.journal.chartFills(address, coin, range);
   }
 
   async journalNotes(userId: string, id: string, target: string) {

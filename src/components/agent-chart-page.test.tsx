@@ -83,7 +83,7 @@ describe("chart workspace", () => {
   it("uses one non-wrapping toolbar in the requested order, with accessible icon-only toggles", async () => {
     await render();
     const toolbar = container.querySelector("[role=toolbar][aria-label='Chart controls']")!;
-    expect([...toolbar.children].map((item) => item.getAttribute("aria-label"))).toEqual(["Layout", "Layout settings", "Instrument", "Timeframe", "Magnet", "Hide drawings", "Show annotation tools", "Lock objects", "Hide chat", "Chart status"]);
+    expect([...toolbar.children].map((item) => item.getAttribute("aria-label"))).toEqual(["Layout", "Layout settings", "Instrument", "Timeframe", "Account overlays", "Magnet", "Hide drawings", "Show annotation tools", "Lock objects", "Hide chat", "Chart status"]);
     expect(toolbar.classList.contains("flex-nowrap")).toBe(true);
     expect(toolbar.querySelector("label")).toBeNull();
     const status = toolbar.querySelector("[aria-label='Chart status']")!;
@@ -91,12 +91,30 @@ describe("chart workspace", () => {
     expect(status.querySelector("[aria-label='Chart connection']")!.textContent).toBe("Connected");
     expect(mocks.chartProps.statusHost).toBe(status);
     expect(container.querySelector("[aria-label='Chart canvas'] [aria-label='Chart connection']")).toBeNull();
-    for (const name of ["Layout settings", "Magnet", "Hide drawings", "Show annotation tools", "Lock objects", "Hide chat"]) {
+    for (const name of ["Layout settings", "Account overlays", "Magnet", "Hide drawings", "Show annotation tools", "Lock objects", "Hide chat"]) {
       const icon = toolbar.querySelector(`[aria-label='${name}']`)!;
       expect(icon.querySelector("svg")).not.toBeNull(); expect(icon.textContent).toBe("");
     }
     expect([...container.querySelectorAll("button")].some((b) => ["Undo", "Redo", "Objects & notes", "New", "Duplicate", "Rename", "Delete layout"].includes(b.textContent ?? ""))).toBe(false);
     expect(document.querySelector("[role=dialog][aria-label='Layout settings']")).toBeNull();
+  });
+  it("persists read-only overlay visibility outside layouts and their undo history", async () => {
+    await render();
+    expect(mocks.chartProps.overlayVisibility).toEqual({ trades: true, position: true, orders: true });
+    await click("Account overlays");
+    const checkbox = document.querySelector<HTMLInputElement>("dialog input[type=checkbox]")!;
+    await act(async () => checkbox.click());
+    await click("Cancel");
+    expect(mocks.chartProps.overlayVisibility).toEqual({ trades: true, position: true, orders: true });
+    await click("Account overlays");
+    await act(async () => document.querySelector<HTMLInputElement>("dialog input[type=checkbox]")!.click());
+    await click("Apply");
+    expect(mocks.chartProps.overlayVisibility).toEqual({ trades: false, position: true, orders: true });
+    expect(JSON.parse(localStorage.getItem("hypervibes:chart-overlays:v1:fixture")!)).toEqual(mocks.chartProps.overlayVisibility);
+    expect(mocks.change).not.toHaveBeenCalled(); expect(mocks.create).not.toHaveBeenCalled();
+    await act(async () => { root.unmount(); root = createRoot(container); });
+    await render();
+    expect(mocks.chartProps.overlayVisibility).toEqual({ trades: false, position: true, orders: true });
   });
   it("opens a searchable single-instrument modal with logos and avoids writes on cancel or unchanged selection", async () => {
     await render();

@@ -1,6 +1,6 @@
-import { HttpTransport } from "@nktkas/hyperliquid";
+import { HttpTransport, type FrontendOpenOrdersResponse } from "@nktkas/hyperliquid";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadAgentDashboard } from "./agent-dashboard.js";
+import { dashboardOrders, loadAgentDashboard } from "./agent-dashboard.js";
 
 const address = `0x${"12".repeat(20)}`;
 const fixtures: Record<string, unknown> = {
@@ -39,6 +39,14 @@ describe("Agent dashboard snapshots", () => {
     expect(result.positions).toEqual([{ coin: "BTC", size: "-0.01", entryPrice: "100000", unrealizedPnl: "-1.123456", liquidationPrice: null, leverage: 2 }]);
     expect(result.orders).toEqual([{ id: 123, coin: "BTC", side: "Buy", size: "0.02", price: "99000", type: "Limit" }]);
     expect(result.errors).toEqual([]);
+  });
+  it("retains trigger prices and nested TP/SL on both HTTP and live order projections", () => {
+    const base = (fixtures.frontendOpenOrders as FrontendOpenOrdersResponse)[0]!;
+    const trigger = { ...base, oid: 2, isTrigger: true, triggerPx: "95000.00001", limitPx: "90000", isPositionTpsl: true };
+    expect(dashboardOrders([{ ...base, children: [trigger] }, trigger]).orders).toEqual([
+      { id: 123, coin: "BTC", side: "Buy", size: "0.02", price: "99000", type: "Limit", children: [{ id: 2, coin: "BTC", side: "Buy", size: "0.02", price: "90000", type: "Limit", triggerPrice: "95000.00001", positionTpsl: true }] },
+      { id: 2, coin: "BTC", side: "Buy", size: "0.02", price: "90000", type: "Limit", triggerPrice: "95000.00001", positionTpsl: true },
+    ]);
   });
   it("reports unavailable sections as unknown, not empty or zero, while preserving successful sections", async () => {
     mockFetch("clearinghouseState");

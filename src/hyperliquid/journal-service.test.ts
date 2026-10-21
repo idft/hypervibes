@@ -40,6 +40,39 @@ describe("durable account journal", () => {
   });
   afterEach(async () => { await journal.close(); await db.close(); vi.useRealTimers(); vi.restoreAllMocks(); rmSync(directory, { recursive: true, force: true }); });
 
+  it("paginates chart fills by stable time/identity, scoped to account, instrument and candle range", async () => {
+    const fills = Array.from({ length: 505 }, (_, index) => ({ ...fill(index + 1), time: 100 }));
+    await journal.ingest(account, "fill", [...fills, { ...fill(600), time: 99 }, { ...fill(601), time: 200 }, { ...fill(602), time: 150, symbol: "ETH" }]);
+    await journal.ingest(otherAccount, "fill", [fill(700)]);
+    const first = await journal.chartFills(account.toUpperCase(), "BTC", { from: 100, to: 200 });
+    expect(first.fills).toHaveLength(500);
+    expect(first.fills.every((row) => row.time === 100 && row.side === "Buy" && row.price === "100")).toBe(true);
+    expect(first.nextCursor).not.toBeNull();
+    expect(first.sync).toBeNull();
+    const second = await journal.chartFills(account, "BTC", { from: 100, to: 200, cursor: first.nextCursor! });
+    expect(second.fills).toHaveLength(5); expect(second.nextCursor).toBeNull();
+    expect(new Set([...first.fills, ...second.fills].map((row) => row.id)).size).toBe(505);
+    expect(Object.keys(first.fills[0]!).sort()).toEqual(["id", "price", "side", "size", "time"]);
+    expect((await journal.chartFills(account, "ETH", { from: 100, to: 200 })).fills).toHaveLength(1);
+    await expect(journal.chartFills(account, "BTC", { from: 200, to: 100 })).rejects.toThrow("range");
+    await db.run("UPDATE hv_journal_accounts SET history_limited=1 WHERE account=?", account);
+    expect((await journal.chartFills(account, "BTC", { from: 100, to: 200 })).historyLimited).toBe(true);
+  });
+  it("returns one historical marker for a flip, preserves decimal strings and reflects subsequent journal ingestion", async () => {
+    const sell = { ...fill(2, "1", "A"), fill: { ...fill(2, "1", "A").fill!, price: "100.00000001", size: "2.00000001" } };
+    rows = [fill(1), sell];
+    await journal.syncAccount(account, signal(), 10);
+    const page = await journal.chartFills(account, "BTC", { from: 0, to: 20 });
+    expect(page.fills).toHaveLength(2);
+    expect(page.fills[0]).toMatchObject({ side: "Sell", price: "100.00000001", size: "2.00000001" });
+    expect(page.sync).toEqual({ updatedAt: 10, error: null });
+    await journal.ingest(account, "fill", [fill(11)]);
+    expect((await journal.chartFills(account, "BTC", { from: 0, to: 20 })).fills).toHaveLength(3);
+    fetcher.mockRejectedValue(new Error("offline"));
+    await journal.syncAccount(account, signal(), 20);
+    expect((await journal.chartFills(account, "BTC", { from: 0, to: 20 })).sync?.error).toBeTruthy();
+  });
+
   it("samples rolling balance windows with a carried baseline, exact changes and quiet periods", async () => {
     const day = 86_400_000;
     const now = 40 * day;
@@ -215,6 +248,13 @@ describe("durable account journal", () => {
       await db.run("INSERT INTO hv_agents(id,user_id,name,creation_request_id,trading_account_address,created_at,updated_at) VALUES (?,?,'A',?,?,0,0)", agent!, owner!, agent!, address ?? null);
     }
     const service = new HyperliquidService(applicationDatabase(db), undefined, undefined, undefined, journal);
+    const chartFills = vi.spyOn(journal, "chartFills");
+    await expect(service.chartFills("other", id, "BTC", { from: 0, to: 100 })).rejects.toMatchObject({ status: 404 });
+    expect(chartFills).not.toHaveBeenCalled();
+    await expect(service.chartFills("owner", unlinked, "BTC", { from: 0, to: 100 })).rejects.toMatchObject({ status: 409 });
+    expect(chartFills).not.toHaveBeenCalled();
+    await service.chartFills("owner", id, "BTC", { from: 0, to: 100 });
+    expect(chartFills).toHaveBeenCalledWith(account, "BTC", { from: 0, to: 100 });
     await expect(service.agentJournal("other", id, "activity", 1)).rejects.toMatchObject({ status: 404 });
     await expect(service.journalNotes("other", otherId, "deposit-1")).rejects.toThrow("not found");
     await expect(service.addJournalNote("other", otherId, "deposit-1", "cross-account")).rejects.toThrow("not found");

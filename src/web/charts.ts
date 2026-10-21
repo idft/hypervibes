@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getRequestHeaders } from "@tanstack/react-start/server";
-import { agentAction, agentUser, field } from "./agents.js";
+import { agentAction, agentOperation, agentUser, field } from "./agents.js";
+import { chartFillRange } from "../charts/trading-contracts.js";
 import { HyperliquidError } from "../hyperliquid/errors.js";
 import { requestId } from "../agents/agent-input.js";
 import { record, revision } from "../charts/contracts.js";
@@ -56,6 +57,13 @@ export const deleteChartLayout = createServerFn({ method: "POST" })
       await context.runtime.agents.owned(user.id, data.id);
       await context.runtime.agents.charts.delete(data.id, data.layoutId, data.revision);
     });
+  });
+
+export const getChartFills = createServerFn({ method: "GET" })
+  .validator((data: unknown) => ({ id: field(data, "id"), coin: field(data, "coin"), ...chartFillRange(record(data)) }))
+  .handler(async ({ context, data }) => {
+    const user = await agentUser(context.runtime, getRequestHeaders());
+    return agentOperation(() => context.runtime.hyperliquid.chartFills(user.id, data.id, data.coin, data));
   });
 
 export const getChartHistory = createServerFn({ method: "GET" })

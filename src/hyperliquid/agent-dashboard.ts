@@ -7,6 +7,10 @@ export interface DashboardPosition {
 }
 export interface DashboardOrder {
   id: number; coin: string; side: string; size: string; price: string; type: string;
+  /** Trigger orders must be plotted at the trigger, not their execution limit. */
+  triggerPrice?: string;
+  positionTpsl?: true;
+  children?: DashboardOrder[];
 }
 export interface BalancePoint { time: number; balance: string }
 export interface BalanceHistory {
@@ -43,7 +47,11 @@ export function dashboardSpot(state: SpotClearinghouseStateResponse) {
   return { spotUsdc: usdc?.total ?? "0", spotUsdcHold: usdc ? usdc.hold ?? null : "0" };
 }
 export function dashboardOrders(orders: FrontendOpenOrdersResponse) {
-  return { orders: orders.map((order) => ({ id: order.oid, coin: order.coin, side: order.side === "B" ? "Buy" : "Sell", size: order.sz, price: order.limitPx, type: order.orderType })) };
+  const convert = (order: FrontendOpenOrdersResponse[number]): DashboardOrder => ({ id: order.oid, coin: order.coin, side: order.side === "B" ? "Buy" : "Sell", size: order.sz, price: order.limitPx, type: order.orderType,
+    ...(order.isTrigger ? { triggerPrice: order.triggerPx } : {}), ...(order.isPositionTpsl ? { positionTpsl: true as const } : {}),
+    ...(order.children?.length ? { children: order.children.map(convert) } : {}),
+  });
+  return { orders: orders.map(convert) };
 }
 
 /** Read-only main-DEX snapshots. No signer, persistence, or trading authority. */

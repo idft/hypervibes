@@ -6,6 +6,7 @@ import type { SharedDatabase } from "../db/shared-database.js";
 import type { FastifyBaseLogger } from "fastify";
 import { HyperliquidError } from "./errors.js";
 import { amount } from "./journal-decimal.js";
+import { chartFillRange, type ChartFillRange, type ChartFillsPage } from "../charts/trading-contracts.js";
 import type { BalanceHistory, BalancePoint } from "./agent-dashboard.js";
 import { buildTrades, fillEvent, fundingEvent, ledgerEvent, wsFundingEvent, type JournalEvent, type JournalStream, type JournalTrade } from "./journal-model.js";
 
@@ -438,6 +439,31 @@ export class JournalService {
       return result;
     });
   }
+  /** Raw fills, not reconstructed trade segments (a position flip is one fill).
+   * Reads ingested journal evidence only; never initiates exchange requests. */
+  async chartFills(account: string, coin: string, range: ChartFillRange): Promise<ChartFillsPage> {
+    const { from, to, cursor } = chartFillRange({ ...range });
+    account = account.toLowerCase();
+    return this.db.transaction(async (tx) => {
+      const rows = await tx.all<{ id: string; time: number; side: string; size: string; price: string }>(`SELECT id,time,
+        json_extract(data,'$.fill.side') AS side, json_extract(data,'$.fill.size') AS size,
+        json_extract(data,'$.fill.price') AS price FROM hv_journal_entries
+        WHERE account=? AND kind='fill' AND time>=? AND time<? AND json_extract(data,'$.symbol')=?
+          AND json_extract(data,'$.fill.side') IN ('B','A','buy','sell')
+          AND (? IS NULL OR time<? OR (time=? AND id<?))
+        ORDER BY time DESC,id DESC LIMIT 501`, account, from, to, coin, cursor?.time ?? null, cursor?.time ?? null, cursor?.time ?? null, cursor?.id ?? null);
+      const state = await tx.get<{ history_limited: number }>("SELECT history_limited FROM hv_journal_accounts WHERE account=?", account);
+      const sync = await tx.get<{ updatedAt: number | null; error: string | null }>("SELECT updated_at AS updatedAt,error FROM hv_journal_sync WHERE account=? AND stream='fill'", account);
+      const page = rows.slice(0, 500), last = page.at(-1);
+      return {
+        fills: page.map((row) => ({ ...row, side: row.side === "B" || row.side === "buy" ? "Buy" as const : "Sell" as const })),
+        nextCursor: rows.length > 500 && last ? { time: last.time, id: last.id } : null,
+        historyLimited: state?.history_limited === 1,
+        sync: sync ?? null,
+      };
+    });
+  }
+
   async notes(account: string, target: string) {
     account = account.toLowerCase();
     const found = await this.db.get("SELECT id FROM hv_journal_entries WHERE account=? AND id=?", account, target);

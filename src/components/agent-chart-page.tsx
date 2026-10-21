@@ -10,6 +10,7 @@ import { ChartDrawingEditor } from "./chart-drawing-editor.js";
 import { ChartLayoutSettings, type LayoutAction } from "./chart-layout-settings.js";
 import { ConfigDialog, configInput } from "./config-dialog.js";
 import { SingleInstrumentPicker } from "./instrument-picker.js";
+import { defaultChartOverlays, type ChartOverlayVisibility } from "../charts/trading-contracts.js";
 
 const control = "cursor-pointer rounded-lg border border-zinc-700 text-xs text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40";
 const button = `${control} px-2.5 py-1.5`;
@@ -23,6 +24,7 @@ const iconPaths = {
   tools: "m4 20 4-1L20 7l-4-4L4 15Zm10-15 4 4M4 15l4 4M14 16l5 5 3-3-5-5",
   lock: "M6 10h12v11H6ZM8 10V6a4 4 0 0 1 8 0v4m-4 5v2",
   unlock: "M6 10h12v11H6ZM8 10V6a4 4 0 0 1 8 0m-4 9v2",
+  account: "M3 6h18M3 12h18M3 18h18M7 3v6m10 0v6m-7 0v6",
   chat: "M3 4h18v16H3ZM15 4v16m3-10 2 2-2 2",
   chatHidden: "M3 4h18v16H3ZM15 4v16m-4-10-2 2 2 2",
 } as const;
@@ -36,6 +38,16 @@ export function AgentChartPage({ id, instruments, layouts: initialLayouts, initi
   const [chatOpen, setChatOpen] = useState(true), [chatWidth, setChatWidth] = useState(360);
   const [editing, setEditing] = useState(false), [keepDrawing, setKeepDrawing] = useState(false), [toolsOpen, setToolsOpen] = useState(false);
   const [nameDialog, setNameDialog] = useState<"new" | "duplicate" | "rename" | null>(null), [notesOpen, setNotesOpen] = useState(false);
+  const [overlayDialog, setOverlayDialog] = useState(false), [overlays, setOverlays] = useState(defaultChartOverlays);
+  const overlayPreferences = `hypervibes:chart-overlays:v1:${id}`;
+  useEffect(() => {
+    let value = defaultChartOverlays;
+    try {
+      const saved: unknown = JSON.parse(localStorage.getItem(overlayPreferences) ?? "null");
+      if (saved && typeof saved === "object" && "trades" in saved && typeof saved.trades === "boolean" && "position" in saved && typeof saved.position === "boolean" && "orders" in saved && typeof saved.orders === "boolean") value = { trades: saved.trades, position: saved.position, orders: saved.orders };
+    } catch { /* Optional local preference; never part of layout revisions. */ }
+    setOverlays(value);
+  }, [overlayPreferences]);
   const chart = useRef<MarketChartHandle>(null), workspace = useRef<HTMLElement>(null), canvas = useRef<HTMLDivElement>(null);
   const [chatLimit, setChatLimit] = useState(maxChatWidth);
   const [chartStatusHost, setChartStatusHost] = useState<HTMLDivElement | null>(null);
@@ -104,6 +116,7 @@ export function AgentChartPage({ id, instruments, layouts: initialLayouts, initi
       <select aria-label="Timeframe" value={layout?.document.interval ?? ""} disabled={pending || !layout} onChange={(e) => { if (isChartInterval(e.target.value)) { setTool("select"); void change("edit", { label: "Change timeframe", settings: { interval: e.target.value } }); } }} className={`${button} h-8 w-20 shrink-0 bg-zinc-950`}>
         {!layout && <option value="">Timeframe</option>}{chartIntervals.map((interval) => <option key={interval}>{interval}</option>)}
       </select>
+      <button type="button" className={iconButton} aria-label="Account overlays" title="Account overlays · Trades, position and orders (read-only)" disabled={!layout} onClick={() => setOverlayDialog(true)}><ChartIcon name="account" /></button>
       <button type="button" className={iconButton} aria-label="Magnet" aria-pressed={layout?.document.magnet ?? false} disabled={pending || !layout} title={`${layout?.document.magnet ? "Magnet on" : "Magnet off"} · Snap to candle OHLC · Ctrl/Cmd temporarily inverts snapping`} onClick={() => { if (layout) void change("edit", { label: "Toggle magnet", settings: { magnet: !layout.document.magnet } }); }}><ChartIcon name="magnet" /></button>
       <button type="button" className={iconButton} aria-label={layout?.document.hideDrawings ? "Show drawings" : "Hide drawings"} aria-pressed={Boolean(layout && !layout.document.hideDrawings)} disabled={pending || !layout} title={layout?.document.hideDrawings ? "Show drawings" : "Hide drawings"} onClick={() => { if (layout) void change("edit", { label: "Toggle drawings", settings: { hideDrawings: !layout.document.hideDrawings } }); }}><ChartIcon name={layout?.document.hideDrawings ? "hidden" : "eye"} /></button>
       <button type="button" className={iconButton} aria-label={toolsOpen ? "Hide annotation tools" : "Show annotation tools"} aria-pressed={toolsOpen} aria-expanded={toolsOpen} disabled={!layout} title={toolsOpen ? "Hide annotation tools" : "Show annotation tools"} onClick={() => { setToolsOpen(!toolsOpen); setTool("select"); }}><ChartIcon name="tools" /></button>
@@ -124,7 +137,7 @@ export function AgentChartPage({ id, instruments, layouts: initialLayouts, initi
           <button type="button" className={`${control} py-1.5`} aria-label="Keep drawing" aria-pressed={keepDrawing} title="Keep drawing after placing an object" onClick={() => setKeepDrawing(!keepDrawing)}>∞</button>
         </div>}
         {layout ? <div ref={canvas} tabIndex={0} aria-label="Chart canvas" onPointerDown={(e) => { if (!(e.target instanceof Element) || !e.target.closest("button,input,textarea,select")) e.currentTarget.focus(); }} className="flex min-w-0 flex-1 flex-col outline-none focus-visible:ring-1 focus-visible:ring-violet-500">
-          <MarketChart key={`${layout.id}/${layout.document.coin}/${layout.document.interval}`} ref={chart} id={id} layout={layout} tool={tool} selected={selected} disabled={pending} statusHost={chartStatusHost} onSelect={(drawingId) => { setSelected(drawingId); canvas.current?.focus({ preventScroll: true }); }} onSave={save} onDrawn={() => { if (!keepDrawing) setTool("select"); }} onEdit={() => setEditing(true)} />
+          <MarketChart key={`${layout.id}/${layout.document.coin}/${layout.document.interval}`} ref={chart} id={id} layout={layout} tool={tool} selected={selected} disabled={pending} statusHost={chartStatusHost} overlayVisibility={overlays} onSelect={(drawingId) => { setSelected(drawingId); canvas.current?.focus({ preventScroll: true }); }} onSave={save} onDrawn={() => { if (!keepDrawing) setTool("select"); }} onEdit={() => setEditing(true)} />
           {(toolsOpen || selectedObject) && <div className="flex min-h-8 flex-wrap items-center gap-2 py-1 text-xs text-zinc-500">
             {toolsOpen && <span>{toolLabels[tool]}{tool !== "select" ? " · Click anchors · Esc cancels" : " · Select an object or draw from the toolbar"}</span>}
             {selectedObject && <>
@@ -156,12 +169,23 @@ export function AgentChartPage({ id, instruments, layouts: initialLayouts, initi
       </aside>
     </div>
     {editing && selectedObject && layout && <ChartDrawingEditor key={`${layout.id}/${layout.revision}/${selected}`} value={selectedObject} pending={pending} saveError={error} onCancel={() => setEditing(false)} onApply={async (drawing) => (await save(drawing)) !== undefined} />}
+    {overlayDialog && <ChartOverlayDialog value={overlays} onCancel={() => setOverlayDialog(false)} onApply={(value) => {
+      setOverlays(value); setOverlayDialog(false);
+      try { localStorage.setItem(overlayPreferences, JSON.stringify(value)); } catch { /* Optional preference. */ }
+    }} />}
     {notesOpen && layout && <LayoutNotesDialog key={layout.id} notes={layout.document.notes} pending={pending} error={error} onCancel={() => setNotesOpen(false)} onApply={async (notes) => { if (await change("edit", { label: "Update layout notes", settings: { notes } })) setNotesOpen(false); }} />}
     {nameDialog && <LayoutNameDialog key={nameDialog} title={nameDialog === "new" ? "New layout" : nameDialog === "duplicate" ? "Duplicate layout" : "Rename layout"} initial={nameDialog === "new" ? "My chart" : `${layout?.document.name ?? "Chart"}${nameDialog === "duplicate" ? " copy" : ""}`} pending={pending} error={error} onCancel={() => setNameDialog(null)} onApply={async (name, operationId) => {
       const result = nameDialog === "rename" ? await change("edit", { label: "Rename layout", settings: { name } }) : await create(name, nameDialog === "duplicate", operationId);
       if (result) { setNameDialog(null); setSelected(""); }
     }} />}
   </section>;
+}
+function ChartOverlayDialog({ value, onApply, onCancel }: { value: ChartOverlayVisibility; onApply: (value: ChartOverlayVisibility) => void; onCancel: () => void }) {
+  const [draft, setDraft] = useState(value);
+  return <ConfigDialog title="Account overlays" onCancel={onCancel} onApply={() => onApply(draft)}>
+    <div className="space-y-3 text-sm">{([["trades", "Historical buys & sells"], ["position", "Current position"], ["orders", "Open orders & TP/SL triggers"]] as const).map(([key, label]) => <label key={key} className="flex cursor-pointer items-center gap-3"><input type="checkbox" checked={draft[key]} onChange={(event) => setDraft({ ...draft, [key]: event.target.checked })} className="cursor-pointer accent-violet-500" />{label}</label>)}</div>
+    <p className="mt-4 text-xs text-zinc-500">Read-only data from this Agent’s linked Hyperliquid account, including manual trades. History follows the journal. Visibility is saved on this device, independently of layouts and annotations.</p>
+  </ConfigDialog>;
 }
 function LayoutNotesDialog({ notes, pending, error, onApply, onCancel }: { notes: string; pending: boolean; error: string; onApply: (notes: string) => Promise<void>; onCancel: () => void }) {
   const [value, setValue] = useState(notes);
