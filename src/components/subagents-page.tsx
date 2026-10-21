@@ -1,9 +1,10 @@
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
-import { cacheSubagent, invalidateSubagentLists, subagentsQueryOptions } from "../web/subagent-queries.js";
+import { invalidateSubagentLists, subagentsQueryOptions } from "../web/subagent-queries.js";
+import { subagentMutations } from "../web/subagent-mutations.js";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
-import { importDefaultSubagents, saveSubagentSection } from "../web/subagents.js";
+import { importDefaultSubagents } from "../web/subagents.js";
 import { SubagentEnabledToggle } from "./subagent-enabled-toggle.js";
 import type { SubagentRow } from "../db/subagent-schema.js";
 import { ProviderLogo } from "./provider-logo.js";
@@ -27,15 +28,12 @@ function SubagentConnections({ definition, definitions }: { definition: Subagent
 function WorkerEnabledToggle({ agentId, definition }: { agentId: string; definition: SubagentRow }) {
   const client = useQueryClient();
   const mutation = useMutation({
-    mutationFn: () => saveSubagentSection({ data: { agentId, id: definition.id, section: "enabled", settings: { enabled: !definition.enabled } } }),
-    onSuccess: async (row) => {
-      toast.success(row.enabled ? "Sub-agent enabled" : "Sub-agent paused");
-      await cacheSubagent(client, agentId, row);
-    },
+    mutationFn: subagentMutations(client, agentId).saveSection<"enabled">,
+    onSuccess: (row) => { toast.success(row.enabled ? "Sub-agent enabled" : "Sub-agent paused"); },
   });
   const error = mutation.error?.message;
   return <div className="shrink-0 text-right">
-    <SubagentEnabledToggle enabled={definition.enabled} disabled={mutation.isPending} onClick={() => mutation.mutate()} />
+    <SubagentEnabledToggle enabled={definition.enabled} disabled={mutation.isPending} onClick={() => mutation.mutate({ id: definition.id, section: "enabled", settings: { enabled: !definition.enabled } })} />
     {error && <p role="alert" className="mt-2 max-w-64 text-sm text-red-300">{error}</p>}
   </div>;
 }

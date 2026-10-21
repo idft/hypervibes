@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { type QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createTestQueryClient } from "../test/query.js";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,7 +13,6 @@ vi.mock("../web/wallet-login.js", async (original) => ({
 }));
 import { LoginPage } from "./login-page.js";
 
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe("login page", () => {
   let container: HTMLDivElement;
@@ -20,7 +20,7 @@ describe("login page", () => {
   let client: QueryClient;
   beforeEach(async () => {
     vi.resetAllMocks();
-    client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+    client = createTestQueryClient();
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
@@ -29,7 +29,6 @@ describe("login page", () => {
   afterEach(async () => {
     await act(async () => root.unmount());
     container.remove();
-    client.clear();
     vi.restoreAllMocks();
   });
 

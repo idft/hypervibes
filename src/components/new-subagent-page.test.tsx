@@ -1,20 +1,17 @@
 // @vitest-environment jsdom
-import { act, type ComponentProps } from "react";
-import { QueryClient, QueryClientProvider, notifyManager } from "@tanstack/react-query";
+import { act } from "react";
+import type { QueryClient } from "@tanstack/react-query";
+import { createTestQueryClient, withTestQueryClient } from "../test/query.js";
 import { createRoot, type Root } from "react-dom/client";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { subagentTemplates, templateDraft } from "../agents/subagent-templates.js";
 const mocks = vi.hoisted(() => ({ navigate: vi.fn(), saveSubagent: vi.fn(), success: vi.fn() }));
 vi.mock("../web/subagents.js", () => ({ saveSubagent: mocks.saveSubagent }));
 vi.mock("sonner", () => ({ toast: { success: mocks.success } }));
 vi.mock("@tanstack/react-router", () => ({ useRouter: () => ({ navigate: mocks.navigate }), Link: ({ children }: { children: React.ReactNode }) => <a>{children}</a> }));
 import { NewSubagentPage as NewSubagentPageComponent } from "./new-subagent-page.js";
-notifyManager.setScheduler((callback) => { queueMicrotask(callback); return () => {}; });
 let client: QueryClient;
-function NewSubagentPage(props: ComponentProps<typeof NewSubagentPageComponent>) {
-  return <QueryClientProvider client={client}><NewSubagentPageComponent {...props} /></QueryClientProvider>;
-}
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+const NewSubagentPage = withTestQueryClient(NewSubagentPageComponent, () => client);
 const model = { provider: "parent-provider", modelId: "parent-model", thinkingLevel: "high" };
 const choices = [model, { provider: "other", modelId: "other-model", thinkingLevel: "" }].map((entry) => ({ ...entry, name: entry.modelId, providerName: entry.provider, thinkingLevels: ["high"], contextWindow: 200_000, inputCost: 3, outputCost: 15, reasoning: true }));
 describe("new sub-agent", () => {
@@ -28,27 +25,14 @@ describe("new sub-agent", () => {
   });
   const click = (text: string) => act(async () => { [...document.querySelectorAll<HTMLButtonElement>("button")].find((element) => element.textContent === text || element.getAttribute("aria-label") === text)!.click(); });
   const select = (id: string) => click(subagentTemplates.find((entry) => entry.id === id)?.name ?? "Custom");
-  const originalDialogMethods = Object.fromEntries(["showModal", "close"].map((key) => [key, Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, key)]));
-  beforeAll(() => {
-    Object.defineProperties(HTMLDialogElement.prototype, {
-      showModal: { configurable: true, value(this: HTMLDialogElement) { this.open = true; } },
-      close: { configurable: true, value(this: HTMLDialogElement) { this.open = false; } },
-    });
-  });
-  afterAll(() => {
-    for (const [key, descriptor] of Object.entries(originalDialogMethods)) {
-      if (descriptor) Object.defineProperty(HTMLDialogElement.prototype, key, descriptor);
-      else Reflect.deleteProperty(HTMLDialogElement.prototype, key);
-    }
-  });
   beforeEach(async () => {
     vi.resetAllMocks();
-    client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+    client = createTestQueryClient();
     mocks.saveSubagent.mockResolvedValue({ id: "worker:new" });
     container = document.createElement("div"); document.body.append(container); root = createRoot(container);
     await act(async () => root.render(<NewSubagentPage agentId="agent-1" model={model} choices={choices} />));
   });
-  afterEach(async () => { await act(async () => root.unmount()); container.remove(); client.clear(); });
+  afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
   it("lists templates on the left and fills editable identity fields on selection, clearing them for Custom", async () => {
     expect([...container.querySelectorAll('[aria-label="Sub-agent templates"] button')].map((button) => button.textContent)).toEqual(["Custom", ...subagentTemplates.map((template) => template.name)]);
     expect(container.querySelectorAll("input, textarea, select")).toHaveLength(2);

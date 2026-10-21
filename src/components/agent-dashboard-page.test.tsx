@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { act, type ComponentProps } from "react";
-import { QueryClient, QueryClientProvider, notifyManager } from "@tanstack/react-query";
+import { act } from "react";
+import type { QueryClient } from "@tanstack/react-query";
+import { createTestQueryClient, withTestQueryClient } from "../test/query.js";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentDashboard } from "../hyperliquid/agent-dashboard.js";
@@ -9,12 +10,8 @@ vi.mock("../web/agents.js", () => ({ sendAgentMessage: mocks.sendAgentMessage })
 vi.mock("../web/subagents.js", () => ({ runSubagent: mocks.runSubagent, saveSubagentSection: mocks.saveSubagentSection }));
 vi.mock("@tanstack/react-router", () => ({ useRouter: () => ({ navigate: mocks.navigate, invalidate: mocks.invalidate }) }));
 import { AgentDashboardPage as AgentDashboardPageComponent } from "./agent-dashboard-page.js";
-notifyManager.setScheduler((callback) => { queueMicrotask(callback); return () => {}; });
 let queryClient: QueryClient;
-function AgentDashboardPage(props: ComponentProps<typeof AgentDashboardPageComponent>) {
-  return <QueryClientProvider client={queryClient}><AgentDashboardPageComponent {...props} /></QueryClientProvider>;
-}
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+const AgentDashboardPage = withTestQueryClient(AgentDashboardPageComponent, () => queryClient);
 const initial: AgentDashboard = { address: `0x${"12".repeat(20)}`, fetchedAt: 0, perpEquity: "12.5", spotUsdc: "3", positions: [], orders: [], errors: [] };
 const source = () => FakeEventSource.instances.find((source) => source.url.endsWith("/dashboard/events"))!;
 const workerSource = () => FakeEventSource.instances.find((source) => source.url.endsWith("/sub-agents/events"))!;
@@ -30,13 +27,13 @@ describe("Agent dashboard", () => {
   let root: Root;
   let container: HTMLDivElement;
   beforeEach(async () => {
-    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+    queryClient = createTestQueryClient();
     FakeEventSource.instances = [];
     vi.stubGlobal("EventSource", FakeEventSource);
     container = document.createElement("div"); document.body.append(container); root = createRoot(container);
     await act(async () => root.render(<AgentDashboardPage id="fixture" initial={initial} />));
   });
-  afterEach(async () => { await act(async () => root.unmount()); container.remove(); queryClient.clear(); vi.unstubAllGlobals(); });
+  afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
   it("sends dashboard chat to the orchestrator, prevents duplicates and navigates only after acceptance", async () => {
     const section = container.querySelector('[aria-label="Chat"]')!;
     expect(section.previousElementSibling?.getAttribute("aria-label")).toBe("Sub-agents");
@@ -92,39 +89,27 @@ describe("Agent dashboard", () => {
     expect(section.textContent).toContain("Paused");
   });
   it("opens the manual assignment dialog from an icon-only button and retries with the same request ID", async () => {
-    const methods = Object.fromEntries(["showModal", "close"].map((key) => [key, Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, key)]));
-    Object.defineProperties(HTMLDialogElement.prototype, {
-      showModal: { configurable: true, value(this: HTMLDialogElement) { this.open = true; } },
-      close: { configurable: true, value(this: HTMLDialogElement) { this.open = false; } },
+    await act(async () => root.render(<AgentDashboardPage id="fixture" initial={initial} subagents={[{ id: "worker", name: "Research", enabled: false, schedule: "", nextRunAt: null, runs: [] }]} />));
+    const button = container.querySelector<HTMLButtonElement>('[aria-label="Run now: Research"]')!;
+    expect(button.textContent).toBe("");
+    expect(button.querySelector("svg")).not.toBeNull();
+    await act(async () => button.click());
+    expect(document.querySelector("dialog")?.textContent).toContain("Run manually");
+    const textarea = document.querySelector("dialog textarea")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "Review BTC");
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    try {
-      await act(async () => root.render(<AgentDashboardPage id="fixture" initial={initial} subagents={[{ id: "worker", name: "Research", enabled: false, schedule: "", nextRunAt: null, runs: [] }]} />));
-      const button = container.querySelector<HTMLButtonElement>('[aria-label="Run now: Research"]')!;
-      expect(button.textContent).toBe("");
-      expect(button.querySelector("svg")).not.toBeNull();
-      await act(async () => button.click());
-      expect(document.querySelector("dialog")?.textContent).toContain("Run manually");
-      const textarea = document.querySelector("dialog textarea")!;
-      await act(async () => {
-        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "Review BTC");
-        textarea.dispatchEvent(new Event("input", { bubbles: true }));
-      });
-      const submit = async () => act(async () => { document.querySelector("dialog form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
-      mocks.runSubagent.mockRejectedValueOnce(new Error("Network failure"));
-      await submit();
-      expect(document.querySelector("dialog [role=alert]")?.textContent).toContain("Retry with the same task");
-      mocks.runSubagent.mockResolvedValueOnce({ id: "run" });
-      await submit();
-      expect(mocks.runSubagent.mock.calls[0]![0].data).toMatchObject({ agentId: "fixture", id: "worker", task: "Review BTC" });
-      expect(mocks.runSubagent.mock.calls[0]![0].data.requestId).toBe(mocks.runSubagent.mock.calls[1]![0].data.requestId);
-      expect(mocks.navigate).toHaveBeenCalledWith({ to: "/agents/$agentId/sub-agents/$subagentId/runs/$runId", params: { agentId: "fixture", subagentId: "worker", runId: "run" } });
-      expect(document.querySelector("dialog")).toBeNull();
-    } finally {
-      for (const [key, descriptor] of Object.entries(methods)) {
-        if (descriptor) Object.defineProperty(HTMLDialogElement.prototype, key, descriptor);
-        else Reflect.deleteProperty(HTMLDialogElement.prototype, key);
-      }
-    }
+    const submit = async () => act(async () => { document.querySelector("dialog form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    mocks.runSubagent.mockRejectedValueOnce(new Error("Network failure"));
+    await submit();
+    expect(document.querySelector("dialog [role=alert]")?.textContent).toContain("Retry with the same task");
+    mocks.runSubagent.mockResolvedValueOnce({ id: "run" });
+    await submit();
+    expect(mocks.runSubagent.mock.calls[0]![0].data).toMatchObject({ agentId: "fixture", id: "worker", task: "Review BTC" });
+    expect(mocks.runSubagent.mock.calls[0]![0].data.requestId).toBe(mocks.runSubagent.mock.calls[1]![0].data.requestId);
+    expect(mocks.navigate).toHaveBeenCalledWith({ to: "/agents/$agentId/sub-agents/$subagentId/runs/$runId", params: { agentId: "fixture", subagentId: "worker", runId: "run" } });
+    expect(document.querySelector("dialog")).toBeNull();
   });
   it("toggles enabled status and shows a live countdown only for enabled schedules", async () => {
     vi.useFakeTimers();

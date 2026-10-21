@@ -1,14 +1,14 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { type QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createTestQueryClient } from "../test/query.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultChartOverlays, type ChartFillsPage } from "../charts/trading-contracts.js";
 
 const mocks = vi.hoisted(() => ({ fills: vi.fn() }));
 vi.mock("../web/charts.js", () => ({ getChartFills: mocks.fills }));
 import { useChartAccount } from "./use-chart-account.js";
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 class Source extends EventTarget {
   static instances: Source[] = [];
   close = vi.fn(); onerror: (() => void) | null = null;
@@ -26,10 +26,10 @@ describe("chart account data", () => {
   beforeEach(() => {
     vi.useFakeTimers(); Source.instances = []; vi.stubGlobal("EventSource", Source);
     mocks.fills.mockReset().mockResolvedValue(page());
-    client = new QueryClient({ defaultOptions: { queries: { retryDelay: 0 } } });
+    client = createTestQueryClient({ retryDelay: 0 });
     host = document.createElement("div"); document.body.append(host); root = createRoot(host);
   });
-  afterEach(async () => { await act(async () => root.unmount()); client.clear(); host.remove(); vi.unstubAllGlobals(); vi.useRealTimers(); });
+  afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); vi.useRealTimers(); });
   it("refreshes journal markers without exchange calls and retains a stale snapshot after query failure", async () => {
     await render();
     expect(current.fills[0]?.price).toBe("100");

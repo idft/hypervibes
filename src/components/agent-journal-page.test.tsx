@@ -1,19 +1,15 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { QueryClient, QueryClientProvider, notifyManager } from "@tanstack/react-query";
+import { type QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createTestQueryClient } from "../test/query.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JournalPage } from "../hyperliquid/journal-service.js";
-
-// Query batches store notifications onto a setTimeout(0) macrotask by default;
-// flush them as microtasks so awaited act() callbacks observe settled queries.
-notifyManager.setScheduler((callback) => { queueMicrotask(callback); return () => {}; });
 
 const mocks = vi.hoisted(() => ({ getAgentJournal: vi.fn(), getJournalAudit: vi.fn(), getJournalNotes: vi.fn(), addJournalNote: vi.fn() }));
 vi.mock("../web/journal.js", () => mocks);
 import { AgentJournalPage } from "./agent-journal-page.js";
 
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const initial: JournalPage = {
   linked: true, view: "activity", page: 1, pages: 2, total: 26, pending: false, historyLimited: false, trades: [],
   activity: [{ id: "deposit", kind: "ledger", time: 1000, symbol: "USDC", type: "deposit", delta: "123.4567", fee: null, pnl: null, fill: null, balance: "123.4567", noteCount: 0 }],
@@ -25,17 +21,16 @@ describe("Agent journal UI", () => {
   const navigate = vi.fn();
   beforeEach(() => {
     vi.resetAllMocks();
-    Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function (this: HTMLDialogElement) { this.open = true; } });
     container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+    queryClient = createTestQueryClient({ refetchIntervalInBackground: false });
     mocks.getAgentJournal.mockResolvedValue(initial);
     mocks.getJournalAudit.mockResolvedValue({ items: [], truncated: false, coverage: "External/legacy fills remain unattributed" });
     mocks.getJournalNotes.mockResolvedValue([]);
     mocks.addJournalNote.mockResolvedValue(undefined);
   });
-  afterEach(async () => { await act(async () => root.unmount()); container.remove(); queryClient.clear(); vi.restoreAllMocks(); vi.useRealTimers(); });
+  afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.useRealTimers(); });
   /** The route loader seeds the cache server-side; tests mirror that. */
   const render = async (data = initial) => {
-    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, refetchIntervalInBackground: false } } });
     queryClient.setQueryData(["journal", "agent", data.view, data.page], data);
     await act(async () => root.render(<QueryClientProvider client={queryClient}><AgentJournalPage id="agent" view={data.view} page={data.page} onNavigate={navigate} /></QueryClientProvider>));
   };

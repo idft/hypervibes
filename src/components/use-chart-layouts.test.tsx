@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
-import { QueryClient, QueryClientProvider, notifyManager } from "@tanstack/react-query";
+import { type QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createTestQueryClient } from "../test/query.js";
 import { chartLayoutsQueryOptions } from "../web/chart-queries.js";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,8 +10,6 @@ import { useChartLayouts } from "./use-chart-layouts.js";
 
 const mocks = vi.hoisted(() => ({ create: vi.fn(), change: vi.fn(), remove: vi.fn(), list: vi.fn() }));
 vi.mock("../web/charts.js", () => ({ createChartLayout: mocks.create, changeChartLayout: mocks.change, deleteChartLayout: mocks.remove, getChartLayouts: mocks.list }));
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-notifyManager.setScheduler((callback) => { queueMicrotask(callback); return () => {}; });
 class LayoutSource extends EventTarget {
   static instances: LayoutSource[] = [];
   close = vi.fn();
@@ -28,12 +27,12 @@ describe("SSE chart layouts", () => {
   async function render() { if (!client.getQueryData(chartLayoutsQueryOptions("agent").queryKey)) client.setQueryData(chartLayoutsQueryOptions("agent").queryKey, initial); await act(async () => root!.render(<QueryClientProvider client={client}><Fixture /></QueryClientProvider>)); }
   async function push(layouts: ChartLayout[]) { await act(async () => source().emit("chart-layouts", layouts)); }
   beforeEach(() => {
-    vi.resetAllMocks(); client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } }); localStorage.clear(); LayoutSource.instances = []; vi.stubGlobal("EventSource", LayoutSource);
+    vi.resetAllMocks(); client = createTestQueryClient(); localStorage.clear(); LayoutSource.instances = []; vi.stubGlobal("EventSource", LayoutSource);
     initial = [fixture()]; container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   });
   afterEach(async () => {
     if (root) await act(async () => root!.unmount());
-    container.remove(); client.clear(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals();
+    container.remove(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals();
   });
 
   it("uses one persistent subscription, makes no polling requests, and applies reconnect snapshots", async () => {

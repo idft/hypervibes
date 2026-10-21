@@ -1,11 +1,12 @@
 import { useRouter } from "@tanstack/react-router";
 import { useRef, useState } from "react";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
-import { cacheSubagent, invalidateSubagentLists, subagentQueryOptions } from "../web/subagent-queries.js";
+import { cacheSubagent, subagentQueryOptions } from "../web/subagent-queries.js";
+import { subagentMutations } from "../web/subagent-mutations.js";
 import { toast } from "sonner";
 import type { ModelChoice } from "../providers/provider-service.js";
 import { defaultMainInstructions, type AssignmentSettings, type SubagentInput, type SubagentSections } from "../agents/subagent-input.js";
-import { archiveSubagent, runSubagent, saveSubagentAssignments, saveSubagentIdentity, saveSubagentSection, saveSubagentTools, stopSubagentRun, unarchiveSubagent } from "../web/subagents.js";
+import { archiveSubagent, saveSubagentAssignments, saveSubagentIdentity, saveSubagentTools, unarchiveSubagent } from "../web/subagents.js";
 import { ModelPicker, modelKey } from "./model-picker.js";
 import { ProviderLogo } from "./provider-logo.js";
 import { WorkerTriggerConfig } from "./worker-trigger-config.js";
@@ -21,6 +22,7 @@ const button = "cursor-pointer rounded-full bg-violet-600 px-4 py-2 text-sm text
 export function SubagentDetailPage({ agentId, subagentId, choices }: { agentId: string; subagentId: string; choices: ModelChoice[] }) {
   const router = useRouter();
   const client = useQueryClient();
+  const mutations = subagentMutations(client, agentId);
   const { data: initial, error: refreshError } = useSuspenseQuery(subagentQueryOptions(agentId, subagentId));
   const definition = initial.definition;
   const [form, setForm] = useState<SubagentInput>(initial.definition);
@@ -47,12 +49,11 @@ export function SubagentDetailPage({ agentId, subagentId, choices }: { agentId: 
   async function saveSection<K extends keyof SubagentSections>(section: K, settings: SubagentSections[K]) {
     if (definition.archived) throw new Error("Settings cannot be changed right now. Please retry.");
     await operate(async () => {
-      const row = await saveSubagentSection({ data: { agentId, id: definition.id, section, settings } });
+      const row = await mutations.saveSection({ id: definition.id, section, settings });
       const saved = section === "enabled" ? { enabled: row.enabled } : section === "instructions" ? { instructions: row.instructions }
         : section === "model" ? { provider: row.provider, modelId: row.modelId, thinkingLevel: row.thinkingLevel }
         : section === "triggers" ? { triggers: row.triggers } : { schedule: row.schedule, delaySeconds: row.delaySeconds, completion: row.completion };
       setForm((current) => ({ ...current, ...saved }));
-      await cacheSubagent(client, agentId, row);
       toast.success(section === "enabled" ? row.enabled ? "Sub-agent enabled" : "Sub-agent paused" : section === "instructions" ? "Instructions updated" : section === "model" ? "Model updated" : "Schedule updated");
     });
   }
@@ -96,9 +97,8 @@ export function SubagentDetailPage({ agentId, subagentId, choices }: { agentId: 
     if (definition.archived) throw new Error("This worker is unavailable for new assignments.");
     await operate(async () => {
       if (assignmentId.current?.task !== task) assignmentId.current = { task, id: crypto.randomUUID() };
-      const run = await runSubagent({ data: { agentId, id: definition.id, task, requestId: assignmentId.current.id } });
+      const run = await mutations.run({ id: definition.id, task, requestId: assignmentId.current.id });
       assignmentId.current = null; setRunOpen(false); setTask("");
-      await invalidateSubagentLists(client, agentId);
       toast.success("Assignment started");
       await router.navigate({ to: "/agents/$agentId/sub-agents/$subagentId/runs/$runId", params: { agentId, subagentId: definition.id, runId: run.id } });
     });
@@ -108,9 +108,8 @@ export function SubagentDetailPage({ agentId, subagentId, choices }: { agentId: 
     try {
       await operate(async () => {
         if (action === "stop") {
-          await stopSubagentRun({ data: { agentId, runId } });
+          await mutations.stop(runId);
           toast.success("Assignment stopped", { description: "Existing exchange orders were not cancelled." });
-          await invalidateSubagentLists(client, agentId);
         } else if (action === "unarchive") {
           const row = await unarchiveSubagent({ data: { agentId, id: definition.id } });
           setForm(row);

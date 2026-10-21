@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { QueryClient, QueryClientProvider, notifyManager, useSuspenseQuery } from "@tanstack/react-query";
+import { type QueryClient, QueryClientProvider, useSuspenseQuery } from "@tanstack/react-query";
+import { createTestQueryClient } from "../test/query.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AccountView } from "../hyperliquid/service.js";
 const mocks = vi.hoisted(() => ({ account: vi.fn(), setup: vi.fn(), approve: vi.fn(), fee: vi.fn(), cancel: vi.fn(), sign: vi.fn() }));
@@ -12,8 +13,6 @@ vi.mock("../web/wallet-action.js", () => ({
 }));
 import { AccountPage } from "./account-page.js";
 import { accountQueryOptions } from "../web/account-queries.js";
-notifyManager.setScheduler((callback) => { queueMicrotask(callback); return () => {}; });
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const initial: AccountView = {
   walletAddress: `0x${"a".repeat(40)}`, accountMode: "unified", accountModeMessage: null, encryptionConfigured: true,
   apiWallet: null, builderFee: { approved: true, feeBps: 3 }, accounts: [], totalBalance: "0", lookupError: null,
@@ -28,7 +27,7 @@ describe("account query mutations", () => {
   let root: Root, container: HTMLDivElement, client: QueryClient;
   beforeEach(async () => {
     vi.resetAllMocks();
-    client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } } });
+    client = createTestQueryClient({ staleTime: Infinity });
     client.setQueryData(accountQueryOptions().queryKey, initial);
     client.setQueryData(["setup"], {}); client.setQueryData(["trading-accounts"], {});
     mocks.account.mockResolvedValue(initial); mocks.setup.mockResolvedValue("0xsigner");
@@ -37,7 +36,7 @@ describe("account query mutations", () => {
     container = document.createElement("div"); document.body.append(container); root = createRoot(container);
     await act(async () => root.render(<QueryClientProvider client={client}><Page /></QueryClientProvider>));
   });
-  afterEach(async () => { await act(async () => root.unmount()); container.remove(); client.clear(); });
+  afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
   const button = (text: string) => [...container.querySelectorAll("button")].find((entry) => entry.textContent === text)!;
   it("reuses the stored signer after a rejected wallet signature and refreshes onboarding", async () => {
     mocks.account.mockResolvedValue({ ...initial, apiWallet: { address: "0xsigner", state: "approval-required", expiresAt: null, showExpired: false } });

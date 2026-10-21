@@ -5,7 +5,6 @@ import { renderToStaticMarkup, renderToString } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { BalanceSparkline } from "./balance-sparkline.js";
 
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const render = (balances: string[]) => renderToStaticMarkup(<BalanceSparkline label="24h" points={balances.map((balance, time) => ({ time, balance }))} />);
 describe("BalanceSparkline", () => {

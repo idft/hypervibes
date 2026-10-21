@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { act, type ComponentProps } from "react";
-import { QueryClient, QueryClientProvider, notifyManager } from "@tanstack/react-query";
+import { type QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createTestQueryClient } from "../test/query.js";
 import type { SubagentDetail } from "../web/subagent-queries.js";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRow } from "../db/subagent-schema.js";
 import { hyperliquidToolNames, mainToolNames, taToolNames } from "../agents/subagent-input.js";
 const mocks = vi.hoisted(() => ({ invalidate: vi.fn(), navigate: vi.fn(), success: vi.fn(), saveSubagent: vi.fn(), saveSubagentSection: vi.fn(), saveSubagentAssignments: vi.fn(), saveSubagentIdentity: vi.fn(), saveSubagentTools: vi.fn(), getSubagent: vi.fn(), runSubagent: vi.fn(), archiveSubagent: vi.fn(), unarchiveSubagent: vi.fn(), stopSubagentRun: vi.fn(), listSubagents: vi.fn() }));
@@ -13,18 +14,16 @@ vi.mock("sonner", () => ({ toast: { success: mocks.success } }));
 vi.mock("@tanstack/react-router", () => ({ useRouter: () => ({ invalidate: mocks.invalidate, navigate: mocks.navigate }), Link: ({ to, params, children, ...props }: { to: string; params: Record<string, string>; children: React.ReactNode }) => <a {...props} href={to.replace(/\$(\w+)/g, (_match, key: string) => encodeURIComponent(params[key]!))}>{children}</a> }));
 import { SubagentDetailPage as SubagentDetailPageComponent } from "./subagent-detail-page.js";
 import { SubagentsPage as SubagentsPageComponent } from "./subagents-page.js";
-notifyManager.setScheduler((callback) => { queueMicrotask(callback); return () => {}; });
 let queryClient: QueryClient;
-function SubagentDetailPage({ initial, ...props }: Omit<ComponentProps<typeof SubagentDetailPageComponent>, "subagentId"> & { initial: Pick<SubagentDetail, "definition" | "runs" | "schedulerError"> & Omit<Partial<SubagentDetail>, "workers"> & { workers?: { id: string; name: string; archived?: boolean; tools?: string[] }[] } }) {
+function detailPage({ initial, ...props }: Omit<ComponentProps<typeof SubagentDetailPageComponent>, "subagentId"> & { key?: string; initial: Pick<SubagentDetail, "definition" | "runs" | "schedulerError"> & Omit<Partial<SubagentDetail>, "workers"> & { workers?: { id: string; name: string; archived?: boolean; tools?: string[] }[] } }) {
   queryClient.setQueryData(["subagents", props.agentId, "detail", initial.definition.id], initial);
   return <QueryClientProvider client={queryClient}><SubagentDetailPageComponent {...props} subagentId={initial.definition.id} /></QueryClientProvider>;
 }
-function SubagentsPage({ agentId, definitions }: { agentId: string; definitions: SubagentRow[] }) {
+function subagentsPage({ agentId, definitions }: { agentId: string; definitions: SubagentRow[] }) {
   queryClient.setQueryData(["subagents", agentId, "list"], definitions);
   return <QueryClientProvider client={queryClient}><SubagentsPageComponent agentId={agentId} /></QueryClientProvider>;
 }
 import { ScheduleConfig } from "./subagent-config.js";
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const definition: SubagentRow = { id: "worker:fixture", agentId: "agent-fixture", kind: "worker", name: "Research", description: "Find evidence", instructions: "Research carefully", provider: "faux", modelId: "faux-1", thinkingLevel: "", tools: [], triggers: { inboxEnabled: false, workerDelegates: [], researchSources: [], fills: false, orderChanges: false }, templateOrigin: null, enabled: true, archived: false, delegatable: true, persistent: false, conversationId: null, schedule: "", delaySeconds: 30, nextRunAt: null, completion: "wake", timeoutSeconds: 900, createdAt: 1, updatedAt: 1 };
 class HistorySource extends EventTarget {
   static instances: HistorySource[] = [];
@@ -37,29 +36,15 @@ const choices = [choice("faux", "faux-1", "Faux", ["high"])];
 describe("subagent pages", () => {
   let root: Root, container: HTMLDivElement;
   const initial = (row = definition) => ({ definition: row, runs: [], schedulerError: null });
-  const render = async (row = definition) => act(async () => root.render(<SubagentDetailPage key={row.kind} agentId={row.agentId} initial={initial(row)} choices={choices} />));
+  const render = async (row = definition) => act(async () => root.render(detailPage({ key: row.kind, agentId: row.agentId, initial: initial(row), choices })));
   const click = async (text: string) => act(async () => { [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === text || button.getAttribute("aria-label") === text)!.click(); });
   const editInstructions = async (text: string) => act(async () => {
     const input = container.querySelector("textarea")!;
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, text);
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
-  const originalDialogMethods = Object.fromEntries(["showModal", "close"].map((key) => [key, Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, key)]));
-  beforeAll(() => {
-    // jsdom does not implement the native dialog lifecycle.
-    Object.defineProperties(HTMLDialogElement.prototype, {
-      showModal: { configurable: true, value(this: HTMLDialogElement) { this.open = true; } },
-      close: { configurable: true, value(this: HTMLDialogElement) { this.open = false; } },
-    });
-  });
-  afterAll(() => {
-    for (const [key, descriptor] of Object.entries(originalDialogMethods)) {
-      if (descriptor) Object.defineProperty(HTMLDialogElement.prototype, key, descriptor);
-      else Reflect.deleteProperty(HTMLDialogElement.prototype, key);
-    }
-  });
-  beforeEach(() => { vi.resetAllMocks(); queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } } }); mocks.listSubagents.mockImplementation(({ data }: { data: { agentId: string } }) => Promise.resolve(queryClient.getQueryData(["subagents", data.agentId, "list"]))); HistorySource.instances = []; vi.stubGlobal("EventSource", HistorySource); container = document.createElement("div"); document.body.append(container); root = createRoot(container); mocks.getSubagent.mockResolvedValue(initial()); mocks.saveSubagentSection.mockImplementation(({ data }: { data: { settings: Partial<SubagentRow> } }) => Promise.resolve({ ...definition, ...data.settings })); mocks.saveSubagentAssignments.mockImplementation(({ data }: { data: { settings: Partial<SubagentRow> } }) => Promise.resolve({ ...definition, ...data.settings })); mocks.saveSubagentIdentity.mockImplementation(({ data }: { data: { name: string; description: string } }) => Promise.resolve({ ...definition, name: data.name, description: data.description })); mocks.saveSubagentTools.mockImplementation(({ data }: { data: { tools: string[] } }) => Promise.resolve({ ...definition, tools: data.tools })); });
-  afterEach(async () => { await act(async () => root.unmount()); container.remove(); queryClient.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+  beforeEach(() => { vi.resetAllMocks(); queryClient = createTestQueryClient({ staleTime: Infinity }); mocks.listSubagents.mockImplementation(({ data }: { data: { agentId: string } }) => Promise.resolve(queryClient.getQueryData(["subagents", data.agentId, "list"]))); HistorySource.instances = []; vi.stubGlobal("EventSource", HistorySource); container = document.createElement("div"); document.body.append(container); root = createRoot(container); mocks.getSubagent.mockResolvedValue(initial()); mocks.saveSubagentSection.mockImplementation(({ data }: { data: { settings: Partial<SubagentRow> } }) => Promise.resolve({ ...definition, ...data.settings })); mocks.saveSubagentAssignments.mockImplementation(({ data }: { data: { settings: Partial<SubagentRow> } }) => Promise.resolve({ ...definition, ...data.settings })); mocks.saveSubagentIdentity.mockImplementation(({ data }: { data: { name: string; description: string } }) => Promise.resolve({ ...definition, name: data.name, description: data.description })); mocks.saveSubagentTools.mockImplementation(({ data }: { data: { tools: string[] } }) => Promise.resolve({ ...definition, tools: data.tools })); });
+  afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
   it("paginates live history without refresh controls, ignores old streams and cleans up on navigation", async () => {
     await render();
     expect(container.textContent).not.toContain("latest 50");
@@ -100,13 +85,13 @@ describe("subagent pages", () => {
   });
 
   it("lists the protected orchestrator and links workers to detail pages", () => {
-    const html = renderToStaticMarkup(<SubagentsPage agentId={definition.agentId} definitions={[{ ...definition, id: "main:fixture", kind: "orchestrator", name: "Orchestrator" }, definition]} />);
+    const html = renderToStaticMarkup(subagentsPage({ agentId: definition.agentId, definitions: [{ ...definition, id: "main:fixture", kind: "orchestrator", name: "Orchestrator" }, definition] }));
     expect(html).toContain("Main conversation"); expect(html).not.toContain("Protected"); expect(html).toContain("Create subagent");
     expect(html).toContain("/agents/agent-fixture/sub-agents/worker%3Afixture"); expect(html).toContain("Fresh context per assignment");
   });
   it("hides archived workers by default and lets users show or hide them", async () => {
     const archived = { ...definition, id: "worker:archived", name: "Old research", archived: true, enabled: false };
-    await act(async () => root.render(<SubagentsPage agentId={definition.agentId} definitions={[definition, archived]} />));
+    await act(async () => root.render(subagentsPage({ agentId: definition.agentId, definitions: [definition, archived] })));
     expect(container.textContent).not.toContain("Configure your orchestrator");
     expect(container.textContent).not.toContain("Old research");
     expect(container.querySelector("button")?.getAttribute("aria-pressed")).toBe("false");
@@ -122,7 +107,7 @@ describe("subagent pages", () => {
     expect(container.textContent).toContain("Research");
   });
   it("toggles workers on the index without nesting controls in links", async () => {
-    await act(async () => root.render(<SubagentsPage agentId={definition.agentId} definitions={[definition]} />));
+    await act(async () => root.render(subagentsPage({ agentId: definition.agentId, definitions: [definition] })));
     const toggle = container.querySelector<HTMLButtonElement>('[aria-label="Pause sub-agent"]')!;
     expect(toggle.closest("a")).toBeNull();
     await click("Pause sub-agent");
@@ -136,7 +121,7 @@ describe("subagent pages", () => {
   });
   it("keeps index toggle state on failure and excludes protected or archived agents", async () => {
     mocks.saveSubagentSection.mockRejectedValue(new Error("Unable to save"));
-    await act(async () => root.render(<SubagentsPage agentId={definition.agentId} definitions={[definition, { ...definition, id: "main", kind: "orchestrator" }, { ...definition, id: "old", archived: true }]} />));
+    await act(async () => root.render(subagentsPage({ agentId: definition.agentId, definitions: [definition, { ...definition, id: "main", kind: "orchestrator" }, { ...definition, id: "old", archived: true }] })));
     await click("Show archived (1)");
     expect(container.querySelectorAll('[aria-label="Pause sub-agent"]')).toHaveLength(1);
     await click("Pause sub-agent");
@@ -201,7 +186,7 @@ describe("subagent pages", () => {
     expect(mocks.archiveSubagent).not.toHaveBeenCalled(); expect(mocks.navigate).not.toHaveBeenCalled();
   });
   it("configures event triggers separately from scheduling and preserves selected sources", async () => {
-    await act(async () => root.render(<SubagentDetailPage agentId={definition.agentId} initial={{ ...initial(), workers: [{ id: definition.id, name: definition.name }, { id: "worker:analyst", name: "Analyst" }] }} choices={choices} />));
+    await act(async () => root.render(detailPage({ agentId: definition.agentId, initial: { ...initial(), workers: [{ id: definition.id, name: definition.name }, { id: "worker:analyst", name: "Analyst" }] }, choices })));
     await click("Edit triggers");
     const toggle = async (label: string) => act(async () => { const input = [...document.querySelectorAll("dialog label")].find((entry) => entry.textContent === label)!.querySelector("input")!; input.click(); });
     await toggle("Enable event triggers");
@@ -222,7 +207,7 @@ describe("subagent pages", () => {
     { tools: ["request_trader_evaluation"], warns: false },
   ])("warns only for approved callers missing delegation tools: $tools", async ({ tools, warns }) => {
     const triggers = { ...definition.triggers, inboxEnabled: true, researchSources: ["worker:analyst"] };
-    await act(async () => root.render(<SubagentDetailPage agentId={definition.agentId} initial={{ ...initial(), definition: { ...definition, triggers }, workers: [{ id: "worker:analyst", name: "Analyst", tools }] }} choices={choices} />));
+    await act(async () => root.render(detailPage({ agentId: definition.agentId, initial: { ...initial(), definition: { ...definition, triggers }, workers: [{ id: "worker:analyst", name: "Analyst", tools }] }, choices })));
     await click("Edit triggers");
     const dialog = document.querySelector("dialog")!;
     expect(dialog.textContent).not.toContain("Multiple workers may subscribe");
@@ -237,7 +222,7 @@ describe("subagent pages", () => {
   });
   it("shows archived selected trigger sources and lets the operator remove them", async () => {
     const triggers = { ...definition.triggers, inboxEnabled: true, researchSources: ["worker:archived"] };
-    await act(async () => root.render(<SubagentDetailPage agentId={definition.agentId} initial={{ ...initial(), definition: { ...definition, triggers }, workers: [{ id: "worker:archived", name: "Old analyst", archived: true }] }} choices={choices} />));
+    await act(async () => root.render(detailPage({ agentId: definition.agentId, initial: { ...initial(), definition: { ...definition, triggers }, workers: [{ id: "worker:archived", name: "Old analyst", archived: true }] }, choices })));
     await click("Edit triggers");
     const labels = [...document.querySelectorAll("dialog label")].filter((entry) => entry.textContent === "Old analyst (archived)");
     expect(labels).toHaveLength(2);
@@ -314,7 +299,7 @@ describe("subagent pages", () => {
     expect(mocks.saveSubagentSection).toHaveBeenCalledWith({ data: { agentId: definition.agentId, id: definition.id, section: "schedule", settings: { schedule: "15m", delaySeconds: 45, completion: "wake" } } });
   });
   it("searches models by provider, name and ID and only applies confirmed choices", async () => {
-    await act(async () => root.render(<SubagentDetailPage agentId={definition.agentId} initial={initial({ ...definition, thinkingLevel: "high" })} choices={[...choices, choice("other", "second-2", "Second", [])]} />));
+    await act(async () => root.render(detailPage({ agentId: definition.agentId, initial: initial({ ...definition, thinkingLevel: "high" }), choices: [...choices, choice("other", "second-2", "Second", [])] })));
     await click("Choose model");
     const search = document.querySelector("dialog input[type=search]")!;
     await act(async () => {
@@ -618,7 +603,7 @@ describe("subagent pages", () => {
       { ...definition, nextRunAt: Date.now() + 60_000 },
       { ...definition, schedule: "15m" },
     ]) {
-      expect(renderToStaticMarkup(<SubagentDetailPage agentId={row.agentId} initial={initial(row)} choices={choices} />)).not.toContain("Next run");
+      expect(renderToStaticMarkup(detailPage({ agentId: row.agentId, initial: initial(row), choices }))).not.toContain("Next run");
     }
   });
   it("updates the countdown when the saved next run changes", async () => {
@@ -749,7 +734,7 @@ describe("subagent pages", () => {
     await click("Run assignment");
     expect(mocks.runSubagent).toHaveBeenCalledWith({ data: { agentId: definition.agentId, id: definition.id, task: "Run paused worker once", requestId: expect.any(String) } });
     expect((container.querySelector('[aria-label="Archive worker"]') as HTMLButtonElement).matches(":disabled")).toBe(false);
-    await act(async () => root.render(<SubagentDetailPage key="archived" agentId={definition.agentId} initial={initial({ ...definition, archived: true })} choices={choices} />));
+    await act(async () => root.render(detailPage({ key: "archived", agentId: definition.agentId, initial: initial({ ...definition, archived: true }), choices })));
     expect(container.querySelector('[aria-label="Archive worker"]')?.matches(":disabled")).toBe(true);
     expect([...container.querySelectorAll("button")].find((button) => button.textContent === "Run now")!.matches(":disabled")).toBe(true);
   });

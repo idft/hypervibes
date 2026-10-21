@@ -11,7 +11,6 @@ vi.mock("@tanstack/react-router", () => ({
   },
 }));
 import { AgentSwitcher } from "./agent-switcher.js";
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const agents = [{ id: "one", name: "Research", tradingEnabled: true }, { id: "two", name: "Momentum", tradingEnabled: false }];
 
 describe("Agent switcher", () => {

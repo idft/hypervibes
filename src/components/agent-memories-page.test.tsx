@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { act, type ComponentProps, type ReactNode } from "react";
-import { QueryClient, QueryClientProvider, notifyManager } from "@tanstack/react-query";
+import { act, type ReactNode } from "react";
+import type { QueryClient } from "@tanstack/react-query";
+import { createTestQueryClient, withTestQueryClient } from "../test/query.js";
 import { memoriesQueryOptions } from "../web/memory-queries.js";
-import type { listMemories } from "../web/memories.js";
 import type { MemoryDetail } from "../memory/memory-contracts.js";
 import type { SubagentRow } from "../db/subagent-schema.js";
 import { createRoot, type Root } from "react-dom/client";
@@ -14,16 +14,9 @@ vi.mock("@tanstack/react-router", () => ({ Link: ({ to, params, children, classN
 vi.mock("../web/artifacts.js", () => ({ readArtifact: mocks.readArtifact, changeArtifact: mocks.changeArtifact }));
 import { AgentMemoriesPage as AgentMemoriesPageComponent } from "./agent-memories-page.js";
 import { AgentMemoryDetailPage as AgentMemoryDetailPageComponent } from "./agent-memory-detail-page.js";
-notifyManager.setScheduler((callback) => { queueMicrotask(callback); return () => {}; });
 let client: QueryClient;
-function AgentMemoriesPage({ initialMemories, ...props }: ComponentProps<typeof AgentMemoriesPageComponent> & { initialMemories?: Awaited<ReturnType<typeof listMemories>> }) {
-  if (initialMemories) client.setQueryData(memoriesQueryOptions(props.agentId).queryKey, initialMemories);
-  return <QueryClientProvider client={client}><AgentMemoriesPageComponent {...props} /></QueryClientProvider>;
-}
-function AgentMemoryDetailPage(props: ComponentProps<typeof AgentMemoryDetailPageComponent>) {
-  return <QueryClientProvider client={client}><AgentMemoryDetailPageComponent {...props} /></QueryClientProvider>;
-}
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+const AgentMemoriesPage = withTestQueryClient(AgentMemoriesPageComponent, () => client);
+const AgentMemoryDetailPage = withTestQueryClient(AgentMemoryDetailPageComponent, () => client);
 const metadata = { correctedBy: null, supersededBy: null, ref: "m1", status: "stale", kind: "research", topic: "trend_setup", instrument: "BTC", interval: "1h", summary: "<img src=x onerror=alert(1)>", createdAt: 1000, evidenceAsOf: 0, validUntil: 1000, producerSubagentId: null, sourceRunId: null, retractedAt: null, retractionReason: null };
 const current = { scope: { kind: "agent" }, version: 1, content: "Current guidance" };
 const head = { ...current, operation: "replace", reason: "Initial review", createdAt: 1000, userId: null, producerSubagentId: "reviewer", sourceRunId: "run-1", evidenceRefs: ["m1"] };
@@ -31,27 +24,18 @@ const data = { current, head, revision: null, history: { items: [{ ...head, cont
 describe("Agent memory and insight UI", () => {
   let root: Root, container: HTMLDivElement, detail: MemoryDetail;
   const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
-  const dialogMethods = Object.fromEntries(["showModal", "close"].map((key) => [key, Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, key)]));
   beforeEach(() => {
     vi.resetAllMocks();
-    client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } } });
-    Object.defineProperties(HTMLDialogElement.prototype, {
-      showModal: { configurable: true, value(this: HTMLDialogElement) { this.open = true; } },
-      close: { configurable: true, value(this: HTMLDialogElement) { this.open = false; } },
-    });
+    client = createTestQueryClient({ staleTime: Infinity });
     container = document.createElement("div"); document.body.append(container); root = createRoot(container);
     mocks.listMemories.mockResolvedValue({ items: [metadata], nextCursor: { createdAt: 1000, ref: "m1" } });
     detail = { ...metadata, kind: "research", conversationId: null, toolTaskId: null, content: "<script>bad()</script>", payload: { version: 1, bias: "long" }, links: [{ ref: "m2", relation: "based_on" }], artifactIds: [] };
     mocks.getInsights.mockResolvedValue(data);
   });
   afterEach(async () => {
-    await act(async () => root.unmount()); container.remove(); client.clear(); vi.restoreAllMocks();
+    await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks();
     if (clipboardDescriptor) Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
     else Reflect.deleteProperty(navigator, "clipboard");
-    for (const [key, descriptor] of Object.entries(dialogMethods)) {
-      if (descriptor) Object.defineProperty(HTMLDialogElement.prototype, key, descriptor);
-      else Reflect.deleteProperty(HTMLDialogElement.prototype, key);
-    }
   });
   const click = async (name: string) => act(async () => { [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === name)!.click(); });
   async function edit(element: HTMLInputElement | HTMLTextAreaElement, value: string) {
@@ -149,7 +133,8 @@ describe("Agent memory and insight UI", () => {
     expect(container.querySelector('[aria-label="Memory contents"]')?.textContent).toContain(detail.content);
     expect(container.querySelector('nav[aria-label="Memory breadcrumb"]')?.textContent).toContain("fresh");
     expect([...replacements.querySelectorAll("a")].every((anchor) => anchor.className.includes("cursor-pointer"))).toBe(true);
-    await act(async () => root.render(<AgentMemoriesPage agentId="agent" workers={[]} initialMemories={{ items: [detail], nextCursor: null }} />));
+    client.setQueryData(memoriesQueryOptions("agent").queryKey, { items: [detail], nextCursor: null });
+    await act(async () => root.render(<AgentMemoriesPage agentId="agent" workers={[]} />));
     const statusCell = container.querySelectorAll("tbody td")[4]!;
     expect(statusCell.textContent).toContain("fresh");
     expect(statusCell.textContent).toContain("Corrected by: m2");
@@ -161,7 +146,8 @@ describe("Agent memory and insight UI", () => {
   });
   it("renders preloaded memories immediately, without an empty flash or duplicate fetch", async () => {
     const initialMemories = { items: [{ ...detail }], nextCursor: { createdAt: 1000, ref: "m1" } };
-    const page = <AgentMemoriesPage agentId="agent" workers={[]} initialMemories={initialMemories} />;
+    client.setQueryData(memoriesQueryOptions("agent").queryKey, initialMemories);
+    const page = <AgentMemoriesPage agentId="agent" workers={[]} />;
     const html = renderToString(page);
     expect(html).toContain("m1");
     expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;");

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
-import { QueryClient, QueryClientProvider, notifyManager } from "@tanstack/react-query";
+import { type QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createTestQueryClient } from "../test/query.js";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRow } from "../db/subagent-schema.js";
@@ -11,8 +12,6 @@ vi.mock("../web/subagents.js", () => ({ importDefaultSubagents: mocks.importDefa
 vi.mock("sonner", () => ({ toast: { success: mocks.success } }));
 vi.mock("@tanstack/react-router", () => ({ useRouter: () => ({ invalidate: mocks.invalidate }), Link: ({ children }: { children: React.ReactNode }) => <a>{children}</a> }));
 import { SubagentsPage } from "./subagents-page.js";
-notifyManager.setScheduler((callback) => { queueMicrotask(callback); return () => {}; });
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const worker = (template: string, id: string): SubagentRow => {
   const draft = templateDraft(template, { provider: "test", modelId: "test-model", thinkingLevel: "" });
   return { ...draft, triggers: workerTriggers(draft.triggers), id, agentId: "agent", kind: "worker", archived: false, conversationId: null, nextRunAt: null, templateOrigin: null, createdAt: 1, updatedAt: 1 };
@@ -27,14 +26,14 @@ describe("default sub-agent import UI and connections", () => {
   const click = (label: string) => act(async () => { [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === label)!.click(); });
   beforeEach(async () => {
     vi.resetAllMocks();
-    client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } } });
+    client = createTestQueryClient({ staleTime: Infinity });
     client.setQueryData(["subagents", "agent", "list"], [analyst, trader, reviewer]);
     mocks.listSubagents.mockResolvedValue([analyst, trader, reviewer]);
     container = document.createElement("div"); document.body.append(container); root = createRoot(container);
     mocks.importDefaultSubagents.mockResolvedValue([analyst, trader, reviewer]);
     await act(async () => root.render(<QueryClientProvider client={client}><SubagentsPage agentId="agent" /></QueryClientProvider>));
   });
-  afterEach(async () => { await act(async () => root.unmount()); container.remove(); client.clear(); });
+  afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
 
   it("shows actual source/recipient connections and configured account triggers, including paused state", () => {
     expect(container.textContent).toContain("Research from: Technical Analyst (paused)");

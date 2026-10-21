@@ -1,5 +1,6 @@
-import { QueryClient } from "@tanstack/react-query";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { QueryClient } from "@tanstack/react-query";
+import { createTestQueryClient } from "../test/query.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({ list: vi.fn(), refresh: vi.fn(), settings: vi.fn(), models: vi.fn() }));
 vi.mock("./agents.js", () => ({ listAgents: mocks.list }));
 vi.mock("./providers.js", () => ({ getProviderSettings: mocks.settings, getModelChoices: mocks.models, refreshProviderModels: mocks.refresh }));
@@ -10,9 +11,8 @@ describe("shared application query caches", () => {
   let client: QueryClient;
   beforeEach(() => {
     vi.resetAllMocks();
-    client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: 30_000 } } });
+    client = createTestQueryClient({ staleTime: 30_000 });
   });
-  afterEach(() => client.clear());
   it("deduplicates layout and index loaders on the same agent list entry", async () => {
     const agents = [{ id: "a", name: "Desk" }];
     mocks.list.mockResolvedValue(agents);

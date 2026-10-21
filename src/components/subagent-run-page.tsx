@@ -1,11 +1,10 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { invalidateSubagentLists } from "../web/subagent-queries.js";
+import { subagentMutations } from "../web/subagent-mutations.js";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import type { RunDetail } from "../agents/subagent-service.js";
 import { workerInstructions } from "../agents/subagent-input.js";
-import { stopSubagentRun } from "../web/subagents.js";
 import { useSubagentRun } from "./use-subagent-run.js";
 import { RelativeTime, RunStatus } from "./subagent-run-history.js";
 import { CodeExecution, ToolCall } from "./tool-activity.js";
@@ -82,16 +81,13 @@ function InstructionsDialog({ instructions, children, onClose }: { instructions:
 }
 export function SubagentRunPage({ initial }: { initial: RunDetail }) {
   const client = useQueryClient();
-  const mutation = useMutation({
-    mutationFn: () => stopSubagentRun({ data: { agentId: initial.run.agentId, runId: initial.run.id } }),
-    onSuccess: () => invalidateSubagentLists(client, initial.run.agentId),
-  });
+  const mutation = useMutation({ mutationFn: subagentMutations(client, initial.run.agentId).stop });
   const pending = mutation.isPending, error = mutation.error?.message;
   const inFlight = useRef(false);
   async function stop() {
     if (inFlight.current) return;
     inFlight.current = true;
-    try { await mutation.mutateAsync(); }
+    try { await mutation.mutateAsync(initial.run.id); }
     catch { /* Query retains the cancellation error. */ }
     finally { inFlight.current = false; }
   }

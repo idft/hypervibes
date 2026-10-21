@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { act, type ComponentProps } from "react";
-import { QueryClient, QueryClientProvider, notifyManager } from "@tanstack/react-query";
+import { act } from "react";
+import type { QueryClient } from "@tanstack/react-query";
+import { createTestQueryClient, withTestQueryClient } from "../test/query.js";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, beforeAll, afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentChat } from "../agents/agent-service.js";
 import type { ModelChoice } from "../providers/provider-service.js";
 
@@ -12,13 +13,8 @@ vi.mock("../web/agents.js", () => mocks);
 vi.mock("../web/subagents.js", () => ({ saveSubagentSection: mocks.saveSubagentSection }));
 import { AgentChatPage as AgentChatPageComponent } from "./agent-chat-page.js";
 
-notifyManager.setScheduler((callback) => { queueMicrotask(callback); return () => {}; });
 let queryClient: QueryClient;
-function AgentChatPage(props: ComponentProps<typeof AgentChatPageComponent>) {
-  return <QueryClientProvider client={queryClient}><AgentChatPageComponent {...props} /></QueryClientProvider>;
-}
-
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+const AgentChatPage = withTestQueryClient(AgentChatPageComponent, () => queryClient);
 
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
@@ -53,23 +49,9 @@ const choices = [choice("deepseek-v4.1-flash", "DeepSeek Flash", ["", "low", "hi
 describe("Agent chat", () => {
   let container: HTMLDivElement;
   let root: Root;
-  const originalDialogMethods = Object.fromEntries(["showModal", "close"].map((key) => [key, Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, key)]));
-  beforeAll(() => {
-    // jsdom does not implement the native dialog lifecycle.
-    Object.defineProperties(HTMLDialogElement.prototype, {
-      showModal: { configurable: true, value(this: HTMLDialogElement) { this.open = true; } },
-      close: { configurable: true, value(this: HTMLDialogElement) { this.open = false; } },
-    });
-  });
-  afterAll(() => {
-    for (const [key, descriptor] of Object.entries(originalDialogMethods)) {
-      if (descriptor) Object.defineProperty(HTMLDialogElement.prototype, key, descriptor);
-      else Reflect.deleteProperty(HTMLDialogElement.prototype, key);
-    }
-  });
   beforeEach(async () => {
     vi.resetAllMocks();
-    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+    queryClient = createTestQueryClient();
     FakeEventSource.instances = [];
     Element.prototype.scrollIntoView = vi.fn();
     container = document.createElement("div");
@@ -80,7 +62,6 @@ describe("Agent chat", () => {
   afterEach(async () => {
     await act(async () => root.unmount());
     container.remove();
-    queryClient.clear();
   });
   const current = () => FakeEventSource.instances.at(-1)!;
   async function type(text: string) {

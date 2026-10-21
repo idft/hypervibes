@@ -1,13 +1,12 @@
 // @vitest-environment jsdom
 import { act, useState } from "react";
-import { QueryClient, QueryClientProvider, notifyManager } from "@tanstack/react-query";
+import { type QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createTestQueryClient } from "../test/query.js";
 import { createRoot, type Root } from "react-dom/client";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({ instruments: vi.fn(), change: vi.fn() }));
 vi.mock("../web/charts.js", () => ({ getChartInstruments: mocks.instruments }));
 import { InstrumentPicker } from "./instrument-picker.js";
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-notifyManager.setScheduler((callback) => { queueMicrotask(callback); return () => {}; });
 let client: QueryClient;
 
 function Host({ initial, disabled = false }: { initial: string[] | null; disabled?: boolean }) {
@@ -17,27 +16,14 @@ function Host({ initial, disabled = false }: { initial: string[] | null; disable
 
 describe("Instrument picker", () => {
   let root: Root, container: HTMLDivElement;
-  const dialogMethods = Object.fromEntries(["showModal", "close"].map((key) => [key, Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, key)]));
-  beforeAll(() => {
-    Object.defineProperties(HTMLDialogElement.prototype, {
-      showModal: { configurable: true, value(this: HTMLDialogElement) { this.open = true; } },
-      close: { configurable: true, value(this: HTMLDialogElement) { this.open = false; } },
-    });
-  });
-  afterAll(() => {
-    for (const [key, descriptor] of Object.entries(dialogMethods)) {
-      if (descriptor) Object.defineProperty(HTMLDialogElement.prototype, key, descriptor);
-      else Reflect.deleteProperty(HTMLDialogElement.prototype, key);
-    }
-  });
   beforeEach(async () => {
     vi.resetAllMocks();
-    client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } } });
+    client = createTestQueryClient({ staleTime: Infinity });
     mocks.instruments.mockResolvedValue(["BTC", "ETH", "SOL"]);
     container = document.createElement("div"); document.body.append(container); root = createRoot(container);
     await act(async () => root.render(<Host initial={["BTC"]} />));
   });
-  afterEach(async () => { await act(async () => root.unmount()); container.remove(); client.clear(); });
+  afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
   const dialog = () => document.querySelector("dialog")!;
   const button = (text: string) => [...document.querySelectorAll("button")].find((entry) => entry.textContent === text)!;
   const click = async (text: string) => act(async () => button(text).click());

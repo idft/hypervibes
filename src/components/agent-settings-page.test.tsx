@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { act, type ComponentProps } from "react";
-import { QueryClient, QueryClientProvider, notifyManager } from "@tanstack/react-query";
+import { act } from "react";
+import type { QueryClient } from "@tanstack/react-query";
+import { createTestQueryClient, withTestQueryClient } from "../test/query.js";
 import { createRoot, type Root } from "react-dom/client";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentChat } from "../agents/agent-service.js";
 import type { RiskSettings } from "../hyperliquid/orders/risk-settings.js";
 const mocks = vi.hoisted(() => ({ save: vi.fn(), success: vi.fn(), invalidate: vi.fn(), instruments: vi.fn(), remove: vi.fn(), navigate: vi.fn() }));
@@ -12,13 +13,8 @@ vi.mock("../web/agents.js", () => ({ deleteAgent: mocks.remove }));
 vi.mock("../web/risk.js", () => ({ saveRiskSettings: mocks.save }));
 vi.mock("sonner", () => ({ toast: { success: mocks.success } }));
 import { AgentSettingsPage as AgentSettingsPageComponent } from "./agent-settings-page.js";
-notifyManager.setScheduler((callback) => { queueMicrotask(callback); return () => {}; });
 let queryClient: QueryClient;
-function AgentSettingsPage({ risk, ...props }: ComponentProps<typeof AgentSettingsPageComponent> & { risk?: RiskSettings }) {
-  if (risk) queryClient.setQueryData(["risk", props.initial.agent.id], risk);
-  return <QueryClientProvider client={queryClient}><AgentSettingsPageComponent {...props} /></QueryClientProvider>;
-}
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+const AgentSettingsPage = withTestQueryClient(AgentSettingsPageComponent, () => queryClient);
 const initial: AgentChat = {
   agent: { id: "agent-fixture", name: "Research", userId: "owner", state: "ready", conversationId: 1, initialProvider: null, initialModelId: null, error: null, tradingAccountAddress: null, creationRequestId: "fixture", createdAt: 0, updatedAt: 0 },
   model: { provider: "current", modelId: "old" }, configured: true, busy: false, queuedMessages: [], messages: [], partial: "",
@@ -27,22 +23,9 @@ const initial: AgentChat = {
 describe("Agent settings", () => {
   let root: Root; let container: HTMLDivElement;
   const eventSource = vi.fn();
-  const dialogMethods = Object.fromEntries(["showModal", "close"].map((key) => [key, Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, key)]));
-  beforeAll(() => {
-    Object.defineProperties(HTMLDialogElement.prototype, {
-      showModal: { configurable: true, value(this: HTMLDialogElement) { this.open = true; } },
-      close: { configurable: true, value(this: HTMLDialogElement) { this.open = false; } },
-    });
-  });
-  afterAll(() => {
-    for (const [key, descriptor] of Object.entries(dialogMethods)) {
-      if (descriptor) Object.defineProperty(HTMLDialogElement.prototype, key, descriptor);
-      else Reflect.deleteProperty(HTMLDialogElement.prototype, key);
-    }
-  });
   beforeEach(async () => {
     vi.resetAllMocks();
-    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } } });
+    queryClient = createTestQueryClient({ staleTime: Infinity });
     queryClient.setQueryData(["risk", initial.agent.id], { tradingEnabled: false, allowedInstruments: null, maxOrderNotional: null, maxTotalNotional: null });
     mocks.instruments.mockResolvedValue(["BTC", "ETH", "SOL"]);
     mocks.save.mockImplementation(async ({ data }: { data: { settings: RiskSettings } }) => data.settings);
@@ -50,7 +33,7 @@ describe("Agent settings", () => {
     container = document.createElement("div"); document.body.append(container); root = createRoot(container);
     await act(async () => root.render(<AgentSettingsPage initial={initial} />));
   });
-  afterEach(async () => { await act(async () => root.unmount()); container.remove(); queryClient.clear(); vi.unstubAllGlobals(); });
+  afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
   async function change(label: string, value: string) {
     await act(async () => {
       const element = container.querySelector<HTMLInputElement>(`[aria-label="${label}"]`)!;
@@ -178,7 +161,10 @@ describe("Agent settings", () => {
     expect(mocks.save).not.toHaveBeenCalled();
   });
   it("loads saved limits as selected Limit options without changing decimal precision", async () => {
-    await act(async () => root.render(<AgentSettingsPage key="saved-limits" initial={initial} risk={{ tradingEnabled: true, allowedInstruments: null, maxOrderNotional: "100.00000001", maxTotalNotional: "500.25" }} />));
+    await act(async () => {
+      queryClient.setQueryData(["risk", initial.agent.id], { tradingEnabled: true, allowedInstruments: null, maxOrderNotional: "100.00000001", maxTotalNotional: "500.25" });
+      root.render(<AgentSettingsPage key="saved-limits" initial={initial} />);
+    });
     expect(mode("Max order notional", true).checked).toBe(true);
     expect(mode("Max total notional", true).checked).toBe(true);
     expect(amount("Max order notional").disabled).toBe(false);

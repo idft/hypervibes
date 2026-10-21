@@ -1,11 +1,10 @@
 // @vitest-environment jsdom
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({ catalog: vi.fn(), change: vi.fn() }));
 vi.mock("../web/charts.js", () => ({ getChartInstruments: mocks.catalog }));
 import { SingleInstrumentPicker } from "./instrument-picker.js";
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 function Host({ initial = "BTC", instruments = ["BTC", "ETH", "SOL"], disabled = false }: { initial?: string; instruments?: string[]; disabled?: boolean }) {
   const [value, setValue] = useState(initial);
@@ -18,14 +17,6 @@ function Host({ initial = "BTC", instruments = ["BTC", "ETH", "SOL"], disabled =
 
 describe("single chart instrument picker", () => {
   let root: Root, container: HTMLDivElement;
-  const methods = Object.fromEntries(["showModal", "close"].map((key) => [key, Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, key)]));
-  beforeAll(() => {
-    Object.defineProperties(HTMLDialogElement.prototype, {
-      showModal: { configurable: true, value(this: HTMLDialogElement) { this.open = true; } },
-      close: { configurable: true, value(this: HTMLDialogElement) { this.open = false; } },
-    });
-  });
-  afterAll(() => { for (const [key, descriptor] of Object.entries(methods)) { if (descriptor) Object.defineProperty(HTMLDialogElement.prototype, key, descriptor); else Reflect.deleteProperty(HTMLDialogElement.prototype, key); } });
   beforeEach(async () => {
     vi.resetAllMocks(); mocks.change.mockResolvedValue(true);
     Element.prototype.scrollIntoView = vi.fn();

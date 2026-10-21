@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { type QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createTestQueryClient } from "../test/query.js";
 import type { AgentDashboard } from "../hyperliquid/agent-dashboard.js";
 import { defaultChartOverlays, type ChartOverlayVisibility } from "../charts/trading-contracts.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -35,7 +36,6 @@ vi.mock("lightweight-charts", () => ({ LineStyle: { Solid: 0, Dotted: 1, Dashed:
 } }));
 vi.mock("../web/charts.js", () => ({ getChartHistory: mocks.history, getChartFills: mocks.fills }));
 import { MarketChart } from "./market-chart.js";
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const candle = (time: number, close = 11): ChartCandle => ({ time, open: 10, high: 15, low: 9, close, volume: 20 });
 class FakeEventSource extends EventTarget {
   static instances: FakeEventSource[] = [];
@@ -58,7 +58,7 @@ describe("annotated market chart", () => {
     layout = { id: crypto.randomUUID(), revision: 0, document: { name: "Test", coin: "BTC", interval: "1h", drawings: [], notes: "", magnet: true, hideDrawings: false }, updatedAt: 0, canUndo: false, canRedo: false, lastChange: "Created" };
     mocks.history.mockReset().mockResolvedValue({ candles: [candle(3600), candle(7200)], hasMore: true });
     mocks.fills.mockReset().mockResolvedValue({ fills: [], nextCursor: null, historyLimited: false, sync: { updatedAt: 1, error: null } });
-    client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client = createTestQueryClient();
     mocks.charts.length = 0; mocks.plugins.length = 0; FakeEventSource.instances = []; handle = null;
     vi.stubGlobal("EventSource", FakeEventSource);
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => window.setTimeout(() => callback(0), 0));
@@ -67,7 +67,7 @@ describe("annotated market chart", () => {
     statusHost.setAttribute("role", "toolbar"); statusHost.setAttribute("aria-label", "Chart controls");
     container.append(statusHost, chartMount); document.body.append(container); root = createRoot(chartMount);
   });
-  afterEach(async () => { await act(async () => root.unmount()); client.clear(); container.remove(); vi.unstubAllGlobals(); });
+  afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
   const render = async (tool: DrawingKind | "select" = "select", onSave = vi.fn(), visibility: ChartOverlayVisibility = defaultChartOverlays) => { await act(async () => { root.render(<QueryClientProvider client={client}><MarketChart id="fixture" layout={layout} tool={tool} selected="" disabled={false} statusHost={statusHost} overlayVisibility={visibility} onSelect={() => {}} onSave={onSave} onDrawn={() => {}} onEdit={() => {}} ref={(value) => { handle = value; }} /></QueryClientProvider>); await new Promise((resolve) => setTimeout(resolve, 5)); }); };
   it("renders connection and history status in the toolbar without an extra row above the chart", async () => {
     await render();

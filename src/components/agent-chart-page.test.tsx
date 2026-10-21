@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { act } from "react";
-import { QueryClient, QueryClientProvider, notifyManager } from "@tanstack/react-query";
+import { type QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createTestQueryClient } from "../test/query.js";
 import { chartLayoutsQueryOptions } from "../web/chart-queries.js";
 import { createRoot, type Root } from "react-dom/client";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentChat } from "../agents/agent-service.js";
 import { chartEdit, newDrawing, type ChartLayout } from "../charts/contracts.js";
 
@@ -20,8 +21,6 @@ vi.mock("./market-chart.js", async () => {
 });
 vi.mock("./agent-chat-page.js", () => ({ AgentChatPage: (props: Record<string, unknown>) => { mocks.chatProps = props; return <div aria-label="Root chat fixture">Main conversation</div>; } }));
 import { AgentChartPage } from "./agent-chart-page.js";
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-notifyManager.setScheduler((callback) => { queueMicrotask(callback); return () => {}; });
 const instruments = ["BTC", "ETH"];
 const chat = { agent: { id: "fixture" } } as AgentChat;
 class LayoutSource extends EventTarget {
@@ -34,16 +33,8 @@ class LayoutSource extends EventTarget {
 describe("chart workspace", () => {
   let root: Root, container: HTMLDivElement, layout: ChartLayout, initial: ChartLayout[], client: QueryClient;
   let observedResize: ResizeObserverCallback;
-  const dialogMethods = Object.fromEntries(["showModal", "close"].map((key) => [key, Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, key)]));
-  beforeAll(() => {
-    Object.defineProperties(HTMLDialogElement.prototype, {
-      showModal: { configurable: true, value(this: HTMLDialogElement) { this.open = true; } },
-      close: { configurable: true, value(this: HTMLDialogElement) { this.open = false; } },
-    });
-  });
-  afterAll(() => { for (const [key, descriptor] of Object.entries(dialogMethods)) { if (descriptor) Object.defineProperty(HTMLDialogElement.prototype, key, descriptor); else Reflect.deleteProperty(HTMLDialogElement.prototype, key); } });
   beforeEach(() => {
-    client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+    client = createTestQueryClient();
     localStorage.clear(); vi.resetAllMocks(); LayoutSource.instances = []; vi.stubGlobal("EventSource", LayoutSource);
     Element.prototype.scrollIntoView = vi.fn();
     vi.stubGlobal("ResizeObserver", class { constructor(callback: ResizeObserverCallback) { observedResize = callback; } observe() {} disconnect() {} });
@@ -66,7 +57,7 @@ describe("chart workspace", () => {
     mocks.capture.mockResolvedValue({ layoutId: layout.id, revision: 0 });
     container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   });
-  afterEach(async () => { await act(async () => root.unmount()); container.remove(); client.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+  afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
   async function render() {
     client.setQueryData(chartLayoutsQueryOptions("fixture").queryKey, initial);
     await act(async () => root.render(<QueryClientProvider client={client}><AgentChartPage id="fixture" instruments={instruments} initialChat={chat} choices={[]} /></QueryClientProvider>));

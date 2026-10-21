@@ -5,7 +5,6 @@ import { expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import { AppToaster } from "./app-toaster.js";
 
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 it("shows dismissible dark success toasts in the top right", async () => {
   vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
   const container = document.createElement("div"); document.body.append(container);

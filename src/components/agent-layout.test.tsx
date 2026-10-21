@@ -9,7 +9,6 @@ vi.mock("@tanstack/react-router", () => ({
   Outlet: () => <p>Page content</p>,
 }));
 import { AgentLayout } from "./agent-layout.js";
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const agent: AgentRow = { id: "fixture", name: "Research", userId: "owner", state: "ready", conversationId: 1, initialProvider: null, initialModelId: null, error: null, tradingAccountAddress: null, creationRequestId: "fixture", createdAt: 0, updatedAt: 0 };
 const navCookie = () => document.cookie.split(/;\s*/).find((part) => part.startsWith("hv-agent-nav-expanded="));
 

@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChartDrawings, type ChartProjection } from "./chart-drawings.js";
 import { newDrawing, type ChartDocument, type ChartDrawing, type DrawingKind } from "../charts/contracts.js";
 
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 function pointerEvent(type: string, x: number, y: number, ctrlKey = false, pointerId = 1) {
   return Object.assign(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, ctrlKey }), { pointerId });
 }

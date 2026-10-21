@@ -4,8 +4,7 @@ import { useEffect, useEffectEvent, useId, useLayoutEffect, useRef, useState } f
 import type { AgentChat, ChatEntry } from "../agents/agent-service.js";
 import type { ModelChoice } from "../providers/provider-service.js";
 import { compactAgentChat, resetAgentChat, retryAgent, sendAgentMessage, stopAgentChat } from "../web/agents.js";
-import { saveSubagentSection } from "../web/subagents.js";
-import { cacheSubagent } from "../web/subagent-queries.js";
+import { subagentMutations } from "../web/subagent-mutations.js";
 import { ModelDialog, modelKey } from "./model-picker.js";
 import { ProviderLogo } from "./provider-logo.js";
 import { ToolCall } from "./tool-activity.js";
@@ -180,8 +179,7 @@ export function AgentChatPage({ initial, choices, embedded = false, visible = tr
     const choice = choices.find((entry) => modelKey(entry) === value);
     if (!choice) throw new Error("Select an available model.");
     await mutation.mutateAsync(async () => {
-      const row = await saveSubagentSection({ data: { agentId: id, id: `main:${id}`, section: "model", settings: { provider: choice.provider, modelId: choice.modelId, thinkingLevel } } });
-      await cacheSubagent(client, id, row);
+      await subagentMutations(client, id).saveSection({ id: `main:${id}`, section: "model", settings: { provider: choice.provider, modelId: choice.modelId, thinkingLevel } });
       setModelOpen(false);
     });
   }

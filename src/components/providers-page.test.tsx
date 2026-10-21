@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { act } from "react";
-import { QueryClient, QueryClientProvider, notifyManager } from "@tanstack/react-query";
+import { type QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createTestQueryClient } from "../test/query.js";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LoginView, ProviderSettings } from "../providers/provider-service.js";
 
 const mocks = vi.hoisted(() => ({
@@ -14,18 +15,13 @@ vi.mock("../web/providers.js", () => mocks);
 import { ProvidersPage as ProvidersPageComponent } from "./providers-page.js";
 import { providerSettingsQueryOptions, setupQueryOptions } from "../web/provider-queries.js";
 
-notifyManager.setScheduler((callback) => { queueMicrotask(callback); return () => {}; });
 vi.mock("../web/setup.js", () => ({ getSetupState: mocks.getSetupState }));
-const clients: QueryClient[] = [];
-function ProvidersPage({ initial, agentCount = 0 }: { initial: ProviderSettings; agentCount?: number }) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } } });
-  clients.push(client);
+function providerPage({ initial, agentCount = 0 }: { initial: ProviderSettings; agentCount?: number }, client = createTestQueryClient({ staleTime: Infinity })) {
   client.setQueryData(providerSettingsQueryOptions().queryKey, initial);
   client.setQueryData(setupQueryOptions().queryKey, { agentCount, providerConnected: false, apiKeyApproved: false, builderFeeApproved: false });
   return <QueryClientProvider client={client}><ProvidersPageComponent /></QueryClientProvider>;
 }
 
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const initial: ProviderSettings = {
   storageReady: true, models: [], providers: [{ id: "test", name: "Test Provider", connected: false, configured: false, methods: [{ type: "api_key", label: "API key" }, { type: "oauth", label: "Subscription" }] }],
 };
@@ -42,32 +38,19 @@ const attempt: LoginView = { id: "login", providerId: "test", state: "pending", 
 
 describe("Providers page", () => {
   let container: HTMLDivElement;
-  let root: Root;
-  beforeAll(() => {
-    // jsdom does not implement the native dialog lifecycle.
-    const originalDialogMethods = Object.fromEntries(["showModal", "close"].map((key) => [key, Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, key)]));
-    Object.defineProperties(HTMLDialogElement.prototype, {
-      showModal: { configurable: true, value(this: HTMLDialogElement) { this.open = true; } },
-      close: { configurable: true, value(this: HTMLDialogElement) { this.open = false; } },
-    });
-    afterAll(() => {
-      for (const [key, descriptor] of Object.entries(originalDialogMethods)) {
-        if (descriptor) Object.defineProperty(HTMLDialogElement.prototype, key, descriptor);
-        else Reflect.deleteProperty(HTMLDialogElement.prototype, key);
-      }
-    });
-  });
+  let root: Root, client: QueryClient;
   beforeEach(async () => {
     vi.resetAllMocks();
+    client = createTestQueryClient({ staleTime: Infinity });
     mocks.getSetupState.mockResolvedValue({ agentCount: 0, providerConnected: false, apiKeyApproved: false, builderFeeApproved: false });
     vi.useFakeTimers();
     MockEventSource.instances = [];
     vi.stubGlobal("EventSource", MockEventSource);
     container = document.createElement("div"); document.body.append(container); root = createRoot(container);
-    await act(async () => root.render(<ProvidersPage initial={initial} />));
+    await act(async () => root.render(providerPage({ initial }, client)));
   });
   afterEach(async () => {
-    await act(async () => root.unmount()); container.remove(); clients.splice(0).forEach((client) => client.clear()); vi.useRealTimers(); vi.unstubAllGlobals();
+    await act(async () => root.unmount()); container.remove(); vi.useRealTimers(); vi.unstubAllGlobals();
   });
   const button = (text: string) => [...container.querySelectorAll("button")].find((button) => button.textContent === text)!;
   const dialog = () => container.querySelector<HTMLDialogElement>("dialog")!;
@@ -79,7 +62,7 @@ describe("Providers page", () => {
     expect(container.querySelector('[aria-labelledby="connected-providers-heading"]')).toBeNull();
     expect(container.textContent).not.toContain("Configured means");
     expect(container.textContent).not.toContain("For a Codex subscription");
-    const markup = renderToStaticMarkup(<ProvidersPage initial={{ ...initial, storageReady: false }} />);
+    const markup = renderToStaticMarkup(providerPage({ initial: { ...initial, storageReady: false } }));
     expect(markup).toContain("AGENTS_ENCRYPTION_KEY");
     expect(markup).toContain('disabled=""');
   });
@@ -87,13 +70,13 @@ describe("Providers page", () => {
   it("links new users with a connected provider to Hyperliquid setup", () => {
     const settings = { ...initial, providers: [{ ...initial.providers[0]!, connected: true, configured: true }] };
     const markup = document.createElement("div");
-    markup.innerHTML = renderToStaticMarkup(<ProvidersPage initial={settings} />);
+    markup.innerHTML = renderToStaticMarkup(providerPage({ initial: settings }));
     const link = markup.querySelector('a[href="/account"]');
     expect(link?.textContent).toBe("Connect to Hyperliquid");
     expect(markup.querySelector('[aria-label="Initial setup"]')?.className).toContain("border-violet-800");
     expect(link?.parentElement?.getAttribute("aria-current")).toBe("step");
     expect(markup.textContent).toContain("Completed: Connect at least 1 AI provider");
-    expect(renderToStaticMarkup(<ProvidersPage initial={settings} agentCount={1} />)).not.toContain("Connect to Hyperliquid");
+    expect(renderToStaticMarkup(providerPage({ initial: settings, agentCount: 1 }))).not.toContain("Connect to Hyperliquid");
   });
 
   it("keeps the page itself fixed and scrolls only the full provider list", () => {
@@ -187,14 +170,14 @@ describe("Providers page", () => {
 
   it("shows connected providers above the full list, with green configured status", () => {
     const markup = document.createElement("div");
-    markup.innerHTML = renderToStaticMarkup(<ProvidersPage initial={{ ...initial,
+    markup.innerHTML = renderToStaticMarkup(providerPage({ initial: { ...initial,
       providers: [
         { ...initial.providers[0]!, connected: true, configured: true, authType: "oauth" },
         { ...initial.providers[0]!, id: "broken", name: "Needs attention", connected: true },
         { ...initial.providers[0]!, id: "other", name: "Other Provider" },
       ],
       models: [{ provider: "test", modelId: "model", name: "Model", providerName: "Test", thinkingLevels: [], contextWindow: 200_000, inputCost: 3, outputCost: 15, reasoning: true }],
-    }} />);
+    } }));
     const connected = markup.querySelector('[aria-labelledby="connected-providers-heading"]')!;
     const all = markup.querySelector('[aria-labelledby="all-providers-heading"]')!;
     expect(connected.querySelectorAll("h3")).toHaveLength(2);
@@ -213,9 +196,9 @@ describe("Providers page", () => {
   });
 
   it("labels reconnect and disconnect actions without repeating the provider name", () => {
-    const markup = renderToStaticMarkup(<ProvidersPage initial={{ ...initial,
+    const markup = renderToStaticMarkup(providerPage({ initial: { ...initial,
       providers: [{ ...initial.providers[0]!, connected: true, configured: true, authType: "oauth" }],
-    }} />);
+    } }));
     const labels = [...markup.matchAll(/<button[^>]*>([^<]+)<\/button>/g)].map((match) => match[1]);
     expect(labels).toEqual(["Re-connect", "Re-connect", "Disconnect", "Refresh models"]);
     expect(markup).not.toContain("Replace:");
@@ -225,7 +208,7 @@ describe("Providers page", () => {
   it("expands and collapses a provider's model list from the model count", async () => {
     const models = [{ provider: "test", modelId: "model", name: "Test model", providerName: "Test", thinkingLevels: [], contextWindow: 200_000, inputCost: 3, outputCost: 15, reasoning: true }];
     await act(async () => { await root.unmount(); root = createRoot(container); });
-    await act(async () => root.render(<ProvidersPage initial={{ ...initial, models }} />));
+    await act(async () => root.render(providerPage({ initial: { ...initial, models } }, client)));
     const toggle = () => [...container.querySelectorAll("button")].find((b) => b.textContent === "1 chat models")!;
     expect(toggle().getAttribute("aria-expanded")).toBe("false");
     await act(async () => toggle().click());
@@ -246,7 +229,7 @@ describe("Providers page", () => {
     mocks.disconnectProvider.mockResolvedValue(undefined);
     mocks.getProviderSettings.mockResolvedValue(initial);
     await act(async () => { await root.unmount(); root = createRoot(container); });
-    await act(async () => root.render(<ProvidersPage initial={{ ...initial, providers: [{ ...initial.providers[0]!, connected: true, configured: true }] }} />));
+    await act(async () => root.render(providerPage({ initial: { ...initial, providers: [{ ...initial.providers[0]!, connected: true, configured: true }] } }, client)));
     await act(async () => button("Disconnect").click());
     expect(mocks.disconnectProvider).not.toHaveBeenCalled();
     expect(dialog().textContent).toContain("Disconnect Test Provider?");
