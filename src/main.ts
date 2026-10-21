@@ -16,7 +16,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
     }
     closing = true;
     app.log.info("Shutdown signal received; waiting for in-flight agent jobs to complete");
-    void app.close().then(() => {
+    void app.shutdown().then(() => {
       app.log.info("Shutdown complete");
     }).catch((error: unknown) => {
       app.log.error(error, "Shutdown failed");

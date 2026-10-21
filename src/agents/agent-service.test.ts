@@ -59,6 +59,28 @@ describe("per-Agent durable execution", () => {
     expect(faux.state.callCount).toBe(0);
   });
 
+  it("persists creation thinking for the orchestrator and default workers across retries and restart", async () => {
+    const thinking = fauxProvider({ models: [{ id: "thinking", reasoning: true }] });
+    models.setProvider(thinking.provider);
+    const selection = { provider: thinking.getModel().provider, modelId: thinking.getModel().id };
+    const id = randomUUID(), account = `0x${"b".repeat(40)}`;
+    const agent = await runtime.agents.create("owner", "Thinking", id, account, selection, true, "high");
+    expect((await runtime.agents.chat("owner", agent.id)).thinkingLevel).toBe("high");
+    const definitions = await runtime.agents.subagents.list("owner", agent.id);
+    expect(definitions).toHaveLength(4);
+    expect(definitions.every((row) => row.thinkingLevel === "high")).toBe(true);
+    expect(definitions.find((row) => row.kind === "orchestrator")!.conversationId).toBe(agent.conversationId);
+    await runtime.agents.create("owner", "Thinking", id, account, selection, true, "high");
+    await runtime.close();
+    runtime = await createRuntime(config(), options());
+    expect((await runtime.agents.chat("owner", agent.id)).thinkingLevel).toBe("high");
+  });
+
+  it("rejects unsupported creation thinking before persisting an agent", async () => {
+    await expect(runtime.agents.create("owner", "Invalid", randomUUID(), `0x${"b".repeat(40)}`, options().model, false, "invalid")).rejects.toThrow("supported thinking level");
+    expect(await runtime.agents.list("owner")).toEqual([]);
+  });
+
   it("creates one idle root without calling a model; isolates harnesses in the same SQLite file", async () => {
     const [one, two] = await Promise.all([create(), create("ETH Research")]);
     expect(one.state).toBe("ready");
@@ -423,6 +445,51 @@ describe("per-Agent durable execution", () => {
     runtime = await createRuntime(config(), options());
     const chat = await runtime.agents.chat("owner", agent.id);
     expect(chat.messages.some((entry) => entry.text === "Delayed done" && !entry.failed)).toBe(true);
+  });
+
+  it("keeps reads and live subscriptions available while draining workers but rejects new execution", async () => {
+    const agent = await create();
+    const worker = await runtime.agents.subagents.create("owner", agent.id, {
+      name: "Research", description: "", instructions: "Research the assignment.",
+      provider: "faux", modelId: "faux-1", thinkingLevel: "", tools: [],
+      enabled: true, delegatable: true, persistent: false, schedule: "", delaySeconds: 30,
+      completion: "save", timeoutSeconds: 900,
+    }, randomUUID());
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => { release = resolve; });
+    const viewer = new AbortController();
+    const statuses: string[] = [];
+    faux.setResponses([heldResponse("Worker finished during shutdown", hold)]);
+    const run = await runtime.agents.subagents.run("owner", agent.id, worker.id, "Hold this", randomUUID());
+    await vi.waitFor(() => expect(faux.state.callCount).toBe(1));
+    const watching = runtime.agents.subagents.watchRun("owner", agent.id, worker.id, run.id, viewer.signal, (detail) => { statuses.push(detail.run.status); });
+    await vi.waitFor(() => expect(statuses).toContain("running"));
+    let drained = false;
+    const draining = runtime.agents.drain().then(() => { drained = true; });
+    try {
+      expect(runtime.status().database).toBe("connected");
+      expect((await runtime.agents.list("owner"))[0]?.id).toBe(agent.id);
+      expect((await runtime.agents.subagents.runDetail("owner", agent.id, worker.id, run.id)).run.status).toBe("running");
+      await expect(create()).rejects.toMatchObject({ status: 503 });
+      await expect(runtime.agents.send("owner", agent.id, "New work", randomUUID())).rejects.toMatchObject({ status: 503 });
+      await expect(runtime.agents.compact("owner", agent.id)).rejects.toMatchObject({ status: 503 });
+      await expect(runtime.agents.subagents.run("owner", agent.id, worker.id, "New work", randomUUID())).rejects.toMatchObject({ status: 503 });
+      const chats: boolean[] = [];
+      const chatWatch = runtime.agents.watchChat("owner", agent.id, viewer.signal, () => { chats.push(true); });
+      await vi.waitFor(() => expect(chats.length).toBeGreaterThan(0));
+      expect(drained).toBe(false);
+      release();
+      await draining;
+      await vi.waitFor(() => expect(statuses).toContain("completed"));
+      expect((await runtime.agents.subagents.runDetail("owner", agent.id, worker.id, run.id)).run.result).toContain("Worker finished during shutdown");
+      viewer.abort();
+      await chatWatch;
+    } finally {
+      release();
+      viewer.abort();
+      await watching;
+      await draining;
+    }
   });
 
   it("aborts remaining in-flight agent jobs when shutdown is forced by a signal", async () => {

@@ -1,7 +1,7 @@
-import { redirect } from "@tanstack/react-router";
+import { notFound, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { getRequestHeaders } from "@tanstack/react-start/server";
-import { AgentError, isAgentError } from "../agents/agent-input.js";
+import { AgentError, isAgentError, requestId } from "../agents/agent-input.js";
 import { HyperliquidError } from "../hyperliquid/errors.js";
 import { currentUser } from "../auth-user.js";
 import type { AppRuntime } from "../runtime.js";
@@ -20,6 +20,11 @@ export function field(data: unknown, key: string): string {
   const value = Reflect.get(data, key);
   if (typeof value !== "string") throw new Error("Invalid request");
   return value;
+}
+
+export function booleanField(data: unknown, key: string): boolean {
+  if (typeof data !== "object" || data === null || typeof Reflect.get(data, key) !== "boolean") throw new Error("Invalid request");
+  return Reflect.get(data, key) as boolean;
 }
 
 /** An optional non-negative integer, such as a chat history page token. */
@@ -48,9 +53,18 @@ export const listAgents = createServerFn({ method: "GET" }).handler(async ({ con
   })));
 });
 
-/** Validates the selected trading account against fresh Hyperliquid data. */
-export async function selectedTradingAccount(runtime: AppRuntime, user: AuthenticatedWallet, selection: string): Promise<string> {
+/** New accounts require fresh exchange validation; an owned creation retry uses its original binding. */
+export async function selectedTradingAccount(runtime: AppRuntime, user: AuthenticatedWallet, selection: string, creationRequestId?: string): Promise<string> {
   if (!selection || selection === "none") throw new AgentError("Select an available trading account.");
+  if (creationRequestId !== undefined) {
+    const id = requestId(creationRequestId);
+    const existing = (await runtime.agents.list(user.id)).find((agent) => agent.creationRequestId === id);
+    if (existing) {
+      const address = (selection === "main" ? user.walletAddress : selection).toLowerCase();
+      if (existing.tradingAccountAddress !== address) throw new AgentError("This creation request was already used with different settings", 409);
+      return address;
+    }
+  }
   const choices = await runtime.hyperliquid.tradingAccountChoices(user);
   if (choices.lookupError) throw new AgentError(choices.lookupError);
   if (!choices.accountModeSupported) throw new AgentError("HyperVibes currently supports Unified Accounts only.");
@@ -71,13 +85,15 @@ export const createAgent = createServerFn({ method: "POST" })
     accountSelection: field(data, "accountSelection"),
     provider: field(data, "provider"),
     modelId: field(data, "modelId"),
+    includeDefaultSubagents: booleanField(data, "includeDefaultSubagents"),
+    thinkingLevel: typeof data === "object" && data !== null && "thinkingLevel" in data ? field(data, "thinkingLevel") : "",
   }))
   .handler(async ({ context, data }) => {
     const user = await agentUser(context.runtime, getRequestHeaders(), true);
     return agentAction(async () => {
       const model = await context.runtime.providers.validate(user.id, { provider: data.provider, modelId: data.modelId });
-      const tradingAccount = await selectedTradingAccount(context.runtime, user, data.accountSelection);
-      return context.runtime.agents.create(user.id, data.name, data.requestId, tradingAccount, model);
+      const tradingAccount = await selectedTradingAccount(context.runtime, user, data.accountSelection, data.requestId);
+      return context.runtime.agents.create(user.id, data.name, data.requestId, tradingAccount, model, data.includeDefaultSubagents, data.thinkingLevel);
     });
   });
 
@@ -97,7 +113,12 @@ export const getAgent = createServerFn({ method: "GET" })
   .validator((data: unknown) => ({ id: field(data, "id") }))
   .handler(async ({ context, data }) => {
     const user = await agentUser(context.runtime, getRequestHeaders());
-    return agentAction(() => context.runtime.agents.owned(user.id, data.id));
+    try {
+      return await context.runtime.agents.owned(user.id, data.id);
+    } catch (error) {
+      if (isAgentError(error) && error.status === 404) throw notFound();
+      throw error;
+    }
   });
 
 export const getAgentDashboard = createServerFn({ method: "GET" })

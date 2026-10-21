@@ -18,6 +18,7 @@ import type { RunContext } from "./execution-context-contracts.js";
 import { bodyHash, canonical } from "../canonical.js";
 import { subagentTemplate } from "./subagent-templates.js";
 import { workerTriggers, type WorkerRequestPayload, type WorkerTriggers } from "./worker-triggers.js";
+import { insertDefaultSubagents } from "./default-subagents.js";
 import { requestBatch, inboxAssignment } from "./worker-inbox.js";
 import { inspectRun, listRuns } from "./run-inspection.js";
 import { assertActiveActor, type MemoryActor } from "../memory/operations.js";
@@ -45,6 +46,7 @@ export class SubagentService {
   private tickActive = false;
   private ready = false;
   private stopping = false;
+  private draining?: Promise<void>;
   private readonly dashboardListeners = new Map<string, Set<() => void>>();
   private readonly historyListeners = new Map<string, Set<() => void>>();
   private readonly historyShutdown = new AbortController();
@@ -70,7 +72,7 @@ export class SubagentService {
     await this.db.insert(hvSubagents).values({
       id: `main:${agent.id}`, agentId: agent.id, kind: "orchestrator", name: "Orchestrator", description: "Main conversation", instructions: defaultMainInstructions,
       provider: resolved.model!.provider, modelId: resolved.model!.modelId, thinkingLevel: resolved.thinkingLevel ?? "", tools: mainToolNames, conversationId: main.id, createdAt: now, updatedAt: now,
-    }).onConflictDoNothing().run();
+    }).onConflictDoUpdate({ target: hvSubagents.id, set: { conversationId: main.id } }).run();
     const binding = { harness, main, hyperliquid, capabilities, orchestratorInsights, ...execution, userId: agent.userId };
     // Normalize saved selections at startup; historical run snapshots stay immutable.
     for (const saved of await this.db.select().from(hvSubagents).where(eq(hvSubagents.agentId, agent.id)).all()) {
@@ -100,8 +102,8 @@ export class SubagentService {
     this.bindings.set(agent.id, binding);
   }
   unbind(agentId: string) { this.bindings.delete(agentId); }
-  private admit() { if (this.stopping) throw new AgentError("Subagent execution is shutting down", 503); }
-  private binding(id: string) { this.admit(); const value = this.bindings.get(id); if (!value) throw new AgentError("Agent is unavailable. Retry initialization.", 503); return value; }
+  private admit(readOnly = false) { if (this.stopping || (!readOnly && this.draining)) throw new AgentError("Subagent execution is shutting down", 503); }
+  private binding(id: string) { this.admit(true); const value = this.bindings.get(id); if (!value) throw new AgentError("Agent is unavailable. Retry initialization.", 503); return value; }
   serial<T>(id: string, action: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     this.admit();
     const result = (this.pending.get(id) ?? Promise.resolve()).then(() => { this.admit(); signal?.throwIfAborted(); return action(); });
@@ -173,7 +175,7 @@ export class SubagentService {
     return db.select({ id: hvWorkerRequests.id, intent: sql<string>`json_extract(${hvWorkerRequests.payload}, '$.intent')`, reason: sql<string>`json_extract(${hvWorkerRequests.payload}, '$.reason')`, preview: sql<string>`substr(json_extract(${hvWorkerRequests.payload}, '$.task'), 1, 300)`, createdAt: hvWorkerRequests.createdAt, discardedReason: hvWorkerRequests.discardedReason }).from(hvWorkerRequests).where(and(eq(hvWorkerRequests.agentId, agentId), eq(hvWorkerRequests.subagentId, id), isNull(hvWorkerRequests.runId))).orderBy(desc(hvWorkerRequests.createdAt), desc(hvWorkerRequests.id)).limit(25).all();
   }
   async watchDashboard(userId: string, agentId: string, signal: AbortSignal, publish: (snapshot: DashboardSubagent[]) => void): Promise<void> {
-    this.admit();
+    this.admit(true);
     const lifetime = AbortSignal.any([signal, this.historyShutdown.signal]);
     let finish!: () => void;
     const finished = new Promise<void>((resolve) => { finish = resolve; });
@@ -202,7 +204,7 @@ export class SubagentService {
     }
   }
   async watchHistory(userId: string, agentId: string, id: string, page: number, signal: AbortSignal, publish: (history: RunHistory) => void): Promise<void> {
-    this.admit();
+    this.admit(true);
     const lifetime = AbortSignal.any([signal, this.historyShutdown.signal]);
     let finish!: () => void;
     const finished = new Promise<void>((resolve) => { finish = resolve; });
@@ -273,7 +275,7 @@ export class SubagentService {
   }
   /** One page-scoped subscription; reconnects receive a fresh run-detail snapshot. */
   async watchRun(userId: string, agentId: string, id: string, runId: string, signal: AbortSignal, publish: (detail: RunDetail) => void): Promise<void> {
-    this.admit();
+    this.admit(true);
     await this.ownedRun(userId, agentId, id, runId);
     const lifetime = AbortSignal.any([signal, this.historyShutdown.signal]);
     let finish!: () => void;
@@ -322,6 +324,18 @@ export class SubagentService {
   private async definition(agentId: string, id: string) {
     const row = await this.db.select().from(hvSubagents).where(and(eq(hvSubagents.id, id), eq(hvSubagents.agentId, agentId))).get();
     if (!row) throw new AgentError("Subagent not found", 404); return row;
+  }
+  async importDefaults(userId: string, agentId: string, creationId: string) {
+    await this.host.owned(userId, agentId);
+    creationId = requestId(creationId);
+    return this.serial(agentId, async () => {
+      const main = (await this.list(userId, agentId)).find((row) => row.kind === "orchestrator");
+      if (!main) throw new AgentError("Initialize the Agent before importing default sub-agents", 409);
+      await this.validateModel(userId, main, main.thinkingLevel);
+      const rows = await this.database.appTransaction((db) => insertDefaultSubagents(db, agentId, creationId, main));
+      this.dashboardChanged(agentId);
+      return rows;
+    });
   }
   async create(userId: string, agentId: string, data: unknown, creationId: string, templateId = "") {
     await this.host.owned(userId, agentId); requestId(creationId);
@@ -643,7 +657,7 @@ export class SubagentService {
     // No catch-up burst after downtime; pending admitted assignments are recovered separately.
     const definitions = await this.db.select().from(hvSubagents).where(eq(hvSubagents.kind, "worker")).all();
     for (const row of definitions) await this.db.update(hvSubagents).set({ nextRunAt: row.enabled && !row.archived ? nextCandleRun(Date.now(), row.schedule, row.delaySeconds) : null }).where(eq(hvSubagents.id, row.id)).run();
-    if (this.stopping) return;
+    if (this.stopping || this.draining) return;
     this.ready = true;
     this.log?.info("Starting sub-agent scheduler");
     this.timer = setInterval(() => { void this.tick(); }, 1000); this.timer.unref();
@@ -655,10 +669,11 @@ export class SubagentService {
     if (this.tickActive) return this.ticking;
     this.tickActive = true;
     this.ticking = this.ticking.then(async () => {
-      if (this.stopping) return;
+      if (this.stopping || this.draining) return;
       // Dispatch intents persisted before a crash; detect terminal task failures too.
       const pending = await this.db.select().from(hvSubagentRuns).where(or(inArray(hvSubagentRuns.status, active), isNull(hvSubagentRuns.reportedAt))).all();
       for (const run of pending) {
+        if (this.stopping || this.draining) return;
         const binding = this.bindings.get(run.agentId); if (!binding) continue;
         await this.serial(run.agentId, async () => {
           const current = await this.internalRun(run.agentId, run.id);
@@ -681,12 +696,13 @@ export class SubagentService {
       }
       const inboxes = await this.db.selectDistinct({ agentId: hvWorkerRequests.agentId, id: hvWorkerRequests.subagentId }).from(hvWorkerRequests).where(and(isNull(hvWorkerRequests.runId), isNull(hvWorkerRequests.discardedReason))).all();
       for (const inbox of inboxes) {
+        if (this.stopping || this.draining) return;
         try { await this.serial(inbox.agentId, () => this.drainInbox(inbox.agentId, inbox.id, now)); }
         catch (error) { if (!(error instanceof AgentError)) throw error; this.log?.warn({ err: error, ...inbox }, "Worker dispatch deferred"); }
       }
       const due = await this.db.select().from(hvSubagents).where(and(eq(hvSubagents.enabled, true), eq(hvSubagents.archived, false), lte(hvSubagents.nextRunAt, now))).all();
       for (const row of due) {
-        if (this.stopping) return;
+        if (this.stopping || this.draining) return;
         await this.schedule(row, now);
       }
       this.schedulerError = null;
@@ -724,5 +740,17 @@ export class SubagentService {
       if (run.status === "queued" && binding) await this.dispatch(binding, run);
     });
   }
-  async close() { this.stopping = true; this.ready = false; this.historyShutdown.abort(); if (this.timer) clearInterval(this.timer); await this.ticking; await Promise.all(this.pending.values()); await Promise.all(this.historyFeeds); }
+  drain() {
+    if (this.draining) return this.draining;
+    this.ready = false;
+    if (this.timer) clearInterval(this.timer);
+    return this.draining = (async () => { await this.ticking; await Promise.all(this.pending.values()); })();
+  }
+  async close() {
+    const drained = this.drain();
+    this.stopping = true;
+    this.historyShutdown.abort();
+    try { await drained; }
+    finally { await Promise.all(this.historyFeeds); }
+  }
 }

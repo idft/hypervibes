@@ -30,19 +30,19 @@ export function DashboardSubagents({ agentId, subagents, error }: { agentId: str
     return () => source.close();
   }, [agentId]);
   const base = `/agents/${encodeURIComponent(agentId)}/sub-agents`;
-  return <section aria-label="Sub-agents" className="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
-    <header className="mb-4">
+  return <section aria-label="Sub-agents" className="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-4">
+    <header className="mb-3">
       <h3 className="text-lg font-medium text-white">Sub-agents</h3>
     </header>
-    {loadError ? <p role="alert" className="text-sm text-amber-200">Sub-agents unavailable: {loadError}</p> : !workers.length ? <p className="text-sm text-zinc-500">No sub-agents yet. <a href={`${base}/new`} className="cursor-pointer text-violet-400 hover:text-violet-300 hover:underline">Create a new sub-agent</a> to get started.</p> : <ul className="space-y-4">
+    {loadError ? <p role="alert" className="text-sm text-amber-200">Sub-agents unavailable: {loadError}</p> : !workers.length ? <p className="text-sm text-zinc-500">No sub-agents yet. <a href={`${base}/new`} className="cursor-pointer text-violet-400 hover:text-violet-300 hover:underline">Create a new sub-agent</a> to get started.</p> : <ul className="space-y-2">
       {workers.map((subagent) => <li key={subagent.id} className="overflow-hidden rounded-xl border border-zinc-800">
-        <div className="flex flex-wrap items-center gap-2 bg-zinc-900/50 px-4 py-3">
+        <div className="flex flex-wrap items-center gap-2 bg-zinc-900/50 px-3 py-2">
           <h4 className="min-w-0"><a href={`${base}/${encodeURIComponent(subagent.id)}`} className="cursor-pointer font-medium text-zinc-100 hover:text-violet-300">{subagent.name}</a></h4>
           <button type="button" aria-label={`Run now: ${subagent.name}`} title="Run now" aria-haspopup="dialog" onClick={() => setRunTarget(subagent.id)} className="inline-flex shrink-0 cursor-pointer items-center justify-center rounded-full p-1.5 text-violet-300 hover:bg-violet-950"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" className="size-4"><path d="m13 2-9 12h7l-1 8 10-12h-7z" /></svg></button>
           <DashboardWorkerControls agentId={agentId} definition={subagent} />
         </div>
-        {!subagent.runs.length ? <p className="px-4 py-3 text-sm text-zinc-500">No runs yet.</p> : <ul className="divide-y divide-zinc-800/60">{subagent.runs.slice(0, 1).map((run) => <li key={run.id}>
-          <a href={runUrl(agentId, subagent.id, run.id)} className="flex cursor-pointer items-center gap-3 px-4 py-3 text-sm hover:bg-zinc-900 focus-visible:outline-violet-400">
+        {!subagent.runs.length ? <p className="px-3 py-2 text-sm text-zinc-500">No runs yet.</p> : <ul className="divide-y divide-zinc-800/60">{subagent.runs.slice(0, 1).map((run) => <li key={run.id}>
+          <a href={runUrl(agentId, subagent.id, run.id)} className="flex cursor-pointer items-center gap-3 px-3 py-2 text-sm hover:bg-zinc-900 focus-visible:outline-violet-400">
             <RunStatus status={run.status} />
             <span className="min-w-0 flex-1 truncate text-zinc-300">{run.result || (run.status === "running" ? "Running…" : run.status === "queued" ? "Waiting to run…" : "No result message.")}</span>
             <span className="shrink-0 text-xs text-zinc-500"><RelativeTime timestamp={run.createdAt} /></span>

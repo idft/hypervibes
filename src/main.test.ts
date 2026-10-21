@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   app: {
     listen: vi.fn(),
     close: vi.fn(),
+    shutdown: vi.fn(),
     log: { error: vi.fn(), info: vi.fn() },
   },
 }));
@@ -26,6 +27,7 @@ describe("server entry point", () => {
     vi.resetAllMocks();
     mocks.app.listen.mockResolvedValue(undefined);
     mocks.app.close.mockResolvedValue(undefined);
+    mocks.app.shutdown.mockImplementation(() => mocks.app.close());
     mocks.createApp.mockResolvedValue(mocks.app);
     originalExitCode = process.exitCode;
     originalListeners = new Map(signals.map((signal) => [signal, process.listeners(signal)]));
@@ -49,6 +51,7 @@ describe("server entry point", () => {
     stop?.("SIGTERM");
     stop?.("SIGTERM");
     await vi.waitFor(() => {
+      expect(mocks.app.shutdown).toHaveBeenCalledTimes(1);
       expect(mocks.app.close).toHaveBeenCalledTimes(1);
       expect(mocks.app.log.info).toHaveBeenLastCalledWith("Shutdown complete");
       expect(process.listeners("SIGTERM")).toEqual(originalListeners.get("SIGTERM"));

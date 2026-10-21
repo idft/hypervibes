@@ -193,6 +193,33 @@ describe("embedded HTTP host", () => {
     }
   });
 
+  it("keeps HTTP and event streams available until agent draining finishes", async () => {
+    await app.inject("/");
+    const runtime = runtimes[0]!;
+    let finishDrain!: () => void;
+    const held = new Promise<void>((resolve) => { finishDrain = resolve; });
+    const drain = vi.spyOn(runtime.agents, "drain").mockReturnValue(held);
+    const closeStreams = vi.spyOn(AgentEventStreams.prototype, "close");
+    try {
+      const shuttingDown = app.shutdown();
+      expect(app.shutdown()).toBe(shuttingDown);
+      expect(drain).toHaveBeenCalledOnce();
+      expect(closeStreams).not.toHaveBeenCalled();
+      expect(start.close).not.toHaveBeenCalled();
+      expect((await app.inject("/healthz")).statusCode).toBe(200);
+      expect((await app.inject("/")).statusCode).toBe(200);
+      finishDrain();
+      await shuttingDown;
+      expect(closeStreams).toHaveBeenCalledTimes(7);
+      expect(start.close).toHaveBeenCalledOnce();
+      await expect(runtime.database.get("SELECT 1")).rejects.toThrow("closed");
+    } finally {
+      finishDrain();
+      drain.mockRestore();
+      closeStreams.mockRestore();
+    }
+  });
+
   it("closes the web application before its runtime and permits reopening", async () => {
     await app.inject("/");
     const runtime = runtimes[0]!;

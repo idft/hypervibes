@@ -5,7 +5,7 @@ import type { AppRuntime } from "../runtime.js";
 
 const mocks = vi.hoisted(() => ({ currentUser: vi.fn() }));
 vi.mock("../auth-user.js", () => ({ currentUser: mocks.currentUser }));
-import { agentAction, agentUser, optionalNumber, selectedTradingAccount } from "./agents.js";
+import { agentAction, agentUser, booleanField, optionalNumber, selectedTradingAccount } from "./agents.js";
 
 const runtime = { origin: "http://localhost:3003", status: vi.fn() } as unknown as AppRuntime;
 describe("Agent server-function boundary", () => {
@@ -19,6 +19,23 @@ describe("Agent server-function boundary", () => {
   });
   it.each([null, "1", -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])("rejects an invalid history cursor: %s", (before) => {
     expect(() => optionalNumber({ before }, "before")).toThrow("Invalid request");
+  });
+  it("requires an explicit boolean for default sub-agent selection", () => {
+    expect(booleanField({ includeDefaultSubagents: true }, "includeDefaultSubagents")).toBe(true);
+    expect(booleanField({ includeDefaultSubagents: false }, "includeDefaultSubagents")).toBe(false);
+    for (const value of [undefined, null, "true", 1]) expect(() => booleanField({ includeDefaultSubagents: value }, "includeDefaultSubagents")).toThrow("Invalid request");
+  });
+  it("lets an owned creation retry reuse its assigned account without a new exchange lookup", async () => {
+    const requestId = "11111111-1111-1111-1111-111111111111";
+    const address = `0x${"a".repeat(40)}`;
+    const list = vi.fn().mockResolvedValue([{ creationRequestId: requestId, tradingAccountAddress: address }]);
+    const choices = vi.fn();
+    const app = { agents: { list }, hyperliquid: { tradingAccountChoices: choices } } as unknown as AppRuntime;
+    const user = { id: "owner", walletAddress: address.toUpperCase() };
+    expect(await selectedTradingAccount(app, user, "main", requestId)).toBe(address);
+    expect(list).toHaveBeenCalledWith("owner");
+    expect(choices).not.toHaveBeenCalled();
+    await expect(selectedTradingAccount(app, user, `0x${"b".repeat(40)}`, requestId)).rejects.toMatchObject({ status: 409 });
   });
   it("requires a fresh authenticated identity for every operation", async () => {
     const headers = new Headers();

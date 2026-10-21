@@ -6,5 +6,5 @@ export const Route = createFileRoute("/_authenticated/agents/$agentId/sub-agents
 });
 function Page() {
   const result = Route.useLoaderData(), { agentId } = Route.useParams();
-  return result.ok ? <SubagentsPage agentId={agentId} definitions={result.data} /> : <p role="alert" className="text-red-300">{result.error}</p>;
+  return result.ok ? <SubagentsPage key={agentId} agentId={agentId} definitions={result.data} /> : <p role="alert" className="text-red-300">{result.error}</p>;
 }

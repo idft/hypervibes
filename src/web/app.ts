@@ -14,6 +14,13 @@ import { runMiddleware } from "./middleware.js";
 import { loadStart } from "./start.js";
 import type { StartApplication } from "./start.js";
 
+declare module "fastify" {
+  interface FastifyInstance {
+    /** Drains agent execution before closing HTTP connections and application resources. */
+    shutdown(): Promise<void>;
+  }
+}
+
 interface AppOptions {
   logger?: boolean;
   development?: boolean;
@@ -63,6 +70,11 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
     try { await web?.close(); }
     finally { await runtime.close(options.forceShutdown); }
   });
+  let shuttingDown: Promise<void> | undefined;
+  app.decorate("shutdown", () => shuttingDown ??= (async () => {
+    try { await runtime.agents.drain(options.forceShutdown); }
+    finally { await app.close(); }
+  })());
 
   try {
     const development = options.development ?? false;

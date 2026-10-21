@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
   "id": "basic-trading",
-  "version": 8,
+  "version": 9,
   "name": "Trader",
   "description": "Unscheduled execution and position management for operator requests, research evaluations and account events. Sizing and TP/SL follow configured instructions; the host enforces the Agent's risk settings.",
   "instructions": [
@@ -35,7 +35,7 @@
   "defaults": {
     "persistent": false,
     "enabled": false,
-    "completion": "notify",
+    "completion": "save",
     "timeoutSeconds": 900,
     "schedule": "",
     "delaySeconds": 1,

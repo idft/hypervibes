@@ -12,13 +12,15 @@ export interface CreateSubaccountResult { ok: boolean; error?: string; data?: { 
 export function CreateAgentPage({ choices, models, create, createSubaccount }: {
   choices: TradingAccountChoices;
   models: ModelChoice[];
-  create: (name: string, requestId: string, accountSelection: string, model: ModelChoice) => Promise<CreateAgentResult>;
+  create: (name: string, requestId: string, accountSelection: string, model: ModelChoice, includeDefaultSubagents: boolean, thinkingLevel: string) => Promise<CreateAgentResult>;
   createSubaccount: (name: string) => Promise<CreateSubaccountResult>;
 }) {
   const router = useRouter();
   const [name, setName] = useState("");
   const [selection, setSelection] = useState<string>("main");
   const [selectedModel, setSelectedModel] = useState("");
+  const [thinkingLevel, setThinkingLevel] = useState("");
+  const [includeDefaultSubagents, setIncludeDefaultSubagents] = useState(true);
   const model = models.find((choice) => modelKey(choice) === selectedModel);
   const [pending, setPending] = useState(false);
   const [subaccountPending, setSubaccountPending] = useState(false);
@@ -37,9 +39,9 @@ export function CreateAgentPage({ choices, models, create, createSubaccount }: {
     setPending(true);
     setError("");
     try {
-      const settings = JSON.stringify([trimmed, selection, selectedModel]);
+      const settings = JSON.stringify([trimmed, selection, selectedModel, includeDefaultSubagents, thinkingLevel]);
       if (request.current?.settings !== settings) request.current = { settings, id: crypto.randomUUID() };
-      const result = await create(trimmed, request.current.id, selection, model);
+      const result = await create(trimmed, request.current.id, selection, model, includeDefaultSubagents, thinkingLevel);
       if (!result.ok || !result.data) { setError(result.error ?? "Unable to create Agent"); return; }
       window.location.assign(`/agents/${result.data.id}`);
     } catch {
@@ -91,7 +93,7 @@ export function CreateAgentPage({ choices, models, create, createSubaccount }: {
             className="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white placeholder-zinc-600 focus:border-zinc-600 focus:outline-none" />
         </div>
 
-        <ModelPicker choices={models} value={selectedModel} onChange={setSelectedModel} disabled={pending} />
+        <ModelPicker choices={models} value={selectedModel} thinkingLevel={thinkingLevel} onChange={(value, thinking) => { setSelectedModel(value); setThinkingLevel(thinking); }} disabled={pending} />
         <a href="/providers" className="block cursor-pointer text-xs text-violet-300 hover:underline">Manage provider connections</a>
 
         <fieldset>
@@ -121,6 +123,14 @@ export function CreateAgentPage({ choices, models, create, createSubaccount }: {
             </div>
           </div>
         </fieldset>
+
+        <div>
+          <label className="flex cursor-pointer items-center gap-3 text-sm font-medium text-zinc-300">
+            <input type="checkbox" checked={includeDefaultSubagents} disabled={pending} onChange={(event) => setIncludeDefaultSubagents(event.target.checked)} aria-describedby="default-subagents-description" className="cursor-pointer accent-violet-500" />
+            Include default sub-agents
+          </label>
+          <p id="default-subagents-description" className="mt-2 text-sm text-zinc-500">Adds a connected Technical Analyst, Trader, and Daily Reviewer. All start paused.</p>
+        </div>
 
         {error && <p role="alert" className="rounded-2xl border border-red-900/60 bg-red-950/20 p-4 text-sm text-red-300">{error}</p>}
 

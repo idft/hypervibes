@@ -18,7 +18,7 @@ function CreateAgentRoute() {
     <CreateAgentPage
       choices={Route.useLoaderData().choices}
       models={Route.useLoaderData().models}
-      create={(name, requestId, accountSelection, model) => createAgent({ data: { name, requestId, accountSelection, provider: model.provider, modelId: model.modelId } })}
+      create={(name, requestId, accountSelection, model, includeDefaultSubagents, thinkingLevel) => createAgent({ data: { name, requestId, accountSelection, provider: model.provider, modelId: model.modelId, includeDefaultSubagents, thinkingLevel } })}
       createSubaccount={(name) => createAgentSubaccount({ data: { name } })}
     />
   );

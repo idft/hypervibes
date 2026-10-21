@@ -49,9 +49,9 @@ describe("bundled editable worker manifests", () => {
     expect(draft).toMatchObject({ enabled: false, schedule: "15m", delaySeconds: 1, completion: "save" });
     expect(draft.instructions).toContain("use 15m candles");
   });
-  it("defaults the trader to account event subscriptions while remaining paused and unlinked to other workers", () => {
+  it("defaults the trader to save-only completion and account event subscriptions while remaining paused and unlinked to other workers", () => {
     const draft = templateDraft("basic-trading", { provider: "operator-selected", modelId: "operator-model", thinkingLevel: "" });
-    expect(draft).toMatchObject({ enabled: false, schedule: "", triggers: { inboxEnabled: true, fills: true, orderChanges: true, researchSources: [], workerDelegates: [] } });
+    expect(draft).toMatchObject({ enabled: false, completion: "save", schedule: "", triggers: { inboxEnabled: true, fills: true, orderChanges: true, researchSources: [], workerDelegates: [] } });
     expect(subagentInput(draft).triggers).toEqual(draft.triggers);
   });
   it.each(subagentTemplates)("inherits only model fields from a full parent record for $id", (template) => {

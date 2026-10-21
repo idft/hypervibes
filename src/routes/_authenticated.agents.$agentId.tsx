@@ -12,13 +12,13 @@ const agentNavExpanded = createServerFn({ method: "GET" }).handler(() => {
 
 export const Route = createFileRoute("/_authenticated/agents/$agentId")({
   loader: async ({ params }) => {
-    const [result, navExpanded] = await Promise.all([getAgent({ data: { id: params.agentId } }), agentNavExpanded()]);
-    return { result, navExpanded };
+    const [agent, navExpanded] = await Promise.all([getAgent({ data: { id: params.agentId } }), agentNavExpanded()]);
+    return { agent, navExpanded };
   },
   component: AgentRoute,
 });
 
 function AgentRoute() {
-  const { result, navExpanded } = Route.useLoaderData();
-  return result.ok ? <AgentLayout key={result.data.id} agent={result.data} initialExpanded={navExpanded} /> : <p role="alert" className="text-red-300">{result.error}</p>;
+  const { agent, navExpanded } = Route.useLoaderData();
+  return <AgentLayout key={agent.id} agent={agent} initialExpanded={navExpanded} />;
 }

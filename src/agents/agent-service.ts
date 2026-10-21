@@ -3,7 +3,7 @@ import { createHyperliquidExtension } from "../hyperliquid/durable-extension.js"
 import type { HyperliquidService } from "../hyperliquid/service.js";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import type { JsonRepresentation } from "@earendil-works/chord";
-import type { Models } from "@earendil-works/pi-ai/models";
+import { getSupportedThinkingLevels, type Models } from "@earendil-works/pi-ai/models";
 import { estimateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
 import { createRegistry, Harness, InboxDoc, LiveDoc, UsageDoc, type EntryId, type TaskId, type UsageState, type UserInput } from "@earendil-works/pi-durable";
 import type { Conversation, ConversationView, EntryRecord, InboxState, LiveState, ModelRef } from "@earendil-works/pi-durable";
@@ -18,6 +18,9 @@ import { ResearchService } from "../research/research-service.js";
 
 import { AgentError, agentId, agentName, chatMessage, harnessPrefix, requestId } from "./agent-input.js";
 import { SubagentService } from "./subagent-service.js";
+import { insertDefaultSubagents } from "./default-subagents.js";
+import { hvSubagents } from "../db/subagent-schema.js";
+import { defaultMainInstructions, mainToolNames } from "./subagent-input.js";
 import { createMemoryExtension } from "../memory/durable-extension.js";
 import { ExecutionContextService } from "./execution-context.js";
 import { createOrchestratorInsightsExtension } from "./orchestrator-insights.js";
@@ -28,7 +31,7 @@ import type { ProviderService } from "../providers/provider-service.js";
 const legacyModel: ModelRef = { provider: "opencode-go", modelId: "deepseek-v4.1-flash" };
 
 /** How long shutdown waits for in-flight agent jobs to complete before aborting the rest. */
-const SHUTDOWN_IN_FLIGHT_GRACE_MS = 120_000;
+const SHUTDOWN_IN_FLIGHT_GRACE_MS = 300_000;
 
 /** The plain text of a queued user input. */
 function userText(content: JsonRepresentation<UserInput>): string {
@@ -98,6 +101,7 @@ export class AgentService {
   private readonly feedShutdown = new AbortController();
   private readonly feeds = new Set<Promise<void>>();
   private stopping = false;
+  private draining?: Promise<void>;
   private scheduling = false;
   private closing?: Promise<void>;
   private resuming: Promise<void> = Promise.resolve();
@@ -121,20 +125,20 @@ export class AgentService {
     return Boolean(model && (this.options.models || await this.providers.configured(agent.userId, model)));
   }
   async providersChanged(userId: string) {
-    if (this.stopping) return;
+    if (this.stopping || this.draining) return;
     for (const agent of await this.list(userId)) {
       const current = this.running.get(agent.id);
-      if (current && this.scheduling && await this.configured(agent, current) && !this.stopping) current.harness.resume();
+      if (current && this.scheduling && await this.configured(agent, current) && !this.stopping && !this.draining) current.harness.resume();
       this.notify(agent.id);
     }
   }
-  private admit() { if (this.stopping) throw new AgentError("Agent execution is shutting down", 503); }
+  private admit(readOnly = false) { if (this.stopping || (!readOnly && this.draining)) throw new AgentError("Agent execution is shutting down", 503); }
   async list(userId: string) {
-    this.admit();
+    this.admit(true);
     return this.db.select().from(hvAgents).where(eq(hvAgents.userId, userId)).orderBy(desc(hvAgents.createdAt)).all();
   }
   async owned(userId: string, id: string) {
-    this.admit();
+    this.admit(true);
     const row = await this.db.select().from(hvAgents).where(and(eq(hvAgents.id, agentId(id)), eq(hvAgents.userId, userId))).get();
     if (!row) throw new AgentError("Agent not found", 404);
     return row;
@@ -149,21 +153,38 @@ export class AgentService {
     return false;
   }
 
-  async create(userId: string, name: string, creationRequestId: string, tradingAccountAddress: string, selection?: ModelRef) {
+  async create(userId: string, name: string, creationRequestId: string, tradingAccountAddress: string, selection?: ModelRef, includeDefaultSubagents = false, thinkingLevel = "") {
     this.admit();
     name = agentName(name);
     creationRequestId = requestId(creationRequestId);
+    if (typeof includeDefaultSubagents !== "boolean") throw new AgentError("Invalid default sub-agent selection");
     if (typeof tradingAccountAddress !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(tradingAccountAddress)) throw new AgentError("A linked Hyperliquid trading account is required.");
     const account = tradingAccountAddress.toLowerCase();
     const model = this.options.models ? selection ?? this.options.model ?? legacyModel : await this.providers.validate(userId, selection);
+    if (typeof thinkingLevel !== "string") throw new AgentError("Select a supported thinking level.");
+    if (thinkingLevel) {
+      const catalog = (await this.models(userId)).getModel(model.provider, model.modelId);
+      if (!catalog || !getSupportedThinkingLevels(catalog).some((level) => level === thinkingLevel)) throw new AgentError("Select a supported thinking level.");
+    }
     const now = Date.now();
     let agent: AgentRow | undefined;
     try {
-      const [row] = await this.db.insert(hvAgents).values({
-        id: randomUUID(), userId, name, creationRequestId, tradingAccountAddress: account,
-        initialProvider: model.provider, initialModelId: model.modelId, createdAt: now, updatedAt: now,
-      }).onConflictDoNothing({ target: [hvAgents.userId, hvAgents.creationRequestId] }).returning().all();
-      agent = row ?? await this.db.select().from(hvAgents).where(and(eq(hvAgents.userId, userId), eq(hvAgents.creationRequestId, creationRequestId))).get();
+      agent = await this.database.appTransaction(async (db) => {
+        const [row] = await db.insert(hvAgents).values({
+          id: randomUUID(), userId, name, creationRequestId, tradingAccountAddress: account,
+          initialProvider: model.provider, initialModelId: model.modelId, createdAt: now, updatedAt: now,
+        }).onConflictDoNothing({ target: [hvAgents.userId, hvAgents.creationRequestId] }).returning().all();
+        // Only the winning creation seeds defaults. Retries never backfill or
+        // recreate workers, even if the operator has since edited/archived them.
+        if (row) {
+          await db.insert(hvSubagents).values({
+            id: `main:${row.id}`, agentId: row.id, kind: "orchestrator", name: "Orchestrator", description: "Main conversation", instructions: defaultMainInstructions,
+            provider: model.provider, modelId: model.modelId, thinkingLevel, tools: mainToolNames, createdAt: now, updatedAt: now,
+          }).run();
+          if (includeDefaultSubagents) await insertDefaultSubagents(db, row.id, creationRequestId, { ...model, thinkingLevel });
+        }
+        return row ?? await db.select().from(hvAgents).where(and(eq(hvAgents.userId, userId), eq(hvAgents.creationRequestId, creationRequestId))).get();
+      });
     } catch (error) {
       // The unique trading-account index is the one domain conflict the caller
       // can resolve; every other failure must surface as a retryable error.
@@ -260,9 +281,9 @@ export class AgentService {
   private async resumeConfigured() {
     const agents = await this.db.select().from(hvAgents).all();
     for (const agent of agents) {
-      if (this.stopping) return;
+      if (this.stopping || this.draining) return;
       const current = this.running.get(agent.id);
-      if (current && await this.configured(agent, current) && !this.stopping) current.harness.resume();
+      if (current && await this.configured(agent, current) && !this.stopping && !this.draining) current.harness.resume();
     }
   }
   async recover() {
@@ -351,7 +372,7 @@ export class AgentService {
   }
   /** Pushes committed snapshots; no SQL reads are needed for conversation updates. */
   async watchChat(userId: string, id: string, signal: AbortSignal, publish: (chat: AgentChat) => void): Promise<void> {
-    this.admit();
+    this.admit(true);
     id = agentId(id);
     const lifetime = AbortSignal.any([signal, this.feedShutdown.signal]);
     let finish!: () => void;
@@ -441,11 +462,13 @@ export class AgentService {
     });
   }
   async stop(userId: string, id: string) {
+    this.admit();
     const agent = await this.owned(userId, id);
     await this.running.get(agent.id)?.main.abort(context);
   }
   /** Starts a fresh model context; the earlier transcript stays durable and browsable through `chatHistory`. */
   async reset(userId: string, id: string) {
+    this.admit();
     const agent = await this.owned(userId, id);
     const current = this.running.get(agent.id);
     if (!current) throw new AgentError("Agent is unavailable. Retry initialization.", 503);
@@ -453,6 +476,7 @@ export class AgentService {
   }
   /** Manually compacts the visible transcript into a summary entry. */
   async compact(userId: string, id: string): Promise<{ message?: string }> {
+    this.admit();
     const agent = await this.owned(userId, id);
     if (!this.scheduling) throw new AgentError("Agent execution is not ready", 503);
     const current = this.running.get(agent.id);
@@ -488,16 +512,25 @@ export class AgentService {
       more: page.items.length === 100,
     };
   }
+  /** Seals execution admission while keeping read access and live feeds available to the web host. */
+  drain(force?: AbortSignal) {
+    if (this.draining) return this.draining;
+    const subagents = this.subagents.drain();
+    return this.draining = (async () => {
+      await this.resuming;
+      await subagents;
+      await Promise.allSettled(this.opening.values());
+      await this.drainInFlight(force);
+    })();
+  }
   close(force?: AbortSignal) {
+    const drained = this.drain(force);
     this.stopping = true;
     this.feedShutdown.abort();
     return this.closing ??= (async () => {
-      await this.resuming;
-      await this.subagents.close();
-      await Promise.all(this.feeds);
-      await Promise.allSettled(this.opening.values());
-      await this.drainInFlight(force);
-      const results = await Promise.allSettled([...this.running.values()].map(({ harness }) => harness.close(context)));
+      const drainResults = await Promise.allSettled([drained]);
+      const feedResults = await Promise.allSettled([this.subagents.close(), Promise.all(this.feeds)]);
+      const results = [...drainResults, ...feedResults, ...await Promise.allSettled([...this.running.values()].map(({ harness }) => harness.close(context)))];
       for (const id of this.running.keys()) { this.execution.unbind(id); this.subagents.unbind(id); }
       this.running.clear();
       const errors = results.filter((result) => result.status === "rejected").map((result) => result.reason as unknown);
