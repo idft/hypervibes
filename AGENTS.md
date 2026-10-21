@@ -34,8 +34,12 @@ legacy Rust code. See `pi.md` for design research and history; use the root
   runtime at startup (`src/db/migrations.ts`) — never by drizzle-kit directly.
 * **Agent execution:** Pi Durable (`@earendil-works/pi-durable`) is integrated.
   Each application agent owns a harness using per-agent table prefixes
-  (`pi_<agentid>_…`). Never read or write Pi's private tables directly; use the
-  application services (`src/agents/`, `src/harness/`).
+  (`pi_<agentid>_…`). Application code must never read or write Pi's private
+  tables directly; use the application services (`src/agents/`, `src/harness/`)
+  and Pi's public APIs. Coding agents may inspect those tables read-only for
+  diagnostic debugging of development runs, scoped to the relevant agent/run.
+  This diagnostic exception does not permit writes or application dependencies
+  on Pi's internal schema.
 * **Domain features implemented so far:** per-user provider connections and model
   catalog (`src/providers/`, `src/model_catalog/`), agent dashboard/chat with
   history and compaction, configurable sub-agents with schedules and delegation
@@ -46,22 +50,34 @@ legacy Rust code. See `pi.md` for design research and history; use the root
 
 The dev database is a single SQLite file (no PostgreSQL, no containers):
 
-* **Location:** `data/hypervibes.sqlite`, set by `APP_SQLITE_PATH` in `.env`
-  (defaults to that path). The schema is created/migrated on server startup.
+* **Location:** `APP_SQLITE_PATH` overrides the OS-dependent default. Consult
+  `defaultDatabasePath` in `src/config.ts` for the authoritative resolution:
+  * Linux/other Unix: `$XDG_DATA_HOME/hypervibes/hypervibes.sqlite` when
+    `XDG_DATA_HOME` is absolute; otherwise
+    `$HOME/.local/share/hypervibes/hypervibes.sqlite`.
+  * macOS: `$HOME/Library/Application Support/HyperVibes/hypervibes.sqlite`.
+  * Windows: `%APPDATA%\HyperVibes\hypervibes.sqlite` when `APPDATA` is absolute;
+    otherwise `<home>\AppData\Roaming\HyperVibes\hypervibes.sqlite`.
+  The dev server loads `.env`; relative path overrides resolve from the repo
+  root. The schema is created/migrated on server startup.
 * **Read-only inspection with the sqlite3 CLI is fine while the server runs**
   (the database is in WAL mode, so concurrent readers are safe):
   ```sh
-  sqlite3 -readonly data/hypervibes.sqlite '.tables'
-  sqlite3 -readonly data/hypervibes.sqlite 'select * from hv_agents;'
+  # Set DB to the resolved database file path described above.
+  sqlite3 -readonly "$DB" '.tables'
+  sqlite3 -readonly "$DB" 'select * from hv_agents;'
   ```
 * Application tables are prefixed `hv_`; better-auth owns its user/session tables.
-  Agent harness tables use `pi_<agentid>_` prefixes — treat them as opaque and
-  never modify them by hand.
+  Agent harness tables use per-agent `pi_..._` prefixes (see `harnessPrefix` in
+  `src/agents/agent-input.ts`). Coding agents may inspect them read-only for
+  development diagnostics after checking the installed Pi storage schema and
+  scoping queries to the relevant agent/run. Never modify them by hand.
 * Never run write statements against the live dev database from scripts, tests,
   or ad-hoc commands. Tests must use disposable SQLite files (`src/test-config.ts`).
 * If the server is not running, the file is still readable, but prefer the
-  `-readonly` flag regardless. A stale `data/hypervibes.sqlite.lock` usually means
-  the app is running or did not shut down cleanly.
+  `-readonly` flag regardless. A lock file alongside the resolved database may
+  mean the app is running or did not shut down cleanly; never remove it as part
+  of inspection.
 
 ## Legacy Rust application (reference only)
 
