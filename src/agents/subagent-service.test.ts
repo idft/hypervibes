@@ -100,6 +100,18 @@ describe("subagent definitions, execution and scheduling", () => {
     expect(summaries[0]?.runs.map((run) => run.id)).toEqual(["dashboard-run-6"]);
     expect(summaries[0]?.runs.every((run) => run.result.length === 240 && !("config" in run) && !("task" in run))).toBe(true);
     expect(summaries[1]?.runs).toEqual([]);
+    for (const status of ["queued", "running"] as const) {
+      await runtime.db.insert(hvSubagentRuns).values({
+        id: `dashboard-${status}`, agentId: agent.id, subagentId: worker.id, requestId: randomUUID(),
+        source: "manual", task: "New assignment", config: worker, status, result: "", createdAt: status === "queued" ? 7 : 8,
+      }).run();
+      const active = await runtime.agents.subagents.dashboard("owner", agent.id);
+      expect(active[0]?.runs.map((run) => run.id)).toEqual([`dashboard-${status}`, "dashboard-run-6"]);
+      if (status === "queued") await runtime.db.delete(hvSubagentRuns).where(eq(hvSubagentRuns.id, "dashboard-queued")).run();
+    }
+    await runtime.db.update(hvSubagentRuns).set({ status: "completed", result: "New summary" }).where(eq(hvSubagentRuns.id, "dashboard-running")).run();
+    const completed = await runtime.agents.subagents.dashboard("owner", agent.id);
+    expect(completed[0]?.runs.map((run) => [run.id, run.result])).toEqual([["dashboard-running", "New summary"]]);
     await expect(runtime.agents.subagents.dashboard("other", agent.id)).rejects.toMatchObject({ status: 404 });
   });
 

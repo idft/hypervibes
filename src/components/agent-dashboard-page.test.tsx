@@ -88,6 +88,19 @@ describe("Agent dashboard", () => {
     expect(section.textContent).toContain("No runs yet.");
     expect(section.textContent).toContain("Paused");
   });
+  it("keeps the previous summary visible alongside an active run until completion", async () => {
+    const previous = { id: "previous", status: "completed" as const, createdAt: 1, result: "Previous summary" };
+    const worker = { id: "worker", name: "Research", enabled: true, schedule: "", nextRunAt: null };
+    for (const status of ["queued", "running", "completed"] as const) {
+      const current = { id: "current", status, createdAt: 2, result: status === "completed" ? "New summary" : "" };
+      await act(async () => root.render(<AgentDashboardPage id="fixture" initial={initial} subagents={[{ ...worker, runs: [current, previous] }]} />));
+      const section = container.querySelector('[aria-label="Sub-agents"]')!;
+      expect(section.querySelector(`[aria-label="${status}"]`)).not.toBeNull();
+      expect(section.textContent?.includes("Previous summary")).toBe(status !== "completed");
+      expect(section.textContent?.includes("New summary")).toBe(status === "completed");
+      expect(section.querySelectorAll('a[href*="/runs/"]')).toHaveLength(status === "completed" ? 1 : 2);
+    }
+  });
   it("opens the manual assignment dialog from an icon-only button and retries with the same request ID", async () => {
     await act(async () => root.render(<AgentDashboardPage id="fixture" initial={initial} subagents={[{ id: "worker", name: "Research", enabled: false, schedule: "", nextRunAt: null, runs: [] }]} />));
     const button = container.querySelector<HTMLButtonElement>('[aria-label="Run now: Research"]')!;

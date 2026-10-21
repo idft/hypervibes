@@ -160,6 +160,10 @@ export class SubagentService {
       for (const definition of definitions) {
         const { id, status, createdAt, result } = hvSubagentRuns;
         const runs = await db.select({ id, status, createdAt, result: sql<string>`substr(${result}, 1, 240)` }).from(hvSubagentRuns).where(and(eq(hvSubagentRuns.agentId, agentId), eq(hvSubagentRuns.subagentId, definition.id))).orderBy(desc(createdAt), desc(id)).limit(1).all();
+        if (runs[0]?.status === "running" || runs[0]?.status === "queued") {
+          const previous = await db.select({ id, status, createdAt, result: sql<string>`substr(${result}, 1, 240)` }).from(hvSubagentRuns).where(and(eq(hvSubagentRuns.agentId, agentId), eq(hvSubagentRuns.subagentId, definition.id), sql`${status} not in ('running', 'queued')`)).orderBy(desc(createdAt), desc(id)).limit(1).all();
+          runs.push(...previous);
+        }
         summaries.push({ ...definition, runs });
       }
       return summaries;
