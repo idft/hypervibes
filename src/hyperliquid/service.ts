@@ -9,7 +9,7 @@ import type { JournalService } from "./journal-service.js";
 import { loadAgentDashboard, type AgentDashboard } from "./agent-dashboard.js";
 import { LiveDashboards, type AccountFeedFactory } from "./live-dashboard.js";
 import { agentId } from "../agents/agent-input.js";
-import { and, eq, isNotNull, isNull } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { privateKeyToAccount } from "viem/accounts";
 import type { EncryptionKeySetting } from "../config.js";
 import type { ApplicationDatabase } from "../db/shared-database.js";
@@ -140,15 +140,15 @@ export class HyperliquidService {
 
   /** Reconciles journal and live feeds with the linked trading accounts.
    * Called once at start and on every account-linking event; failures retry. */
-  reconcileLinkedAccounts(): Promise<void> {
-    this.reconcileChain = this.reconcileChain.then(async () => {
+  reconcileLinkedAccounts(strict = false): Promise<void> {
+    const reconciliation = this.reconcileChain.then(async () => {
       if (this.stopped) return;
       try {
         const rows = await this.db.select({ address: hvAgents.tradingAccountAddress }).from(hvAgents)
-          .where(isNotNull(hvAgents.tradingAccountAddress)).all();
+          .where(and(isNotNull(hvAgents.tradingAccountAddress), sql`${hvAgents.state} NOT IN ('stopping', 'stopped')`)).all();
         if (this.stopped) return;
         const addresses = rows.flatMap((row) => row.address ? [row.address] : []);
-        this.journal?.reconcile(addresses);
+        await this.journal?.reconcile(addresses);
         await this.live.reconcile(addresses);
         this.log?.debug({ accounts: addresses.length }, "Reconciled linked Hyperliquid accounts");
       } catch (error: unknown) {
@@ -157,9 +157,11 @@ export class HyperliquidService {
           this.reconcileTimer = setTimeout(() => { void this.reconcileLinkedAccounts(); }, 30_000);
           this.reconcileTimer.unref();
         }
+        if (strict) throw error;
       }
     });
-    return this.reconcileChain;
+    this.reconcileChain = reconciliation.catch(() => {});
+    return reconciliation;
   }
 
   async close() {
@@ -173,13 +175,14 @@ export class HyperliquidService {
   private async dashboardAccount(userId: string, id: string) {
     const agent = await this.db.select().from(hvAgents).where(and(eq(hvAgents.id, agentId(id)), eq(hvAgents.userId, userId))).get();
     if (!agent) throw new HyperliquidError("Agent not found", 404);
+    if (agent.state === "stopping" || agent.state === "stopped") throw new HyperliquidError("Agent is being deleted", 409);
     if (!agent.tradingAccountAddress) throw new HyperliquidError("Agent is missing its required Hyperliquid account", 409);
     return agent.tradingAccountAddress;
   }
 
   /** Internal Agent-bound research capability; no exchange mutation or signing. */
   async catchUpJournal(id: string, end: number, signal?: AbortSignal) {
-    const agent = await this.db.select({ account: hvAgents.tradingAccountAddress }).from(hvAgents).where(eq(hvAgents.id, id)).get();
+    const agent = await this.db.select({ account: hvAgents.tradingAccountAddress }).from(hvAgents).where(and(eq(hvAgents.id, id), sql`${hvAgents.state} NOT IN ('stopping', 'stopped')`)).get();
     if (!agent?.account) throw new HyperliquidError("Agent has no trading account", 409);
     return this.journal ? this.journal.ensureThrough(agent.account, end, signal) : { attempted: false, limitation: "Journal synchronization is unavailable" };
   }

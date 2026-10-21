@@ -6,11 +6,11 @@ import { hvSubagents, hvSubagentRuns } from "./subagent-schema.js";
 import type { PublicationInput } from "../memory/memory-contracts.js";
 
 export const hvMemoryCounters = sqliteTable("hv_memory_counters", {
-  agentId: text("agent_id").primaryKey().references(() => hvAgents.id, { onDelete: "restrict" }),
+  agentId: text("agent_id").primaryKey().references(() => hvAgents.id, { onDelete: "cascade" }),
   nextNumber: integer("next_number").notNull().default(1),
 }, (t) => [check("hv_memory_counter_positive", sql`${t.nextNumber} BETWEEN 1 AND 9007199254740991`)]);
 export const hvMemories = sqliteTable("hv_memories", {
-  agentId: text("agent_id").notNull().references(() => hvAgents.id, { onDelete: "restrict" }), number: integer("number").notNull(),
+  agentId: text("agent_id").notNull().references(() => hvAgents.id, { onDelete: "cascade" }), number: integer("number").notNull(),
   kind: text("kind", { enum: ["research", "decision", "review"] }).notNull(), topic: text("topic").notNull(), instrument: text("instrument"), interval: text("interval"),
   summary: text("summary").notNull(), content: text("content").notNull(), payload: text("payload", { mode: "json" }).$type<PublicationInput["payload"]>().notNull(),
   createdAt: integer("created_at").notNull(), evidenceAsOf: integer("evidence_as_of"), validUntil: integer("valid_until"),
@@ -35,7 +35,7 @@ export const hvMemoryLinks = sqliteTable("hv_memory_links", {
   agentId: text("agent_id").notNull(), sourceNumber: integer("source_number").notNull(), targetNumber: integer("target_number").notNull(), relation: text("relation").notNull(),
 }, (t) => [
   primaryKey({ columns: [t.agentId, t.sourceNumber, t.targetNumber, t.relation] }),
-  foreignKey({ columns: [t.agentId, t.sourceNumber], foreignColumns: [hvMemories.agentId, hvMemories.number] }),
+  foreignKey({ columns: [t.agentId, t.sourceNumber], foreignColumns: [hvMemories.agentId, hvMemories.number] }).onDelete("cascade"),
   foreignKey({ columns: [t.agentId, t.targetNumber], foreignColumns: [hvMemories.agentId, hvMemories.number] }),
   check("hv_memory_link_backward", sql`${t.targetNumber} < ${t.sourceNumber}`),
   check("hv_memory_link_relation", sql`${t.relation} IN ('based_on','corrects','supersedes','reviews')`),
@@ -44,11 +44,11 @@ export const hvMemoryArtifacts = sqliteTable("hv_memory_artifacts", {
   agentId: text("agent_id").notNull(), memoryNumber: integer("memory_number").notNull(), artifactId: text("artifact_id").notNull(),
 }, (t) => [
   primaryKey({ columns: [t.agentId, t.memoryNumber, t.artifactId] }),
-  foreignKey({ columns: [t.agentId, t.memoryNumber], foreignColumns: [hvMemories.agentId, hvMemories.number] }),
+  foreignKey({ columns: [t.agentId, t.memoryNumber], foreignColumns: [hvMemories.agentId, hvMemories.number] }).onDelete("cascade"),
   foreignKey({ columns: [t.agentId, t.artifactId], foreignColumns: [hvArtifacts.agentId, hvArtifacts.id] }),
   index("hv_memory_artifacts_evidence_idx").on(t.agentId, t.artifactId),
 ]);
 export const hvMemoryOperations = sqliteTable("hv_memory_operations", {
-  agentId: text("agent_id").notNull().references(() => hvAgents.id), operationKey: text("operation_key").notNull(),
+  agentId: text("agent_id").notNull().references(() => hvAgents.id, { onDelete: "cascade" }), operationKey: text("operation_key").notNull(),
   operationKind: text("operation_kind").notNull(), requestHash: text("request_hash").notNull(), result: text("result").notNull(), createdAt: integer("created_at").notNull(),
 }, (t) => [primaryKey({ columns: [t.agentId, t.operationKey] })]);

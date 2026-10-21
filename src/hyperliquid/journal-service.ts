@@ -102,8 +102,9 @@ export class JournalService {
   private readonly eventTasks = new Set<Promise<void>>();
   constructor(private readonly db: SharedDatabase, private readonly fetchHistory: HistoryFetcher, private readonly log?: FastifyBaseLogger, private readonly feedFactory?: JournalFeedFactory) {}
 
-  reconcile(addresses: string[]) {
+  async reconcile(addresses: string[]) {
     if (this.stopped) return;
+    const retiring: Promise<unknown>[] = [];
     const desired = new Set(addresses.map((a) => a.toLowerCase()));
     if (desired.size > 0 && this.workers.size === 0) this.log?.info({ accounts: desired.size }, "Synchronizing trade journals");
     for (const [account, worker] of this.workers) if (!desired.has(account)) {
@@ -111,14 +112,17 @@ export class JournalService {
       clearTimeout(worker.feedTimer);
       clearTimeout(worker.dailyTimer);
       const feed = worker.feed;
-      worker.feed = undefined;
-      void feed?.close();
-      void worker.task?.finally(() => { if (this.workers.get(account) === worker) this.workers.delete(account); });
+      retiring.push((async () => {
+        await Promise.all([feed?.close(), worker.task, worker.chain]);
+        worker.feed = undefined;
+        if (this.workers.get(account) === worker) this.workers.delete(account);
+      })());
     }
     for (const account of desired) {
       if (this.workers.has(account)) continue;
       this.workers.set(account, this.createWorker(account));
     }
+    await Promise.all(retiring);
   }
 
   /** One worker per account: an initial and daily full repair scan, exchange

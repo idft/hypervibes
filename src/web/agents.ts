@@ -114,7 +114,7 @@ export const getAgent = createServerFn({ method: "GET" })
   .handler(async ({ context, data }) => {
     const user = await agentUser(context.runtime, getRequestHeaders());
     try {
-      return await context.runtime.agents.owned(user.id, data.id);
+      return await context.runtime.agents.owned(user.id, data.id, true);
     } catch (error) {
       if (isAgentError(error) && error.status === 404) throw notFound();
       throw error;
@@ -140,6 +140,18 @@ export const sendAgentMessage = createServerFn({ method: "POST" })
   .handler(async ({ context, data }) => {
     const user = await agentUser(context.runtime, getRequestHeaders(), true);
     return agentAction(() => context.runtime.agents.send(user.id, data.id, data.message, data.requestId));
+  });
+
+export const deleteAgent = createServerFn({ method: "POST" })
+  .validator((data: unknown) => ({ id: field(data, "id"), confirmation: field(data, "confirmation") }))
+  .handler(async ({ context, data }) => {
+    const user = await agentUser(context.runtime, getRequestHeaders(), true);
+    return agentAction(async () => {
+      const agent = await context.runtime.agents.owned(user.id, data.id, true);
+      if (data.confirmation !== agent.name) throw new AgentError("Type the agent name to confirm deletion.");
+      await context.runtime.agents.delete(user.id, agent.id);
+      return { deleted: true };
+    });
   });
 
 export const retryAgent = createServerFn({ method: "POST" })

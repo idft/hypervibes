@@ -13,8 +13,8 @@ CREATE TABLE `hv_subagent_runs` (
 	`created_at` integer NOT NULL,
 	`finished_at` integer,
 	`reported_at` integer,
-	CONSTRAINT `fk_hv_subagent_runs_agent_id_hv_agents_id_fk` FOREIGN KEY (`agent_id`) REFERENCES `hv_agents`(`id`) ON DELETE RESTRICT,
-	CONSTRAINT `fk_hv_subagent_runs_subagent_id_hv_subagents_id_fk` FOREIGN KEY (`subagent_id`) REFERENCES `hv_subagents`(`id`) ON DELETE RESTRICT
+	CONSTRAINT `fk_hv_subagent_runs_agent_id_hv_agents_id_fk` FOREIGN KEY (`agent_id`) REFERENCES `hv_agents`(`id`) ON DELETE CASCADE,
+	CONSTRAINT `fk_hv_subagent_runs_subagent_id_hv_subagents_id_fk` FOREIGN KEY (`subagent_id`) REFERENCES `hv_subagents`(`id`) ON DELETE CASCADE
 );
 --> statement-breakpoint
 CREATE TABLE `hv_subagents` (
@@ -40,7 +40,7 @@ CREATE TABLE `hv_subagents` (
 	`timeout_seconds` integer DEFAULT 900 NOT NULL,
 	`created_at` integer NOT NULL,
 	`updated_at` integer NOT NULL,
-	CONSTRAINT `fk_hv_subagents_agent_id_hv_agents_id_fk` FOREIGN KEY (`agent_id`) REFERENCES `hv_agents`(`id`) ON DELETE RESTRICT,
+	CONSTRAINT `fk_hv_subagents_agent_id_hv_agents_id_fk` FOREIGN KEY (`agent_id`) REFERENCES `hv_agents`(`id`) ON DELETE CASCADE,
 	CONSTRAINT "hv_subagents_main_protected" CHECK("kind" != 'orchestrator' OR ("enabled" = 1 AND "archived" = 0 AND "schedule" = ''))
 );
 --> statement-breakpoint

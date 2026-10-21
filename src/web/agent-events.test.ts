@@ -75,6 +75,19 @@ describe("Agent chat event stream", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
+  it("immediately closes agent-scoped streams when deletion starts and refuses reconnects", async () => {
+    const agent = await runtime.agents.create("owner", "Research", randomUUID(), `0x${"12".repeat(20)}`);
+    const response = await streams.open(request(agent.id), agent.id);
+    const reader = response.body!.getReader();
+    const buffer = { text: "" };
+    expect((await readEvent(reader, buffer)).event).toBe("chat");
+    await runtime.agents.delete("owner", agent.id);
+    expect((await readEvent(reader, buffer)).event).toBe("unavailable");
+    expect((await reader.read()).done).toBe(true);
+    expect((await streams.open(request(agent.id), agent.id)).status).toBe(404);
+    expect(closeFeed).toHaveBeenCalled();
+  });
+
   it("pushes committed chat snapshots, rejects invalid requests and ends cleanly", { timeout: 30_000 }, async () => {
     expect((await streams.open(new Request("http://localhost:3003/api/agents/x/events", { method: "POST" }), "x")).status).toBe(405);
     expect((await streams.open(request(randomUUID()), randomUUID())).status).toBe(404);

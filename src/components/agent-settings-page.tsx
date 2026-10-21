@@ -3,6 +3,7 @@ import { useId, useState } from "react";
 import { toast } from "sonner";
 import type { AgentChat } from "../agents/agent-service.js";
 import type { RiskSettings } from "../hyperliquid/orders/risk-settings.js";
+import { deleteAgent } from "../web/agents.js";
 import { saveRiskSettings } from "../web/risk.js";
 import { AgentSectionPage } from "./agent-section-page.js";
 import { InstrumentPicker } from "./instrument-picker.js";
@@ -85,13 +86,50 @@ function RiskManagementSection({ agentId, initial }: { agentId: string; initial?
   </section>;
 }
 
+function DeleteAgentSection({ agent }: { agent: AgentChat["agent"] }) {
+  const router = useRouter();
+  const [confirming, setConfirming] = useState(false);
+  const [confirmation, setConfirmation] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function remove() {
+    if (busy || confirmation !== agent.name) return;
+    setBusy(true); setError("");
+    try {
+      const result = await deleteAgent({ data: { id: agent.id, confirmation } });
+      if (!result.ok) throw new Error(result.error);
+      await router.navigate({ to: "/agents" });
+      await router.invalidate();
+      toast.success("Agent deleted");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Deletion incomplete. Retry deletion.");
+    } finally { setBusy(false); }
+  }
+  return <section aria-label="Danger zone" className="rounded-2xl border border-red-900/60 bg-[#0d0d10] p-6">
+    <h2 className="text-lg font-medium text-red-300">Danger zone</h2>
+    <p className="mt-3 text-sm text-zinc-400">Deleting this agent stops its workers, removes its configuration and application history, and releases its Hyperliquid account for reuse. Existing exchange orders and positions are not changed. This cannot be undone.</p>
+    {agent.error && (agent.state === "stopping" || agent.state === "stopped") && <p role="status" className="mt-3 text-sm text-red-300">{agent.error}</p>}
+    {!confirming ? <button type="button" onClick={() => setConfirming(true)} className="mt-4 cursor-pointer rounded-full bg-red-700 px-4 py-2 text-sm text-white hover:bg-red-600">Delete agent</button> : <form className="mt-4 space-y-3" onSubmit={(event) => { event.preventDefault(); void remove(); }}>
+      <label className="block text-sm text-zinc-300">Type <strong>{agent.name}</strong> to confirm deletion
+        <input aria-label="Agent name confirmation" autoComplete="off" value={confirmation} disabled={busy} onChange={(event) => setConfirmation(event.target.value)} className="mt-2 block w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-white" />
+      </label>
+      <div className="flex gap-3">
+        <button type="button" disabled={busy} onClick={() => { setConfirming(false); setConfirmation(""); setError(""); }} className="cursor-pointer rounded-full border border-zinc-700 px-4 py-2 text-sm text-zinc-300 disabled:cursor-not-allowed">Cancel</button>
+        <button type="submit" disabled={busy || confirmation !== agent.name} className="cursor-pointer rounded-full bg-red-700 px-4 py-2 text-sm text-white hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-50">{busy ? "Stopping and deleting…" : "Permanently delete agent"}</button>
+      </div>
+    </form>}
+    {error && <p role="alert" className="mt-3 text-sm text-red-300">{error}</p>}
+  </section>;
+}
+
 export function AgentSettingsPage({ initial, risk }: { initial: AgentChat; risk?: RiskSettings }) {
   return <div className="w-full space-y-2">
     <section className="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
       <h2 className="text-lg font-medium text-white">Settings</h2>
       <dl className="mt-4 grid gap-4 sm:grid-cols-2"><div><dt className="text-xs uppercase tracking-wide text-zinc-500">Trading account</dt><dd className="mt-2 break-all font-mono text-sm text-zinc-300">{initial.agent.tradingAccountAddress ?? "No account linked (chat only)"}</dd></div><div><dt className="text-xs uppercase tracking-wide text-zinc-500">Agent status</dt><dd className="mt-2 text-sm text-zinc-300">{initial.agent.state}</dd></div></dl>
     </section>
-    <RiskManagementSection agentId={initial.agent.id} initial={risk} />
+    {initial.agent.state !== "stopping" && initial.agent.state !== "stopped" && <RiskManagementSection agentId={initial.agent.id} initial={risk} />}
     <AgentSectionPage title="Telegram" description="Connect Telegram to this Agent’s main chat in a future update." />
+    <DeleteAgentSection agent={initial.agent} />
   </div>;
 }

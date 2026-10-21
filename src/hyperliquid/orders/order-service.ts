@@ -27,6 +27,8 @@ export class OrderService {
   private readonly info: InfoClient;
   private readonly locks = new Map<string, Promise<unknown>>();
   private readonly tasks = new Set<Promise<unknown>>();
+  private readonly agentTasks = new Map<string, Set<Promise<unknown>>>();
+  private readonly stoppedAgents = new Set<string>();
   private readonly shutdown = new AbortController();
   private timer?: ReturnType<typeof setTimeout>;
   private started = false;
@@ -68,7 +70,10 @@ export class OrderService {
       try {
         for (const request of await this.store.pendingRequests()) {
           if (this.stopping) break;
-          await this.lock(request.id, () => this.reconcile(request, this.signal()));
+          if (this.stoppedAgents.has(request.agentId)) continue;
+          const agent = await this.database.get<{ state: string }>("SELECT state FROM hv_agents WHERE id=?", request.agentId);
+          if (!agent || agent.state === "stopping" || agent.state === "stopped" || this.stoppedAgents.has(request.agentId)) continue;
+          await this.trackAgent(request.agentId, () => this.lock(request.id, () => this.reconcile(request, this.signal())));
         }
       } catch (error) { this.log?.warn(error, "Order reconciliation pass failed; retrying on the next pass"); }
       finally { if (!this.stopping) { this.timer = setTimeout(() => { void this.track(tick()); }, 15_000); this.timer.unref(); } }
@@ -78,6 +83,23 @@ export class OrderService {
   async close() {
     this.stopping = true; clearTimeout(this.timer); this.shutdown.abort();
     await Promise.allSettled([...this.tasks]);
+  }
+  /** Seal this agent only; join submissions and reconciliation before cascading its records. */
+  async stopAgent(agentId: string) {
+    this.stoppedAgents.add(agentId);
+    await Promise.allSettled([...(this.agentTasks.get(agentId) ?? [])]);
+  }
+  private trackAgent<T>(agentId: string, run: () => Promise<T>): Promise<T> {
+    if (this.stoppedAgents.has(agentId)) return Promise.reject(new HyperliquidError("Agent is being deleted", 409));
+    const tasks = this.agentTasks.get(agentId) ?? new Set<Promise<unknown>>();
+    this.agentTasks.set(agentId, tasks);
+    const task = this.track(run());
+    tasks.add(task);
+    void task.finally(() => {
+      tasks.delete(task);
+      if (!tasks.size) this.agentTasks.delete(agentId);
+    }).catch(() => {});
+    return task;
   }
   private signal(signal?: AbortSignal) { return AbortSignal.any([this.shutdown.signal, AbortSignal.timeout(15_000), ...(signal ? [signal] : [])]); }
   private track<T>(task: Promise<T>): Promise<T> {
@@ -94,6 +116,7 @@ export class OrderService {
   }
   private async account(userId: string, agentId: string) {
     this.admit();
+    if (this.stoppedAgents.has(agentId)) throw new HyperliquidError("Agent is being deleted", 409);
     const address = await this.bindings.account(userId, agentId);
     if (!address || !/^0x[0-9a-fA-F]{40}$/.test(address)) throw new HyperliquidError("This Agent has no valid assigned trading account.", 409);
     return address.toLowerCase();
@@ -142,7 +165,7 @@ export class OrderService {
   private mutate(userId: string, agentId: string, key: string, kind: string, input: unknown, cancellation: AbortSignal | undefined, prepare: (authority: TradingAuthority, signal: AbortSignal) => Promise<PreparedAction[]>, execution?: OrderExecutionHandle): Promise<OperationResult> {
     this.admit(); this.requestKey(key);
     if (!this.started) return Promise.reject(new HyperliquidError("Order execution is not started", 503));
-    return this.track(this.lock(agentId, async () => {
+    return this.trackAgent(agentId, () => this.lock(agentId, async () => {
       const account = await this.account(userId, agentId);
       const signal = this.signal(cancellation);
       signal.throwIfAborted();
@@ -233,12 +256,12 @@ export class OrderService {
   }
   request(userId: string, agentId: string, key: string, cancellation?: AbortSignal): Promise<OperationResult> {
     this.admit(); this.requestKey(key);
-    return this.track((async () => {
+    return this.trackAgent(agentId, async () => {
       const account = await this.account(userId, agentId);
       const request = await this.store.request(agentId, key);
       if (!request || request.account !== account) throw new HyperliquidError("Order request not found", 404);
       return this.lock(request.id, async () => { await this.reconcile(request, this.signal(cancellation)); return this.result(request); });
-    })());
+    });
   }
   list(userId: string, agentId: string, input: ListInput, cancellation?: AbortSignal): Promise<ListResult> {
     this.admit();
@@ -259,7 +282,7 @@ export class OrderService {
   }
   get(userId: string, agentId: string, id: string, includeEvents = false, cancellation?: AbortSignal): Promise<GetResult> {
     this.admit();
-    return this.track((async () => {
+    return this.trackAgent(agentId, async () => {
       const account = await this.account(userId, agentId);
       const found = await this.store.find(agentId, account, id);
       if (found && found.request.account !== account) throw new HyperliquidError("Order not found", 404);
@@ -275,6 +298,6 @@ export class OrderService {
       if (response.status !== "order") return { order: null, events: [], error: "Order not found; absence is not proof of rejection, fill, or cancellation.", observedAt: Date.now() };
       if (!isPerpetual(response.order.order.coin)) throw new HyperliquidError("Only main-DEX perpetual orders are supported.");
       return { order: liveView(response.order.order, response.order.status, response.order.statusTimestamp), events: [], error: null, observedAt: Date.now() };
-    })());
+    });
   }
 }

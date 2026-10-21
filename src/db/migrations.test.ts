@@ -131,6 +131,51 @@ describe("generated SQLite auth migrations", () => {
     expect(migrateApplication(connection)).toEqual({ applied: 0, total: 9 });
   });
 
+  it("cascades a populated agent ownership graph without deleting independent account/user data", () => {
+    migrateApplication(connection);
+    connection.exec(`INSERT INTO hv_users(id,name,email) VALUES ('owner','Owner','owner@example.test');
+      INSERT INTO hv_agents(id,user_id,name,creation_request_id,created_at,updated_at) VALUES ('a','owner','A','a',1,1),('b','owner','B','b',1,1);
+      INSERT INTO hv_provider_connections(user_id,provider_id,auth_type,ciphertext,key_id,updated_at) VALUES ('owner','faux','api_key',X'41','key',1);
+      INSERT INTO hv_journal_accounts(account) VALUES ('account');
+      INSERT INTO hv_journal_entries(account,id,kind,time,data) VALUES ('account','fill','fill',1,'{}');
+      INSERT INTO hv_journal_notes(id,account,target,author_id,body,created_at) VALUES ('note','account','fill','owner','Keep',1);
+      INSERT INTO hv_exchange_nonces VALUES ('signer',123);`);
+    for (const id of ["a", "b"]) connection.exec(`
+      INSERT INTO hv_subagents(id,agent_id,kind,name,instructions,provider,model_id,tools,triggers,created_at,updated_at) VALUES ('worker-${id}','${id}','worker','Worker','Observe','faux','faux','[]','{"inboxEnabled":true,"fills":true}',1,1);
+      INSERT INTO hv_subagent_runs(id,agent_id,subagent_id,request_id,source,task,config,created_at) VALUES ('run-${id}','${id}','worker-${id}','run','manual','Observe','{}',1);
+      INSERT INTO hv_worker_requests(id,agent_id,subagent_id,event_key,payload,created_at,run_id) VALUES ('inbox-${id}','${id}','worker-${id}','event','{}',1,'run-${id}');
+      INSERT INTO hv_subagent_run_contexts VALUES ('${id}','run-${id}','{}');
+      INSERT INTO hv_memory_counters VALUES ('${id}',3);
+      INSERT INTO hv_memories(agent_id,number,kind,topic,summary,content,payload,created_at,producer_subagent_id,source_run_id) VALUES ('${id}',1,'decision','test','Summary','Content','{}',1,'worker-${id}','run-${id}'),('${id}',2,'review','test','Summary','Content','{}',1,'worker-${id}','run-${id}');
+      INSERT INTO hv_memory_links VALUES ('${id}',2,1,'reviews');
+      INSERT INTO hv_memory_operations VALUES ('${id}','op','publish','hash','{}',1);
+      INSERT INTO hv_artifacts(id,agent_id,title,description,media_type,payload,size,tags,instrument,interval,created_at) VALUES ('artifact-${id}','${id}','Evidence','','text/plain',X'41',1,'[]','','',1),('report-${id}','${id}','Report','','text/plain',X'41',1,'[]','','',1);
+      INSERT INTO hv_artifact_links VALUES ('report-${id}','artifact-${id}');
+      INSERT INTO hv_memory_artifacts VALUES ('${id}',1,'artifact-${id}');
+      INSERT INTO hv_artifact_receipts(agent_id,operation_key,request_hash,artifact_id) VALUES ('${id}','op','hash','artifact-${id}');
+      INSERT INTO hv_insight_sets VALUES ('set-${id}','${id}','worker','worker-${id}',1,1);
+      INSERT INTO hv_insight_revisions(agent_id,set_id,version,content,operation,reason,created_at,producer_subagent_id,source_run_id) VALUES ('${id}','set-${id}',1,'Insight','append','Review',1,'worker-${id}','run-${id}');
+      INSERT INTO hv_insight_revision_memories VALUES ('${id}','set-${id}',1,1);
+      INSERT INTO hv_risk_settings(agent_id,updated_at) VALUES ('${id}',1);
+      INSERT INTO hv_order_requests(id,agent_id,account,request_key,kind,input,created_at) VALUES ('request-${id}','${id}','account','request','submit','{}',1);
+      INSERT INTO hv_order_actions(id,request_id,ordinal,payload,state,expires_at,updated_at) VALUES ('action-${id}','request-${id}',0,'{}','done',1,1);
+      INSERT INTO hv_order_items(id,action_id,ordinal,symbol,active,view,updated_at) VALUES ('item-${id}','action-${id}',0,'BTC',0,'{}',1);
+      INSERT INTO hv_order_events(item_id,source,time,data) VALUES ('item-${id}','test',1,'{}');
+      INSERT INTO hv_order_request_provenance VALUES ('request-${id}','${id}','worker-${id}','run-${id}',1,2);
+    `);
+    // Evidence/provenance links still protect normal individual record deletion.
+    expect(() => connection.exec("DELETE FROM hv_artifacts WHERE id='artifact-a'")).toThrow();
+    expect(() => connection.exec("DELETE FROM hv_subagent_runs WHERE id='run-a'")).toThrow();
+    connection.exec("UPDATE hv_agents SET state='stopping' WHERE id='a'; UPDATE hv_agents SET state='stopped' WHERE id='a'; DELETE FROM hv_agents WHERE id='a'");
+    for (const table of ["hv_agents", "hv_subagents", "hv_subagent_runs", "hv_worker_requests", "hv_worker_subscriptions", "hv_subagent_run_contexts", "hv_memory_counters", "hv_memory_links", "hv_memory_operations", "hv_memory_artifacts", "hv_artifact_links", "hv_artifact_receipts", "hv_insight_sets", "hv_insight_revisions", "hv_insight_revision_memories", "hv_risk_settings", "hv_order_requests", "hv_order_actions", "hv_order_items", "hv_order_events", "hv_order_request_provenance"]) {
+      expect(connection.prepare(`SELECT count(*) AS count FROM ${table}`).get()?.count, table).toBe(1);
+    }
+    expect(connection.prepare("SELECT count(*) AS count FROM hv_memories").get()?.count).toBe(2);
+    expect(connection.prepare("SELECT count(*) AS count FROM hv_artifacts").get()?.count).toBe(2);
+    for (const table of ["hv_users", "hv_provider_connections", "hv_journal_accounts", "hv_journal_entries", "hv_journal_notes", "hv_exchange_nonces"]) expect(connection.prepare(`SELECT count(*) AS count FROM ${table}`).get()?.count, table).toBe(1);
+    expect(connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  });
+
   it("rolls back a failed upgrade without marking it applied or damaging existing data", () => {
     const folder = join(directory, "migrations");
     cpSync(source, folder, { recursive: true });

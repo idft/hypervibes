@@ -4,9 +4,10 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentChat } from "../agents/agent-service.js";
 import type { RiskSettings } from "../hyperliquid/orders/risk-settings.js";
-const mocks = vi.hoisted(() => ({ save: vi.fn(), success: vi.fn(), invalidate: vi.fn(), instruments: vi.fn() }));
+const mocks = vi.hoisted(() => ({ save: vi.fn(), success: vi.fn(), invalidate: vi.fn(), instruments: vi.fn(), remove: vi.fn(), navigate: vi.fn() }));
 vi.mock("../web/charts.js", () => ({ getChartInstruments: mocks.instruments }));
-vi.mock("@tanstack/react-router", () => ({ useRouter: () => ({ invalidate: mocks.invalidate }) }));
+vi.mock("@tanstack/react-router", () => ({ useRouter: () => ({ invalidate: mocks.invalidate, navigate: mocks.navigate }) }));
+vi.mock("../web/agents.js", () => ({ deleteAgent: mocks.remove }));
 vi.mock("../web/risk.js", () => ({ saveRiskSettings: mocks.save }));
 vi.mock("sonner", () => ({ toast: { success: mocks.success } }));
 import { AgentSettingsPage } from "./agent-settings-page.js";
@@ -64,6 +65,30 @@ describe("Agent settings", () => {
   async function selectMode(label: string, limited: boolean) { await act(async () => mode(label, limited).click()); }
   const saveButton = () => [...container.querySelectorAll("button")].find((button) => button.textContent === "Save risk settings" || button.textContent === "Saving…");
   async function save() { await act(async () => { saveButton()!.click(); }); }
+  it("requires exact name confirmation and navigates away after deletion", async () => {
+    mocks.remove.mockResolvedValue({ ok: true, data: { deleted: true } });
+    const button = (text: string) => [...container.querySelectorAll("button")].find((button) => button.textContent === text)!;
+    await act(async () => button("Delete agent").click());
+    expect(button("Permanently delete agent").disabled).toBe(true);
+    await change("Agent name confirmation", "research");
+    expect(button("Permanently delete agent").disabled).toBe(true);
+    await change("Agent name confirmation", initial.agent.name);
+    await act(async () => button("Permanently delete agent").click());
+    expect(mocks.remove).toHaveBeenCalledWith({ data: { id: initial.agent.id, confirmation: initial.agent.name } });
+    expect(mocks.navigate).toHaveBeenCalledWith({ to: "/agents" });
+    expect(mocks.invalidate).toHaveBeenCalledOnce();
+    expect(container.textContent).toContain("Existing exchange orders and positions are not changed");
+  });
+  it("preserves confirmation and supports retry after deletion fails", async () => {
+    mocks.remove.mockResolvedValue({ ok: false, error: "Deletion incomplete. Retry deletion." });
+    const button = (text: string) => [...container.querySelectorAll("button")].find((button) => button.textContent === text)!;
+    await act(async () => button("Delete agent").click());
+    await change("Agent name confirmation", initial.agent.name);
+    await act(async () => button("Permanently delete agent").click());
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Retry deletion");
+    expect(button("Permanently delete agent").disabled).toBe(false);
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
   it("only shows Save for changes, hides it on revert, and resets the baseline after saving", async () => {
     expect(saveButton()).toBeUndefined();
     const toggleTrading = async () => { await act(async () => container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click()); };

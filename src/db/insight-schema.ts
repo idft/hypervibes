@@ -5,7 +5,7 @@ import { hvSubagents, hvSubagentRuns } from "./subagent-schema.js";
 import { hvMemories } from "./memory-schema.js";
 
 export const hvInsightSets = sqliteTable("hv_insight_sets", {
-  id: text("id").primaryKey(), agentId: text("agent_id").notNull().references(() => hvAgents.id),
+  id: text("id").primaryKey(), agentId: text("agent_id").notNull().references(() => hvAgents.id, { onDelete: "cascade" }),
   scopeKind: text("scope_kind", { enum: ["agent", "worker"] }).notNull(), subagentId: text("subagent_id"), currentVersion: integer("current_version").notNull().default(0), updatedAt: integer("updated_at").notNull(),
 }, (t) => [
   uniqueIndex("hv_insight_sets_identity_idx").on(t.agentId, t.id),
@@ -20,7 +20,7 @@ export const hvInsightRevisions = sqliteTable("hv_insight_revisions", {
   actorUserId: text("actor_user_id"), producerSubagentId: text("producer_subagent_id"), sourceRunId: text("source_run_id"), conversationId: integer("conversation_id"), toolTaskId: integer("tool_task_id"),
 }, (t) => [
   primaryKey({ columns: [t.setId, t.version] }), uniqueIndex("hv_insight_revision_identity_idx").on(t.agentId, t.setId, t.version),
-  foreignKey({ columns: [t.agentId, t.setId], foreignColumns: [hvInsightSets.agentId, hvInsightSets.id] }),
+  foreignKey({ columns: [t.agentId, t.setId], foreignColumns: [hvInsightSets.agentId, hvInsightSets.id] }).onDelete("cascade"),
   foreignKey({ columns: [t.agentId, t.producerSubagentId], foreignColumns: [hvSubagents.agentId, hvSubagents.id] }),
   foreignKey({ columns: [t.agentId, t.sourceRunId, t.producerSubagentId], foreignColumns: [hvSubagentRuns.agentId, hvSubagentRuns.id, hvSubagentRuns.subagentId] }),
   check("hv_insight_revision_version", sql`${t.version} BETWEEN 1 AND 9007199254740990`),
@@ -32,6 +32,6 @@ export const hvInsightRevisionMemories = sqliteTable("hv_insight_revision_memori
   agentId: text("agent_id").notNull(), setId: text("set_id").notNull(), version: integer("version").notNull(), memoryNumber: integer("memory_number").notNull(),
 }, (t) => [
   primaryKey({ columns: [t.agentId, t.setId, t.version, t.memoryNumber] }),
-  foreignKey({ columns: [t.agentId, t.setId, t.version], foreignColumns: [hvInsightRevisions.agentId, hvInsightRevisions.setId, hvInsightRevisions.version] }),
+  foreignKey({ columns: [t.agentId, t.setId, t.version], foreignColumns: [hvInsightRevisions.agentId, hvInsightRevisions.setId, hvInsightRevisions.version] }).onDelete("cascade"),
   foreignKey({ columns: [t.agentId, t.memoryNumber], foreignColumns: [hvMemories.agentId, hvMemories.number] }),
 ]);

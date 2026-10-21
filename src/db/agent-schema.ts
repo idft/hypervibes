@@ -7,7 +7,7 @@ export const hvAgents = sqliteTable("hv_agents", {
   userId: text("user_id").notNull().references(() => hvUsers.id, { onDelete: "restrict" }),
   name: text("name").notNull(),
   creationRequestId: text("creation_request_id").notNull(),
-  state: text("state", { enum: ["provisioning", "ready", "failed"] }).notNull().default("provisioning"),
+  state: text("state", { enum: ["provisioning", "ready", "failed", "stopping", "stopped"] }).notNull().default("provisioning"),
   conversationId: integer("conversation_id"),
   /** Creation intent only; current selection is owned by Durable's pi.agent. */
   initialProvider: text("initial_provider"),
@@ -22,7 +22,7 @@ export const hvAgents = sqliteTable("hv_agents", {
   uniqueIndex("hv_agents_creation_request_idx").on(table.userId, table.creationRequestId),
   uniqueIndex("hv_agents_trading_account_idx").on(table.tradingAccountAddress),
   check("hv_agents_name_check", sql`length(trim(${table.name})) BETWEEN 1 AND 80`),
-  check("hv_agents_state_check", sql`${table.state} IN ('provisioning', 'ready', 'failed')`),
+  check("hv_agents_state_check", sql`${table.state} IN ('provisioning', 'ready', 'failed', 'stopping', 'stopped')`),
 ]);
 
 export type AgentRow = typeof hvAgents.$inferSelect;

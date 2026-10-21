@@ -94,8 +94,8 @@ export class LiveDashboards {
     for (const address of wanted) this.ensure(address);
     for (const [address, account] of this.accounts) {
       if (wanted.has(address)) continue;
-      this.accounts.delete(address);
       await this.stop(account);
+      this.accounts.delete(address);
     }
   }
 

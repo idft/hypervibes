@@ -14,7 +14,7 @@
     { "type": "integer", "notNull": true, "autoincrement": false, "default": null, "generated": null, "name": "conversation_id", "entityType": "columns", "table": "hv_order_request_provenance" },
     { "type": "integer", "notNull": true, "autoincrement": false, "default": null, "generated": null, "name": "tool_task_id", "entityType": "columns", "table": "hv_order_request_provenance" },
     { "columns": ["request_id"], "nameExplicit": false, "name": "hv_order_request_provenance_pk", "table": "hv_order_request_provenance", "entityType": "pks" },
-    { "columns": ["agent_id", "request_id"], "tableTo": "hv_order_requests", "columnsTo": ["agent_id", "id"], "onUpdate": "NO ACTION", "onDelete": "NO ACTION", "nameExplicit": false, "name": "fk_hv_order_request_provenance_agent_id_request_id_hv_order_requests_agent_id_id_fk", "entityType": "fks", "table": "hv_order_request_provenance" },
+    { "columns": ["agent_id", "request_id"], "tableTo": "hv_order_requests", "columnsTo": ["agent_id", "id"], "onUpdate": "NO ACTION", "onDelete": "CASCADE", "nameExplicit": false, "name": "fk_hv_order_request_provenance_agent_id_request_id_hv_order_requests_agent_id_id_fk", "entityType": "fks", "table": "hv_order_request_provenance" },
     { "columns": ["agent_id", "producer_subagent_id"], "tableTo": "hv_subagents", "columnsTo": ["agent_id", "id"], "onUpdate": "NO ACTION", "onDelete": "NO ACTION", "nameExplicit": false, "name": "fk_hv_order_request_provenance_agent_id_producer_subagent_id_hv_subagents_agent_id_id_fk", "entityType": "fks", "table": "hv_order_request_provenance" },
     { "columns": ["agent_id", "source_run_id", "producer_subagent_id"], "tableTo": "hv_subagent_runs", "columnsTo": ["agent_id", "id", "subagent_id"], "onUpdate": "NO ACTION", "onDelete": "NO ACTION", "nameExplicit": false, "name": "fk_hv_order_request_provenance_agent_id_source_run_id_producer_subagent_id_hv_subagent_runs_agent_id_id_subagent_id_fk", "entityType": "fks", "table": "hv_order_request_provenance" },
     { "columns": [{ "value": "agent_id", "isExpression": false }, { "value": "source_run_id", "isExpression": false }], "isUnique": false, "where": null, "origin": "manual", "name": "hv_order_provenance_run_idx", "entityType": "indexes", "table": "hv_order_request_provenance" },
@@ -2865,7 +2865,7 @@
         "id"
       ],
       "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
+      "onDelete": "CASCADE",
       "nameExplicit": false,
       "name": "fk_hv_order_actions_request_id_hv_order_requests_id_fk",
       "entityType": "fks",
@@ -2880,7 +2880,7 @@
         "id"
       ],
       "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
+      "onDelete": "CASCADE",
       "nameExplicit": false,
       "name": "fk_hv_order_events_item_id_hv_order_items_id_fk",
       "entityType": "fks",
@@ -2895,7 +2895,7 @@
         "id"
       ],
       "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
+      "onDelete": "CASCADE",
       "nameExplicit": false,
       "name": "fk_hv_order_items_action_id_hv_order_actions_id_fk",
       "entityType": "fks",
@@ -2910,7 +2910,7 @@
         "id"
       ],
       "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
+      "onDelete": "CASCADE",
       "nameExplicit": false,
       "name": "fk_hv_order_requests_agent_id_hv_agents_id_fk",
       "entityType": "fks",
@@ -2925,7 +2925,7 @@
         "id"
       ],
       "onUpdate": "NO ACTION",
-      "onDelete": "RESTRICT",
+      "onDelete": "CASCADE",
       "nameExplicit": false,
       "name": "fk_hv_subagent_runs_agent_id_hv_agents_id_fk",
       "entityType": "fks",
@@ -2940,7 +2940,7 @@
         "id"
       ],
       "onUpdate": "NO ACTION",
-      "onDelete": "RESTRICT",
+      "onDelete": "CASCADE",
       "nameExplicit": false,
       "name": "fk_hv_subagent_runs_subagent_id_hv_subagents_id_fk",
       "entityType": "fks",
@@ -2955,7 +2955,7 @@
         "id"
       ],
       "onUpdate": "NO ACTION",
-      "onDelete": "RESTRICT",
+      "onDelete": "CASCADE",
       "nameExplicit": false,
       "name": "fk_hv_subagents_agent_id_hv_agents_id_fk",
       "entityType": "fks",
@@ -2970,7 +2970,7 @@
         "id"
       ],
       "onUpdate": "NO ACTION",
-      "onDelete": "RESTRICT",
+      "onDelete": "CASCADE",
       "nameExplicit": false,
       "name": "fk_hv_worker_requests_agent_id_hv_agents_id_fk",
       "entityType": "fks",
@@ -3051,7 +3051,7 @@
         "id"
       ],
       "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
+      "onDelete": "CASCADE",
       "nameExplicit": false,
       "name": "fk_hv_artifact_receipts_agent_id_hv_agents_id_fk",
       "entityType": "fks",
@@ -3066,7 +3066,7 @@
         "id"
       ],
       "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
+      "onDelete": "CASCADE",
       "nameExplicit": false,
       "name": "fk_hv_artifacts_agent_id_hv_agents_id_fk",
       "entityType": "fks",
@@ -3081,7 +3081,7 @@
         "id"
       ],
       "onUpdate": "NO ACTION",
-      "onDelete": "RESTRICT",
+      "onDelete": "CASCADE",
       "nameExplicit": false,
       "name": "fk_hv_memories_agent_id_hv_agents_id_fk",
       "entityType": "fks",
@@ -3134,7 +3134,7 @@
         "number"
       ],
       "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
+      "onDelete": "CASCADE",
       "nameExplicit": false,
       "name": "fk_hv_memory_artifacts_agent_id_memory_number_hv_memories_agent_id_number_fk",
       "entityType": "fks",
@@ -3166,7 +3166,7 @@
         "id"
       ],
       "onUpdate": "NO ACTION",
-      "onDelete": "RESTRICT",
+      "onDelete": "CASCADE",
       "nameExplicit": false,
       "name": "fk_hv_memory_counters_agent_id_hv_agents_id_fk",
       "entityType": "fks",
@@ -3183,7 +3183,7 @@
         "number"
       ],
       "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
+      "onDelete": "CASCADE",
       "nameExplicit": false,
       "name": "fk_hv_memory_links_agent_id_source_number_hv_memories_agent_id_number_fk",
       "entityType": "fks",
@@ -3215,7 +3215,7 @@
         "id"
       ],
       "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
+      "onDelete": "CASCADE",
       "nameExplicit": false,
       "name": "fk_hv_memory_operations_agent_id_hv_agents_id_fk",
       "entityType": "fks",
@@ -3234,7 +3234,7 @@
         "version"
       ],
       "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
+      "onDelete": "CASCADE",
       "nameExplicit": false,
       "name": "fk_hv_insight_revision_memories_agent_id_set_id_version_hv_insight_revisions_agent_id_set_id_version_fk",
       "entityType": "fks",
@@ -3268,7 +3268,7 @@
         "id"
       ],
       "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
+      "onDelete": "CASCADE",
       "nameExplicit": false,
       "name": "fk_hv_insight_revisions_agent_id_set_id_hv_insight_sets_agent_id_id_fk",
       "entityType": "fks",
@@ -3319,7 +3319,7 @@
         "id"
       ],
       "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
+      "onDelete": "CASCADE",
       "nameExplicit": false,
       "name": "fk_hv_insight_sets_agent_id_hv_agents_id_fk",
       "entityType": "fks",
@@ -3353,7 +3353,7 @@
         "id"
       ],
       "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
+      "onDelete": "CASCADE",
       "nameExplicit": false,
       "name": "fk_hv_subagent_run_contexts_agent_id_run_id_hv_subagent_runs_agent_id_id_fk",
       "entityType": "fks",
@@ -4483,7 +4483,7 @@
       "table": "hv_agents"
     },
     {
-      "value": "\"state\" IN ('provisioning', 'ready', 'failed')",
+      "value": "\"state\" IN ('provisioning', 'ready', 'failed', 'stopping', 'stopped')",
       "name": "hv_agents_state_check",
       "entityType": "checks",
       "table": "hv_agents"
@@ -4703,7 +4703,7 @@
         "id"
       ],
       "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
+      "onDelete": "CASCADE",
       "nameExplicit": false,
       "name": "fk_hv_worker_subscriptions_subagent_id_hv_subagents_id_fk",
       "entityType": "fks",

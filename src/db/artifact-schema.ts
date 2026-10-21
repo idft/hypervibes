@@ -2,7 +2,7 @@ import { index, integer, sqliteTable, text, blob, uniqueIndex } from "drizzle-or
 import { hvAgents } from "./agent-schema.js";
 
 export const hvArtifacts = sqliteTable("hv_artifacts", {
-  id: text("id").primaryKey(), agentId: text("agent_id").notNull().references(() => hvAgents.id),
+  id: text("id").primaryKey(), agentId: text("agent_id").notNull().references(() => hvAgents.id, { onDelete: "cascade" }),
   title: text("title").notNull(), description: text("description").notNull(), mediaType: text("media_type").notNull(),
   payload: blob("payload", { mode: "buffer" }).notNull(), size: integer("size").notNull(),
   tags: text("tags").notNull(), instrument: text("instrument").notNull(), interval: text("interval").notNull(),
@@ -12,7 +12,7 @@ export const hvArtifacts = sqliteTable("hv_artifacts", {
 // Small replay receipts survive payload expiry/deletion. They deliberately hold
 // no report content, preventing a delayed retry from resurrecting deleted data.
 export const hvArtifactReceipts = sqliteTable("hv_artifact_receipts", {
-  agentId: text("agent_id").notNull().references(() => hvAgents.id), operationKey: text("operation_key").notNull(),
+  agentId: text("agent_id").notNull().references(() => hvAgents.id, { onDelete: "cascade" }), operationKey: text("operation_key").notNull(),
   requestHash: text("request_hash").notNull(), artifactId: text("artifact_id").notNull(),
 }, (table) => [uniqueIndex("hv_artifact_receipts_operation_idx").on(table.agentId, table.operationKey)]);
 export const hvArtifactLinks = sqliteTable("hv_artifact_links", {

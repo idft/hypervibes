@@ -11,7 +11,7 @@ export const hvOrderRequestProvenance = sqliteTable("hv_order_request_provenance
   conversationId: integer("conversation_id").notNull(),
   toolTaskId: integer("tool_task_id").notNull(),
 }, (t) => [
-  foreignKey({ columns: [t.agentId, t.requestId], foreignColumns: [hvOrderRequests.agentId, hvOrderRequests.id] }),
+  foreignKey({ columns: [t.agentId, t.requestId], foreignColumns: [hvOrderRequests.agentId, hvOrderRequests.id] }).onDelete("cascade"),
   foreignKey({ columns: [t.agentId, t.producerSubagentId], foreignColumns: [hvSubagents.agentId, hvSubagents.id] }),
   foreignKey({ columns: [t.agentId, t.sourceRunId, t.producerSubagentId], foreignColumns: [hvSubagentRuns.agentId, hvSubagentRuns.id, hvSubagentRuns.subagentId] }),
   index("hv_order_provenance_run_idx").on(t.agentId, t.sourceRunId),

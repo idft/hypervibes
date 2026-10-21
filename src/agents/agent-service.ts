@@ -8,7 +8,7 @@ import { estimateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
 import { createRegistry, Harness, InboxDoc, LiveDoc, UsageDoc, type EntryId, type TaskId, type UsageState, type UserInput } from "@earendil-works/pi-durable";
 import type { Conversation, ConversationView, EntryRecord, InboxState, LiveState, ModelRef } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { hvAgents, type AgentRow } from "../db/agent-schema.js";
 import type { ApplicationDatabase, SharedDatabase } from "../db/shared-database.js";
@@ -96,7 +96,11 @@ export interface AgentChatHistory { messages: ChatEntry[]; before?: number; more
 /** Owns every Agent harness; no request owns a harness or waits for model work. */
 export class AgentService {
   private readonly running = new Map<string, RunningAgent>();
+  // Includes partially initialized harnesses whose cleanup may need a retry.
+  private readonly harnesses = new Map<string, Harness>();
   private readonly opening = new Map<string, Promise<RunningAgent>>();
+  private readonly deleting = new Map<string, Promise<void>>();
+  private readonly lifetimes = new Map<string, AbortController>();
   private readonly lifecycle = new Map<string, Set<() => void>>();
   private readonly feedShutdown = new AbortController();
   private readonly feeds = new Set<Promise<void>>();
@@ -115,8 +119,17 @@ export class AgentService {
     this.risk = new RiskSettingsService(database);
     this.research = new ResearchService(database, hyperliquid, this.risk, (error) => options.logger?.error(error, "Artifact maintenance failed"));
     this.subagents = new SubagentService(db, database, providers, {
-      owned: (userId, id) => this.owned(userId, id), models: (userId) => this.models(userId), changed: (id) => this.notify(id),
+      owned: (userId, id) => this.owned(userId, id), models: (userId) => this.models(userId), changed: (id) => this.notify(id), signal: (id) => this.signal(id),
     }, this.execution, Boolean(options.models), options.logger?.child({ component: "scheduler" }));
+  }
+  /** Ends every agent-scoped UI subscription when deletion begins. */
+  signal(id: string): AbortSignal {
+    let lifetime = this.lifetimes.get(id);
+    if (!lifetime) { lifetime = new AbortController(); this.lifetimes.set(id, lifetime); }
+    return lifetime.signal;
+  }
+  private assertRunning(id: string) {
+    if (this.signal(id).aborted) throw new AgentError("Agent is being deleted. Retry deletion in Settings.", 409);
   }
   private notify(id: string) { for (const listener of this.lifecycle.get(id) ?? []) listener(); }
   private models(userId: string) { return this.options.models ? Promise.resolve(this.options.models) : this.providers.models(userId); }
@@ -128,7 +141,7 @@ export class AgentService {
     if (this.stopping || this.draining) return;
     for (const agent of await this.list(userId)) {
       const current = this.running.get(agent.id);
-      if (current && this.scheduling && await this.configured(agent, current) && !this.stopping && !this.draining) current.harness.resume();
+      if (current && this.scheduling && await this.configured(agent, current) && !this.stopping && !this.draining && !this.signal(agent.id).aborted) current.harness.resume();
       this.notify(agent.id);
     }
   }
@@ -137,10 +150,14 @@ export class AgentService {
     this.admit(true);
     return this.db.select().from(hvAgents).where(eq(hvAgents.userId, userId)).orderBy(desc(hvAgents.createdAt)).all();
   }
-  async owned(userId: string, id: string) {
+  async owned(userId: string, id: string, allowStopped = false) {
     this.admit(true);
     const row = await this.db.select().from(hvAgents).where(and(eq(hvAgents.id, agentId(id)), eq(hvAgents.userId, userId))).get();
     if (!row) throw new AgentError("Agent not found", 404);
+    if (!allowStopped) {
+      this.assertRunning(row.id);
+      if (row.state === "stopping" || row.state === "stopped") throw new AgentError("Agent is being deleted. Retry deletion in Settings.", 409);
+    }
     return row;
   }
   private static uniqueAccountViolation(error: unknown): boolean {
@@ -204,6 +221,8 @@ export class AgentService {
   }
   private open(agent: AgentRow): Promise<RunningAgent> {
     this.admit();
+    this.assertRunning(agent.id);
+    if (agent.state === "stopping" || agent.state === "stopped") throw new AgentError("Agent is being deleted", 409);
     const running = this.running.get(agent.id);
     if (running) return Promise.resolve(running);
     const existing = this.opening.get(agent.id);
@@ -215,7 +234,7 @@ export class AgentService {
   private async initialize(agent: AgentRow): Promise<RunningAgent> {
     let harness: Harness | undefined;
     try {
-      await this.db.update(hvAgents).set({ state: "provisioning", error: null, updatedAt: Date.now() }).where(eq(hvAgents.id, agent.id)).run();
+      await this.db.update(hvAgents).set({ state: "provisioning", error: null, updatedAt: Date.now() }).where(and(eq(hvAgents.id, agent.id), inArray(hvAgents.state, ["provisioning", "ready", "failed"]))).run();
       this.notify(agent.id);
       const registry = createRegistry();
       const hyperliquid = createHyperliquidExtension(this.hyperliquid, agent.userId, agent.id, this.orders);
@@ -233,6 +252,7 @@ export class AgentService {
           settings: { retry: { maxRetries: 2 }, stream: { timeoutMs: 120_000 } },
         }, context);
       } catch (error) { await storage.close(context); throw error; }
+      this.harnesses.set(agent.id, harness);
       // root() is idempotent inside this Agent's store, including a crash before
       // the application records its ID. No cross-store transaction is required.
       const main = await harness.root(context, { agent: {
@@ -243,7 +263,8 @@ export class AgentService {
       this.execution.bind(agent.id, harness, main.id);
       await this.subagents.bind(agent, harness, main, hyperliquid, execution, capabilities, orchestratorInsights);
       this.admit();
-      await this.db.update(hvAgents).set({ state: "ready", conversationId: main.id, error: null, updatedAt: Date.now() }).where(eq(hvAgents.id, agent.id)).run();
+      this.assertRunning(agent.id);
+      await this.db.update(hvAgents).set({ state: "ready", conversationId: main.id, error: null, updatedAt: Date.now() }).where(and(eq(hvAgents.id, agent.id), inArray(hvAgents.state, ["provisioning", "ready", "failed"]))).run();
       const current = { harness, main };
       this.running.set(agent.id, current);
       this.notify(agent.id);
@@ -252,18 +273,19 @@ export class AgentService {
         this.running.delete(agent.id);
         this.subagents.unbind(agent.id);
         this.execution.unbind(agent.id);
-        if (end.reason === "failed" && !this.stopping) {
+        if (end.reason === "failed" && !this.stopping && !this.signal(agent.id).aborted) {
           await this.db.update(hvAgents).set({ state: "failed", error: "Agent execution stopped. Retry initialization.", updatedAt: Date.now() }).where(eq(hvAgents.id, agent.id)).run();
           this.notify(agent.id);
         }
       }).catch(() => { /* A shared-storage failure is also reported by runtime health. */ });
-      if (this.scheduling && await this.configured(agent, current)) harness.resume();
+      if (this.scheduling && await this.configured(agent, current) && !this.signal(agent.id).aborted) harness.resume();
       return current;
     } catch (error) {
       this.subagents.unbind(agent.id);
       this.execution.unbind(agent.id);
       await harness?.close(context);
-      if (!this.stopping) {
+      this.harnesses.delete(agent.id);
+      if (!this.stopping && !this.signal(agent.id).aborted) {
         await this.db.update(hvAgents).set({ state: "failed", error: "Unable to initialize Agent. Retry initialization.", updatedAt: Date.now() }).where(eq(hvAgents.id, agent.id)).run();
         this.notify(agent.id);
       }
@@ -283,14 +305,17 @@ export class AgentService {
     for (const agent of agents) {
       if (this.stopping || this.draining) return;
       const current = this.running.get(agent.id);
-      if (current && await this.configured(agent, current) && !this.stopping && !this.draining) current.harness.resume();
+      if (current && await this.configured(agent, current) && !this.stopping && !this.draining && !this.signal(agent.id).aborted) current.harness.resume();
     }
   }
   async recover() {
     await this.research.initialize();
     const agents = await this.db.select().from(hvAgents).all();
     for (const agent of agents) {
-      try { await this.open(agent); } catch { /* One failed Agent must not hide other Agents. */ }
+      try {
+        if (agent.state === "stopping" || agent.state === "stopped") await this.delete(agent.userId, agent.id);
+        else await this.open(agent);
+      } catch { /* One failed Agent must not hide other Agents; deletion remains retryable. */ }
     }
   }
   async retry(userId: string, id: string) {
@@ -298,9 +323,48 @@ export class AgentService {
     try { await this.open(agent); } catch { /* Return the persisted, sanitized failure. */ }
     return this.owned(userId, id);
   }
+  /** Persist intent before teardown; only a fully quiescent agent releases its account. */
+  async delete(userId: string, id: string): Promise<void> {
+    this.admit();
+    const agent = await this.owned(userId, id, true);
+    const existing = this.deleting.get(agent.id);
+    if (existing) return existing;
+    this.signal(agent.id);
+    this.lifetimes.get(agent.id)!.abort();
+    const deleting = this.deleteOwned(agent).finally(() => { this.deleting.delete(agent.id); });
+    this.deleting.set(agent.id, deleting);
+    return deleting;
+  }
+  private async deleteOwned(agent: AgentRow) {
+    await this.db.update(hvAgents).set({ state: "stopping", error: null, updatedAt: Date.now() }).where(eq(hvAgents.id, agent.id)).run();
+    this.notify(agent.id);
+    try {
+      // Stop admission first, then close the harness to abort/join its tools.
+      // Do not hold the shared SQL queue while waiting for runtime work.
+      const services = Promise.allSettled([this.subagents.stopAgent(agent.id), this.orders.stopAgent(agent.id)]);
+      await Promise.allSettled([this.opening.get(agent.id)]);
+      const harness = this.harnesses.get(agent.id);
+      const settled = [...await Promise.allSettled([harness?.close(context)]), ...await services];
+      const failures = settled.filter((result) => result.status === "rejected");
+      if (failures.length) throw new AggregateError(failures.map((result) => result.reason as unknown), "Agent shutdown failed");
+      this.running.delete(agent.id);
+      this.harnesses.delete(agent.id);
+      this.subagents.unbind(agent.id);
+      this.execution.unbind(agent.id);
+      await this.db.update(hvAgents).set({ state: "stopped", updatedAt: Date.now() }).where(eq(hvAgents.id, agent.id)).run();
+      await this.hyperliquid.reconcileLinkedAccounts(true);
+      // SQLite cascades application-owned data only. Pi storage is retained.
+      await this.db.delete(hvAgents).where(eq(hvAgents.id, agent.id)).run();
+      this.notify(agent.id);
+    } catch (error) {
+      await this.db.update(hvAgents).set({ error: "Deletion incomplete. Retry deletion in Settings.", updatedAt: Date.now() }).where(eq(hvAgents.id, agent.id)).run();
+      this.notify(agent.id);
+      throw error;
+    }
+  }
   async chat(userId: string, id: string): Promise<AgentChat> {
-    const agent = await this.owned(userId, id);
-    const current = this.running.get(agent.id);
+    const agent = await this.owned(userId, id, true);
+    const current = agent.state === "stopping" || agent.state === "stopped" ? undefined : this.running.get(agent.id);
     if (!current) return this.projectChat(agent, []);
     const { harness, main } = current;
     // The active context range is the streamed tail: the newest head marker
@@ -319,7 +383,7 @@ export class AgentService {
     return { tokens, history: below === true };
   }
   private async projectChat(agent: AgentRow, entries: readonly EntryRecord[], live?: Readonly<LiveState>, inbox?: Readonly<InboxState>, usage?: Readonly<UsageState>, stats?: { tokens: number; history: boolean }): Promise<AgentChat> {
-    const current = this.running.get(agent.id);
+    const current = agent.state === "stopping" || agent.state === "stopped" ? undefined : this.running.get(agent.id);
     const resolved = await current?.main.agent(context);
     const model = resolved?.model ?? (agent.initialProvider && agent.initialModelId ? { provider: agent.initialProvider, modelId: agent.initialModelId } : this.options.model ?? legacyModel);
     const configured = Boolean(this.options.models || await this.providers.configured(agent.userId, model));
@@ -374,7 +438,7 @@ export class AgentService {
   async watchChat(userId: string, id: string, signal: AbortSignal, publish: (chat: AgentChat) => void): Promise<void> {
     this.admit(true);
     id = agentId(id);
-    const lifetime = AbortSignal.any([signal, this.feedShutdown.signal]);
+    const lifetime = AbortSignal.any([signal, this.feedShutdown.signal, this.signal(id)]);
     let finish!: () => void;
     const finished = new Promise<void>((resolve) => { finish = resolve; });
     this.feeds.add(finished);
@@ -528,11 +592,12 @@ export class AgentService {
     this.stopping = true;
     this.feedShutdown.abort();
     return this.closing ??= (async () => {
-      const drainResults = await Promise.allSettled([drained]);
+      const drainResults = await Promise.allSettled([drained, ...this.deleting.values()]);
       const feedResults = await Promise.allSettled([this.subagents.close(), Promise.all(this.feeds)]);
-      const results = [...drainResults, ...feedResults, ...await Promise.allSettled([...this.running.values()].map(({ harness }) => harness.close(context)))];
+      const results = [...drainResults, ...feedResults, ...await Promise.allSettled([...this.harnesses.values()].map((harness) => harness.close(context)))];
       for (const id of this.running.keys()) { this.execution.unbind(id); this.subagents.unbind(id); }
       this.running.clear();
+      this.harnesses.clear();
       const errors = results.filter((result) => result.status === "rejected").map((result) => result.reason as unknown);
       if (errors.length) throw new AggregateError(errors, "Unable to close Agent execution");
     })().finally(() => this.research.close());

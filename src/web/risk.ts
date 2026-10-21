@@ -6,7 +6,7 @@ import { agentAction, agentUser, field } from "./agents.js";
 export const getRiskSettings = createServerFn({ method: "GET" }).validator((data: unknown) => ({ agentId: field(data, "agentId") })).handler(async ({ context, data }) => {
   const user = await agentUser(context.runtime, getRequestHeaders());
   return agentAction(async () => {
-    await context.runtime.agents.owned(user.id, data.agentId);
+    await context.runtime.agents.owned(user.id, data.agentId, true);
     return context.runtime.agents.risk.get(data.agentId);
   });
 });

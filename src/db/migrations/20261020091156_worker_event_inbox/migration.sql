@@ -2,7 +2,7 @@ ALTER TABLE `hv_subagents` ADD `triggers` text DEFAULT '{"inboxEnabled":false,"w
 --> statement-breakpoint
 CREATE TABLE `hv_worker_requests` (
   `id` text PRIMARY KEY,
-  `agent_id` text NOT NULL REFERENCES `hv_agents` (`id`) ON DELETE RESTRICT,
+  `agent_id` text NOT NULL REFERENCES `hv_agents` (`id`) ON DELETE CASCADE,
   `subagent_id` text NOT NULL,
   `event_key` text NOT NULL,
   `payload` text NOT NULL,
@@ -19,7 +19,7 @@ CREATE INDEX `hv_worker_requests_pending_idx` ON `hv_worker_requests` (`subagent
 
 --> statement-breakpoint
 CREATE TABLE hv_worker_subscriptions (
-  subagent_id text NOT NULL REFERENCES hv_subagents(id),
+  subagent_id text NOT NULL REFERENCES hv_subagents(id) ON DELETE CASCADE,
   event_type text NOT NULL,
   source_id text NOT NULL,
   activated_at integer NOT NULL,

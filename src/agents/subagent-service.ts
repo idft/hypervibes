@@ -25,7 +25,7 @@ import { assertActiveActor, type MemoryActor } from "../memory/operations.js";
 import { assignment, defaultMainInstructions, mainToolNames, nextCandleRun, normalizeDelegationTools, subagentInput, type AssignmentSettings } from "./subagent-input.js";
 
 interface Binding extends SubagentExtension { harness: Harness; main: Conversation; hyperliquid: Extension; capabilities: readonly Extension[]; orchestratorInsights: Extension; userId: string }
-export interface SubagentHost { owned(userId: string, id: string): Promise<AgentRow>; models(userId: string): Promise<Models>; changed(id: string): void }
+export interface SubagentHost { owned(userId: string, id: string): Promise<AgentRow>; models(userId: string): Promise<Models>; changed(id: string): void; signal(id: string): AbortSignal }
 /** Full run detail: snapshotted configuration plus the complete transcript. */
 export interface RunDetail { definition: SubagentRow; run: SubagentRun; entries: EntryRecord[]; prior: EntryRecord[]; tools?: ToolActivity[]; context?: RunContext; warnings?: ExecutionWarning[]; publications?: { ref: string; kind: string; summary: string }[] }
 const active = ["queued", "running"] as const;
@@ -40,6 +40,7 @@ export const MarketSnapshotUpgradeDoc = defineDoc<{ applied: boolean }>({
 /** Definitions and run intents belong to the app; Durable owns execution and reporting. */
 export class SubagentService {
   private readonly bindings = new Map<string, Binding>();
+  private readonly stoppedAgents = new Set<string>();
   private readonly pending = new Map<string, Promise<void>>();
   private timer?: ReturnType<typeof setInterval>;
   private ticking: Promise<void> = Promise.resolve();
@@ -102,11 +103,20 @@ export class SubagentService {
     this.bindings.set(agent.id, binding);
   }
   unbind(agentId: string) { this.bindings.delete(agentId); }
+  async stopAgent(agentId: string) {
+    this.stoppedAgents.add(agentId);
+    await this.pending.get(agentId);
+    await this.db.update(hvSubagents).set({ enabled: false, nextRunAt: null }).where(and(eq(hvSubagents.agentId, agentId), eq(hvSubagents.kind, "worker"))).run();
+  }
+  private admitAgent(id: string) {
+    if (this.stoppedAgents.has(id) || this.host.signal(id).aborted) throw new AgentError("Agent is being deleted", 409);
+  }
   private admit(readOnly = false) { if (this.stopping || (!readOnly && this.draining)) throw new AgentError("Subagent execution is shutting down", 503); }
-  private binding(id: string) { this.admit(true); const value = this.bindings.get(id); if (!value) throw new AgentError("Agent is unavailable. Retry initialization.", 503); return value; }
+  private binding(id: string) { this.admit(true); this.admitAgent(id); const value = this.bindings.get(id); if (!value) throw new AgentError("Agent is unavailable. Retry initialization.", 503); return value; }
   serial<T>(id: string, action: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     this.admit();
-    const result = (this.pending.get(id) ?? Promise.resolve()).then(() => { this.admit(); signal?.throwIfAborted(); return action(); });
+    this.admitAgent(id);
+    const result = (this.pending.get(id) ?? Promise.resolve()).then(() => { this.admit(); this.admitAgent(id); signal?.throwIfAborted(); return action(); });
     const settled = result.then(() => {}, () => {}); this.pending.set(id, settled);
     void settled.then(() => { if (this.pending.get(id) === settled) this.pending.delete(id); });
     if (!signal) return result;
@@ -176,7 +186,7 @@ export class SubagentService {
   }
   async watchDashboard(userId: string, agentId: string, signal: AbortSignal, publish: (snapshot: DashboardSubagent[]) => void): Promise<void> {
     this.admit(true);
-    const lifetime = AbortSignal.any([signal, this.historyShutdown.signal]);
+    const lifetime = AbortSignal.any([signal, this.historyShutdown.signal, this.host.signal(agentId)]);
     let finish!: () => void;
     const finished = new Promise<void>((resolve) => { finish = resolve; });
     this.historyFeeds.add(finished);
@@ -205,7 +215,7 @@ export class SubagentService {
   }
   async watchHistory(userId: string, agentId: string, id: string, page: number, signal: AbortSignal, publish: (history: RunHistory) => void): Promise<void> {
     this.admit(true);
-    const lifetime = AbortSignal.any([signal, this.historyShutdown.signal]);
+    const lifetime = AbortSignal.any([signal, this.historyShutdown.signal, this.host.signal(agentId)]);
     let finish!: () => void;
     const finished = new Promise<void>((resolve) => { finish = resolve; });
     this.historyFeeds.add(finished);
@@ -277,7 +287,7 @@ export class SubagentService {
   async watchRun(userId: string, agentId: string, id: string, runId: string, signal: AbortSignal, publish: (detail: RunDetail) => void): Promise<void> {
     this.admit(true);
     await this.ownedRun(userId, agentId, id, runId);
-    const lifetime = AbortSignal.any([signal, this.historyShutdown.signal]);
+    const lifetime = AbortSignal.any([signal, this.historyShutdown.signal, this.host.signal(agentId)]);
     let finish!: () => void;
     const finished = new Promise<void>((resolve) => { finish = resolve; });
     this.historyFeeds.add(finished);
@@ -674,7 +684,7 @@ export class SubagentService {
       const pending = await this.db.select().from(hvSubagentRuns).where(or(inArray(hvSubagentRuns.status, active), isNull(hvSubagentRuns.reportedAt))).all();
       for (const run of pending) {
         if (this.stopping || this.draining) return;
-        const binding = this.bindings.get(run.agentId); if (!binding) continue;
+        const binding = this.bindings.get(run.agentId); if (!binding || this.host.signal(run.agentId).aborted) continue;
         await this.serial(run.agentId, async () => {
           const current = await this.internalRun(run.agentId, run.id);
           if (current.taskId === null && active.includes(current.status as typeof active[number])) await this.dispatch(binding, current);
@@ -697,12 +707,14 @@ export class SubagentService {
       const inboxes = await this.db.selectDistinct({ agentId: hvWorkerRequests.agentId, id: hvWorkerRequests.subagentId }).from(hvWorkerRequests).where(and(isNull(hvWorkerRequests.runId), isNull(hvWorkerRequests.discardedReason))).all();
       for (const inbox of inboxes) {
         if (this.stopping || this.draining) return;
+        if (this.host.signal(inbox.agentId).aborted) continue;
         try { await this.serial(inbox.agentId, () => this.drainInbox(inbox.agentId, inbox.id, now)); }
         catch (error) { if (!(error instanceof AgentError)) throw error; this.log?.warn({ err: error, ...inbox }, "Worker dispatch deferred"); }
       }
       const due = await this.db.select().from(hvSubagents).where(and(eq(hvSubagents.enabled, true), eq(hvSubagents.archived, false), lte(hvSubagents.nextRunAt, now))).all();
       for (const row of due) {
         if (this.stopping || this.draining) return;
+        if (this.host.signal(row.agentId).aborted) continue;
         await this.schedule(row, now);
       }
       this.schedulerError = null;

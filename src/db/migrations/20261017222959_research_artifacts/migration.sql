@@ -10,7 +10,7 @@ CREATE TABLE `hv_artifact_receipts` (
 	`operation_key` text NOT NULL,
 	`request_hash` text NOT NULL,
 	`artifact_id` text NOT NULL,
-	CONSTRAINT `fk_hv_artifact_receipts_agent_id_hv_agents_id_fk` FOREIGN KEY (`agent_id`) REFERENCES `hv_agents`(`id`)
+	CONSTRAINT `fk_hv_artifact_receipts_agent_id_hv_agents_id_fk` FOREIGN KEY (`agent_id`) REFERENCES `hv_agents`(`id`) ON DELETE CASCADE
 );
 --> statement-breakpoint
 CREATE TABLE `hv_artifacts` (
@@ -28,7 +28,7 @@ CREATE TABLE `hv_artifacts` (
 	`task_id` integer,
 	`created_at` integer NOT NULL,
 	`expires_at` integer,
-	CONSTRAINT `fk_hv_artifacts_agent_id_hv_agents_id_fk` FOREIGN KEY (`agent_id`) REFERENCES `hv_agents`(`id`)
+	CONSTRAINT `fk_hv_artifacts_agent_id_hv_agents_id_fk` FOREIGN KEY (`agent_id`) REFERENCES `hv_agents`(`id`) ON DELETE CASCADE
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `hv_artifact_links_pair_idx` ON `hv_artifact_links` (`parent`,`child`);--> statement-breakpoint

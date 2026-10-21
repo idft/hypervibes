@@ -14,7 +14,7 @@ export function AgentsPage({ agents, setup }: { agents: AgentRow[]; setup?: Setu
         <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{agents.map((agent) => <li key={agent.id}>
           <a href={`/agents/${agent.id}`} className="block cursor-pointer rounded-xl border border-zinc-800 bg-[#0d0d10] p-5 hover:border-violet-700">
             <h2 className="text-xl font-semibold text-white">{agent.name}</h2>
-            {agent.state !== "ready" && <p className="mt-2 text-sm text-zinc-400">{agent.state === "failed" ? "Initialization failed" : "Initializing…"}</p>}
+            {agent.state !== "ready" && <p className="mt-2 text-sm text-zinc-400">{agent.state === "failed" ? "Initialization failed" : agent.state === "stopping" || agent.state === "stopped" ? "Deletion pending — retry in Settings" : "Initializing…"}</p>}
             {agent.tradingAccountAddress
               ? <p className="mt-1 break-all font-mono text-xs text-zinc-500">{agent.tradingAccountAddress}</p>
               : <p className="mt-1 text-xs text-zinc-500">Chat only</p>}

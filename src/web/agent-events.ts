@@ -79,6 +79,7 @@ export class AgentEventStreams {
       clearInterval(heartbeat);
       clearTimeout(deadline);
       request.signal.removeEventListener("abort", disconnect);
+      agentLifetime?.removeEventListener("abort", unavailable);
       this.connections.delete(shutdown);
       const remaining = (this.users.get(userId) ?? 1) - 1;
       if (remaining > 0) this.users.set(userId, remaining);
@@ -90,6 +91,8 @@ export class AgentEventStreams {
         controller.close();
       } catch { /* The consumer already cancelled or the stream already ended. */ }
     };
+    const agentLifetime = this.kind === "provider-login" ? undefined : this.runtime.agents.signal(id);
+    const unavailable = () => finish("unavailable", "Agent is being deleted.");
     const disconnect = () => finish(undefined, undefined, true);
     const shutdown = () => finish("shutdown", "Server is restarting. Reconnecting…");
     const scheduleExpiry = () => {
@@ -130,6 +133,8 @@ export class AgentEventStreams {
     }, { highWaterMark: 1 });
     this.connections.add(shutdown);
     request.signal.addEventListener("abort", disconnect, { once: true });
+    agentLifetime?.addEventListener("abort", unavailable, { once: true });
+    if (agentLifetime?.aborted) unavailable();
     scheduleExpiry();
     if (request.signal.aborted) disconnect();
     if (!closed) {

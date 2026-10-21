@@ -29,7 +29,7 @@ describe("agent page loading", () => {
     const agent = { id: "old-agent", name: "Agent" };
     owned.mockResolvedValue(agent);
     expect(await load()).toEqual(agent);
-    expect(owned).toHaveBeenCalledWith("owner", "old-agent");
+    expect(owned).toHaveBeenCalledWith("owner", "old-agent", true);
   });
 
   it("signals a router 404 for missing or inaccessible agents", async () => {

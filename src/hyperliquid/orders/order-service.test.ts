@@ -86,6 +86,25 @@ describe("durable order gateway", () => {
     expect(JSON.stringify(await database.all("SELECT payload FROM hv_order_actions"))).not.toContain(privateKey);
   });
 
+  it("seals per-agent order admission and joins an in-flight exchange submission before deletion", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    exchange.mockImplementationOnce(async () => { await held; return receipt([{ resting: { oid: 123 } }]); });
+    const submitting = submit();
+    await vi.waitFor(() => expect(exchange).toHaveBeenCalledOnce());
+    let stopped = false;
+    const stopping = service.stopAgent(agentId).then(() => { stopped = true; });
+    try {
+      await expect(submit("new-request")).rejects.toThrow("being deleted");
+      await expect(service.request("owner", agentId, "request-1")).rejects.toThrow("being deleted");
+      expect(stopped).toBe(false);
+    } finally { release(); }
+    expect((await submitting).results[0]!.commandStatus).toBe("accepted");
+    await stopping;
+    expect(stopped).toBe(true);
+    expect(exchange).toHaveBeenCalledOnce();
+  });
+
   it("keeps mixed successes and rejections, including native grouped TP/SL", async () => {
     exchange.mockResolvedValue(receipt([{ resting: { oid: 123 } }, "waitingForFill", { error: "bad trigger" }]));
     const result = await submit("protected", [{ ...order, take_profits: [{ trigger_price: "110000" }], stop_losses: [{ trigger_price: "90000" }] }]);

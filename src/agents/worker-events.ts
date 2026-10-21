@@ -16,6 +16,6 @@ export async function enqueueWorkerEvent(tx: SqliteExecutor, agentId: string, ev
 }
 
 export async function enqueueAccountEvent(tx: SqliteExecutor, account: string, key: string, reason: "fill" | "order_status", task: string, occurredAt: number) {
-  const agents = await tx.all<{ id: string }>("SELECT id FROM hv_agents WHERE trading_account_address=?", account.toLowerCase());
+  const agents = await tx.all<{ id: string }>("SELECT id FROM hv_agents WHERE trading_account_address=? AND state NOT IN ('stopping','stopped')", account.toLowerCase());
   for (const agent of agents) await enqueueWorkerEvent(tx, agent.id, key, { intent: "account_event", reason, task, callerSubagentId: null, callerRunId: null, researchRefs: [] }, occurredAt);
 }

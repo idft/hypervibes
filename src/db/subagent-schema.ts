@@ -5,7 +5,7 @@ import type { WorkerTriggers, WorkerRequestPayload } from "../agents/worker-trig
 
 export const hvSubagents = sqliteTable("hv_subagents", {
   id: text("id").primaryKey(),
-  agentId: text("agent_id").notNull().references(() => hvAgents.id, { onDelete: "restrict" }),
+  agentId: text("agent_id").notNull().references(() => hvAgents.id, { onDelete: "cascade" }),
   kind: text("kind", { enum: ["orchestrator", "worker"] }).notNull(),
   name: text("name").notNull(),
   description: text("description").notNull().default(""),
@@ -37,8 +37,8 @@ export const hvSubagents = sqliteTable("hv_subagents", {
 
 export const hvSubagentRuns = sqliteTable("hv_subagent_runs", {
   id: text("id").primaryKey(),
-  agentId: text("agent_id").notNull().references(() => hvAgents.id, { onDelete: "restrict" }),
-  subagentId: text("subagent_id").notNull().references(() => hvSubagents.id, { onDelete: "restrict" }),
+  agentId: text("agent_id").notNull().references(() => hvAgents.id, { onDelete: "cascade" }),
+  subagentId: text("subagent_id").notNull().references(() => hvSubagents.id, { onDelete: "cascade" }),
   requestId: text("request_id").notNull(),
   source: text("source", { enum: ["manual", "schedule", "delegation", "event"] }).notNull(),
   task: text("task").notNull(),
@@ -59,7 +59,7 @@ export const hvSubagentRuns = sqliteTable("hv_subagent_runs", {
 ]);
 /** Activation windows are maintained atomically by the inbox migration's SQLite triggers. */
 export const hvWorkerSubscriptions = sqliteTable("hv_worker_subscriptions", {
-  subagentId: text("subagent_id").notNull().references(() => hvSubagents.id),
+  subagentId: text("subagent_id").notNull().references(() => hvSubagents.id, { onDelete: "cascade" }),
   eventType: text("event_type").notNull(),
   sourceId: text("source_id").notNull(),
   activatedAt: integer("activated_at").notNull(),
@@ -68,7 +68,7 @@ export const hvWorkerSubscriptions = sqliteTable("hv_worker_subscriptions", {
 /** Application-owned inbox and request provenance; admission atomically links requests to runs. */
 export const hvWorkerRequests = sqliteTable("hv_worker_requests", {
   id: text("id").primaryKey(),
-  agentId: text("agent_id").notNull().references(() => hvAgents.id, { onDelete: "restrict" }),
+  agentId: text("agent_id").notNull().references(() => hvAgents.id, { onDelete: "cascade" }),
   subagentId: text("subagent_id").notNull(),
   eventKey: text("event_key").notNull(),
   payload: text("payload", { mode: "json" }).$type<WorkerRequestPayload>().notNull(),
