@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { format } from "timeago.js";
 import { candleIntervals, hyperliquidToolNames, researchToolNames, taToolNames, type AssignmentSettings, type SubagentInput } from "../agents/subagent-input.js";
 import { memoryToolNames } from "../memory/memory-contracts.js";
+import { chartToolNames } from "../charts/contracts.js";
 import { ConfigDialog, configButton, configInput } from "./config-dialog.js";
 
 import { SubagentEnabledToggle } from "./subagent-enabled-toggle.js";
@@ -56,10 +57,11 @@ const toolGroups = [
   { name: "Research · Code Mode & Artifacts", tools: researchToolNames },
   { name: "Technical analysis · TA", tools: taToolNames },
   { name: "Memories & Insights", tools: memoryToolNames },
+  { name: "Chart workspace · Orchestrator only", tools: chartToolNames },
   { name: "HyperVibes · Subagents", tools: ["list_subagents", "delegate_subagent", "list_subagent_runs", "get_subagent_run"] },
 ];
 
-export function ToolPicker({ tools, onChange }: { tools: string[]; onChange: (tools: string[]) => Promise<void> }) {
+export function ToolPicker({ tools, onChange, main = false }: { tools: string[]; onChange: (tools: string[]) => Promise<void>; main?: boolean }) {
   const [open, setOpen] = useState(false);
   return <section className="space-y-2">
     <header className="flex items-center justify-between gap-4"><h3 className="font-medium text-white">Tools</h3><button type="button" aria-haspopup="dialog" onClick={() => setOpen(true)} className={configButton}>Edit tools</button></header>
@@ -70,11 +72,11 @@ export function ToolPicker({ tools, onChange }: { tools: string[]; onChange: (to
       const summary = `${group.name}: ${enabled.join(", ")}`;
       return <p key={group.name} className="line-clamp-2 break-words text-sm text-zinc-200" title={summary}>{group.name}: <span className="font-mono">{enabled.join(", ")}</span></p>;
     })}
-    {open && <ToolDialog tools={tools} onCancel={() => setOpen(false)} onApply={async (next) => { await onChange(next); setOpen(false); }} />}
+    {open && <ToolDialog tools={tools} main={main} onCancel={() => setOpen(false)} onApply={async (next) => { await onChange(next); setOpen(false); }} />}
   </section>;
 }
 
-function ToolDialog({ tools, onCancel, onApply }: { tools: string[]; onCancel: () => void; onApply: (tools: string[]) => Promise<void> }) {
+function ToolDialog({ tools, onCancel, onApply, main }: { tools: string[]; onCancel: () => void; onApply: (tools: string[]) => Promise<void>; main: boolean }) {
   const [draft, setDraft] = useState(tools);
   const [search, setSearch] = useState("");
   const [saving, setSaving] = useState(false);
@@ -87,7 +89,7 @@ function ToolDialog({ tools, onCancel, onApply }: { tools: string[]; onCancel: (
     catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to save tools. Please retry."); }
     finally { inFlight.current = false; setSaving(false); }
   }
-  const groups = toolGroups.map((group) => ({ ...group, visibleTools: group.tools.filter((name) => `${group.name} ${name}`.toLowerCase().includes(search.trim().toLowerCase())) })).filter((group) => group.visibleTools.length);
+  const groups = toolGroups.filter((group) => main || group.tools !== chartToolNames).map((group) => ({ ...group, visibleTools: group.tools.filter((name) => `${group.name} ${name}`.toLowerCase().includes(search.trim().toLowerCase())) })).filter((group) => group.visibleTools.length);
   return <ConfigDialog title="Allowed tools" onCancel={() => { if (!inFlight.current) onCancel(); }} onApply={() => { void apply(); }} applyDisabled={saving}>
     <fieldset disabled={saving} className="space-y-4 disabled:opacity-60">
     <label className="block space-y-2 text-sm">Search extensions and tools<input autoFocus type="search" value={search} onChange={(event) => setSearch(event.target.value)} className={configInput} /></label>

@@ -2,6 +2,8 @@ import { createServerFn } from "@tanstack/react-start";
 import { getRequestHeaders } from "@tanstack/react-start/server";
 import { agentAction, agentUser, field } from "./agents.js";
 import { HyperliquidError } from "../hyperliquid/errors.js";
+import { requestId } from "../agents/agent-input.js";
+import { record, revision } from "../charts/contracts.js";
 
 export const getChartInstruments = createServerFn({ method: "GET" })
   .validator((data: unknown) => ({ id: field(data, "id") }))
@@ -10,6 +12,49 @@ export const getChartInstruments = createServerFn({ method: "GET" })
     return agentAction(async () => {
       await context.runtime.agents.owned(user.id, data.id);
       return context.runtime.hyperliquid.charts.instruments();
+    });
+  });
+
+export const getChartLayouts = createServerFn({ method: "GET" })
+  .validator((data: unknown) => ({ id: field(data, "id") }))
+  .handler(async ({ context, data }) => {
+    const user = await agentUser(context.runtime, getRequestHeaders());
+    return agentAction(async () => {
+      await context.runtime.agents.owned(user.id, data.id);
+      return context.runtime.agents.charts.list(data.id);
+    });
+  });
+
+export const createChartLayout = createServerFn({ method: "POST" })
+  .validator((data: unknown) => { const row = record(data); return { id: field(data, "id"), layoutId: requestId(field(data, "layoutId")), settings: row.settings, sourceId: row.sourceId === undefined ? undefined : requestId(field(data, "sourceId")) }; })
+  .handler(async ({ context, data }) => {
+    const user = await agentUser(context.runtime, getRequestHeaders(), true);
+    return agentAction(async () => {
+      await context.runtime.agents.owned(user.id, data.id);
+      return context.runtime.agents.charts.create(data.id, data.layoutId, data.settings, data.sourceId);
+    });
+  });
+
+export const changeChartLayout = createServerFn({ method: "POST" })
+  .validator((data: unknown) => { const row = record(data); return { id: field(data, "id"), layoutId: requestId(field(data, "layoutId")), revision: revision(row.revision), requestId: requestId(field(data, "requestId")), action: field(data, "action"), edit: row.edit }; })
+  .handler(async ({ context, data }) => {
+    const user = await agentUser(context.runtime, getRequestHeaders(), true);
+    return agentAction(async () => {
+      await context.runtime.agents.owned(user.id, data.id);
+      const charts = context.runtime.agents.charts;
+      if (data.action === "edit") return charts.edit(data.id, data.layoutId, data.revision, data.edit, `user:${data.requestId}`);
+      if (data.action === "undo" || data.action === "redo") return charts.undo(data.id, data.layoutId, data.revision, `user:${data.requestId}`, data.action === "redo");
+      throw new HyperliquidError("Invalid chart action");
+    });
+  });
+
+export const deleteChartLayout = createServerFn({ method: "POST" })
+  .validator((data: unknown) => ({ id: field(data, "id"), layoutId: requestId(field(data, "layoutId")), revision: revision(record(data).revision) }))
+  .handler(async ({ context, data }) => {
+    const user = await agentUser(context.runtime, getRequestHeaders(), true);
+    return agentAction(async () => {
+      await context.runtime.agents.owned(user.id, data.id);
+      await context.runtime.agents.charts.delete(data.id, data.layoutId, data.revision);
     });
   });
 

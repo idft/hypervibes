@@ -136,10 +136,10 @@ export const getAgentChat = createServerFn({ method: "GET" })
   });
 
 export const sendAgentMessage = createServerFn({ method: "POST" })
-  .validator((data: unknown) => ({ id: field(data, "id"), message: field(data, "message"), requestId: field(data, "requestId") }))
+  .validator((data: unknown) => ({ id: field(data, "id"), message: field(data, "message"), requestId: field(data, "requestId"), chart: typeof data === "object" && data !== null && "chart" in data ? data.chart : undefined }))
   .handler(async ({ context, data }) => {
     const user = await agentUser(context.runtime, getRequestHeaders(), true);
-    return agentAction(() => context.runtime.agents.send(user.id, data.id, data.message, data.requestId));
+    return agentAction(() => context.runtime.agents.send(user.id, data.id, data.message, data.requestId, data.chart));
   });
 
 export const deleteAgent = createServerFn({ method: "POST" })

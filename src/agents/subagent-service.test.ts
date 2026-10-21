@@ -15,7 +15,7 @@ import { createRuntime, type AppRuntime } from "../runtime.js";
 import { testConfig } from "../test-config.js";
 import { nextCandleRun, subagentInput, type SubagentInput } from "./subagent-input.js";
 import { subagentTemplates, templateDraft } from "./subagent-templates.js";
-import { MarketSnapshotUpgradeDoc } from "./subagent-service.js";
+import { MarketSnapshotUpgradeDoc, ChartToolsUpgradeDoc } from "./subagent-service.js";
 
 const settings = (patch: Partial<SubagentInput> = {}): SubagentInput => ({ name: "Research", description: "Focused evidence", instructions: "Research the assignment using only available evidence.", provider: "faux", modelId: "faux-1", thinkingLevel: "", tools: [], enabled: true, delegatable: true, persistent: false, schedule: "", delaySeconds: 30, completion: "save", timeoutSeconds: 900, ...patch });
 describe("subagent definitions, execution and scheduling", () => {
@@ -47,11 +47,11 @@ describe("subagent definitions, execution and scheduling", () => {
     expect(main.tools).toContain("get_market_snapshot");
     // Simulate a pre-upgrade root, with customized tools/instructions.
     await runtime.db.update(hvSubagents).set({ tools: ["list_memories"], instructions: "Preserve my custom instructions." }).where(eq(hvSubagents.id, main.id)).run();
-    await root.commit(async (tx) => { (await tx.doc(MarketSnapshotUpgradeDoc, root.id)).applied = false; }, context);
+    await root.commit(async (tx) => { (await tx.doc(MarketSnapshotUpgradeDoc, root.id)).applied = false; (await tx.doc(ChartToolsUpgradeDoc, root.id)).applied = false; }, context);
     await runtime.close();
     runtime = await createRuntime(config(), options());
     const upgraded = (await runtime.agents.subagents.list("owner", agent.id)).find((row) => row.id === main.id)!;
-    expect(upgraded.tools).toEqual(["list_memories", "get_market_snapshot"]);
+    expect(upgraded.tools).toEqual(["list_memories", "get_market_snapshot", "get_chart_snapshot", "get_chart_layout", "edit_chart_annotations"]);
     expect(upgraded.instructions).toBe("Preserve my custom instructions.");
     expect(upgraded.modelId).toBe(main.modelId);
     const restored = await (await opened.mock.results[1]!.value as Harness).root(context);

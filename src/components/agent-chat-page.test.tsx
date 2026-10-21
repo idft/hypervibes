@@ -98,6 +98,27 @@ describe("Agent chat", () => {
     expect(html).toContain("&lt;script&gt;");
     expect(html).not.toContain("<script>");
   });
+  it("uses a slim embedded conversation without the model, context, usage or management header", async () => {
+    await act(async () => root.render(<AgentChatPage initial={initial} choices={choices} embedded />));
+    expect(container.querySelector("header")).toBeNull();
+    expect(container.querySelector("[aria-label='Choose model']")).toBeNull();
+    expect(container.textContent).not.toContain("Total usage");
+    expect(container.textContent).not.toContain("Main conversation");
+    expect(container.textContent).not.toContain("Reset context");
+    expect(container.textContent).not.toContain("Compact");
+    expect(container.querySelector("textarea")!.placeholder).toBe("Ask about this chart");
+    expect(container.querySelector("button[type=submit] svg")).not.toBeNull();
+    expect(container.querySelector("button[type=submit]")!.getAttribute("aria-label")).toBe("Send message");
+    mocks.sendAgentMessage.mockResolvedValue({ ok: true, data: { submissionId: 1 } });
+    await type("What do you see?"); await submit();
+    expect(mocks.sendAgentMessage).toHaveBeenCalledWith({ data: expect.objectContaining({ message: "What do you see?" }) });
+    await act(async () => current().emit("chat", { ...initial, busy: true, partial: "Checking the chart" }));
+    expect(container.textContent).toContain("Checking the chart"); expect(container.textContent).toContain("Stop response");
+    expect(FakeEventSource.instances).toHaveLength(1);
+    await act(async () => root.render(<AgentChatPage initial={initial} choices={choices} />));
+    expect(container.querySelector("header")).not.toBeNull();
+    expect(container.querySelector("[aria-label='Choose model']")).not.toBeNull();
+  });
   it("applies pushed snapshots without polling requests", async () => {
     mocks.sendAgentMessage.mockResolvedValue({ ok: true, data: { submissionId: 1 } });
     await type("Hello");
@@ -396,6 +417,44 @@ describe("Agent chat", () => {
     // A compaction marker arriving in the transcript answers an ongoing compaction.
     await act(async () => current().emit("chat", { ...initial, messages: [{ id: "compaction:5", role: "system", text: "Earlier messages were compacted into a summary", failed: false, marker: "compaction" }] }));
     expect(container.textContent).not.toContain("Nothing to compact yet");
+  });
+  it("disables chart images for text-only models and freezes supported image/context across uncertain retries", async () => {
+    localStorage.clear();
+    const chart = { layoutId: crypto.randomUUID(), revision: 7, capturedAt: Date.now(), status: "live" as const, range: { from: 3600, to: 7200 }, candles: [], image: "png-fixture" };
+    const capture = vi.fn().mockResolvedValue(chart);
+    const props = { label: "BTC study · BTC · 1h", disabled: false, capture };
+    await act(async () => root.render(<AgentChatPage initial={initial} choices={choices} embedded chartContext={props} />));
+    const checkbox = () => container.querySelector<HTMLInputElement>("input[type=checkbox]")!;
+    expect(checkbox().disabled).toBe(true);
+    await act(async () => current().emit("chat", { ...initial, supportsImages: true }));
+    await act(async () => checkbox().click());
+    mocks.sendAgentMessage.mockRejectedValueOnce(new Error("network failure"));
+    await type("Explain this"); await submit();
+    expect(capture).toHaveBeenCalledWith(true);
+    expect(checkbox().disabled).toBe(true);
+    const first = mocks.sendAgentMessage.mock.calls[0]![0];
+    expect(first.data.chart).toEqual(chart);
+    expect(container.textContent).toContain("Retries reuse the captured chart");
+    mocks.sendAgentMessage.mockResolvedValue({ ok: true, data: { submissionId: 1 } });
+    await submit();
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(mocks.sendAgentMessage.mock.calls[1]![0]).toEqual(first);
+    expect(container.querySelector("textarea")!.value).toBe("");
+  });
+  it("reports screenshot capture errors without submitting and preserves text typed during capture", async () => {
+    const capture = vi.fn().mockRejectedValueOnce(new Error("Wait for chart candles"));
+    await act(async () => root.render(<AgentChatPage initial={initial} choices={choices} embedded chartContext={{ label: "BTC", disabled: false, capture }} />));
+    await type("Explain this"); await submit();
+    expect(container.querySelector("[role=alert]")!.textContent).toContain("Wait for chart candles");
+    expect(mocks.sendAgentMessage).not.toHaveBeenCalled();
+    let release!: (value: unknown) => void;
+    capture.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    mocks.sendAgentMessage.mockResolvedValue({ ok: true, data: { submissionId: 1 } });
+    await submit();
+    await type("My next message");
+    await act(async () => release({ layoutId: crypto.randomUUID(), revision: 0, capturedAt: Date.now(), status: "live", range: { from: 1, to: 2 }, candles: [] }));
+    expect(mocks.sendAgentMessage.mock.calls[0]![0].data.message).toBe("Explain this");
+    expect(container.querySelector("textarea")!.value).toBe("My next message");
   });
   it("shows live compaction status", async () => {
     await act(async () => current().emit("chat", { ...initial, compacting: true, compactionError: "Summarization failed: model unavailable" }));

@@ -15,6 +15,7 @@ import { executionWarnings, type ExecutionWarning } from "./execution-warnings.j
 import { toolActivity, type ToolActivity } from "../research/tool-activity.js";
 import type { ExecutionContextService } from "./execution-context.js";
 import type { RunContext } from "./execution-context-contracts.js";
+import { chartToolNames } from "../charts/contracts.js";
 import { bodyHash, canonical } from "../canonical.js";
 import { subagentTemplate } from "./subagent-templates.js";
 import { workerTriggers, type WorkerRequestPayload, type WorkerTriggers } from "./worker-triggers.js";
@@ -35,6 +36,10 @@ const active = ["queued", "running"] as const;
 export const MarketSnapshotUpgradeDoc = defineDoc<{ applied: boolean }>({
   kind: "hv.market-snapshot-upgrade", version: 1, scope: "conversation", history: "latest", fork: "initial",
   initial: () => ({ applied: false }),
+});
+
+export const ChartToolsUpgradeDoc = defineDoc<{ applied: boolean }>({
+  kind: "hv.chart-tools-upgrade", version: 1, scope: "conversation", history: "latest", fork: "initial", initial: () => ({ applied: false }),
 });
 
 /** Definitions and run intents belong to the app; Durable owns execution and reporting. */
@@ -90,6 +95,11 @@ export class SubagentService {
       // Separate commits avoid nesting the shared database queue. A crash before
       // the marker simply retries the idempotent append on the next startup.
       await main.commit(async (tx) => { (await tx.doc(MarketSnapshotUpgradeDoc, main.id)).applied = true; }, context);
+    }
+    if (!await main.commit(async (tx) => (await tx.doc(ChartToolsUpgradeDoc, main.id)).applied, context)) {
+      row.tools = [...new Set([...row.tools, ...chartToolNames])];
+      await this.db.update(hvSubagents).set({ tools: row.tools, updatedAt: now }).where(eq(hvSubagents.id, row.id)).run();
+      await main.commit(async (tx) => { (await tx.doc(ChartToolsUpgradeDoc, main.id)).applied = true; }, context);
     }
     await this.applyMain(binding, row);
     // Mark expired children's pending generations/tools before *any* scheduler
@@ -418,6 +428,12 @@ export class SubagentService {
       if (current.kind === "orchestrator") {
         const live = await binding.harness.snapshot(LiveDoc, binding.main.id, context), inbox = await binding.harness.snapshot(InboxDoc, binding.main.id, context);
         if (live?.run || inbox?.items.length) throw new AgentError("Stop or finish queued work before editing the orchestrator.", 409);
+        if (input.provider !== current.provider || input.modelId !== current.modelId) {
+          const selected = (await this.host.models(userId)).getModel(input.provider, input.modelId);
+          if (!selected?.input.includes("image") && (await binding.main.context(context)).messages.some((message) => message.role === "user" && Array.isArray(message.content) && message.content.some((part) => part.type === "image"))) {
+            throw new AgentError("This conversation contains images. Reset context before switching to a text-only model; earlier messages remain available.", 409);
+          }
+        }
       } else if (!pausing && await this.db.select().from(hvSubagentRuns).where(and(eq(hvSubagentRuns.subagentId, id), inArray(hvSubagentRuns.status, active))).get()) throw new AgentError("Stop or finish the active assignment before editing this worker.", 409);
       const now = Date.now();
       const contextSettings = {

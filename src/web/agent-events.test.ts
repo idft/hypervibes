@@ -12,6 +12,7 @@ import type { DashboardSubagent } from "../agents/subagent-dashboard.js";
 import type { RunHistory } from "../agents/subagent-history.js";
 import type { RunDetail } from "../agents/subagent-service.js";
 import { AgentEventStreams } from "./agent-events.js";
+import { newDrawing, type ChartLayout } from "../charts/contracts.js";
 
 const mocks = vi.hoisted(() => ({ session: vi.fn() }));
 vi.mock("../auth-user.js", () => ({ currentUserSession: mocks.session }));
@@ -125,6 +126,73 @@ describe("Agent chat event stream", () => {
     const reopened = await streams.open(request(agent.id), agent.id);
     expect(reopened.status).toBe(200);
     await reopened.body!.cancel();
+  });
+
+  it("pushes committed chart layouts to both tabs, stays idle without reads, and resynchronizes on reconnect", async () => {
+    await streams.close(); streams = new AgentEventStreams(runtime, "chart-layouts");
+    const agent = await runtime.agents.create("owner", "Charts", randomUUID(), `0x${"12".repeat(20)}`);
+    const other = await runtime.agents.create("owner", "Other charts", randomUUID(), `0x${"34".repeat(20)}`);
+    const layoutRequest = (signal?: AbortSignal) => new Request(`http://localhost:3003/api/agents/${agent.id}/chart/layouts/events`, { headers: { origin: runtime.origin }, signal });
+    mocks.session.mockResolvedValueOnce(null);
+    expect((await streams.open(layoutRequest(), agent.id)).status).toBe(401);
+    mocks.session.mockResolvedValueOnce({ user: { id: "other" }, expiresAt: expiry() });
+    expect((await streams.open(layoutRequest(), agent.id)).status).toBe(404);
+    expect((await streams.open(new Request(layoutRequest(), { headers: { origin: "https://evil.example" } }), agent.id)).status).toBe(403);
+    const first = new AbortController(), second = new AbortController();
+    vi.useFakeTimers();
+    const responses = await Promise.all([streams.open(layoutRequest(first.signal), agent.id), streams.open(layoutRequest(second.signal), agent.id)]);
+    const readers = responses.map((response) => response.body!.getReader()), buffers = [{ text: "" }, { text: "" }];
+    const next = () => Promise.all(readers.map((reader, index) => readEvent<ChartLayout[]>(reader, buffers[index]!)));
+    expect((await next()).map((event) => event)).toEqual([{ event: "chart-layouts", data: [] }, { event: "chart-layouts", data: [] }]);
+    const list = vi.spyOn(runtime.agents.charts, "list");
+    try { await vi.advanceTimersByTimeAsync(60_000); expect(list).not.toHaveBeenCalled(); }
+    finally { vi.useRealTimers(); }
+    const charts = runtime.agents.charts, id = randomUUID(), settings = { name: "BTC levels" };
+    let layout = await charts.create(agent.id, id, settings);
+    expect((await next()).map((event) => event.data)).toEqual([[layout], [layout]]);
+    list.mockClear();
+    expect(await charts.create(agent.id, id, settings)).toEqual(layout);
+    await charts.create(other.id, randomUUID(), { name: "Not this Agent" });
+    await expect(charts.edit(agent.id, id, 99, { label: "Stale" }, "stale")).rejects.toThrow("changed elsewhere");
+    expect(list).not.toHaveBeenCalled();
+    const edit = { label: "Agent support", upsert: [newDrawing("horizontal", "BTC", [{ time: 3600, price: 100 }])] };
+    layout = await charts.edit(agent.id, id, 0, edit, "agent-edit", "agent");
+    expect((await next()).map((event) => event.data[0]?.document.drawings[0]?.author)).toEqual(["agent", "agent"]);
+    list.mockClear();
+    expect(await charts.edit(agent.id, id, 0, edit, "agent-edit", "agent")).toEqual(layout);
+    expect(list).not.toHaveBeenCalled();
+    layout = await charts.edit(agent.id, id, 1, { label: "My notes", settings: { notes: "Chart local" } }, "user-edit");
+    expect((await next()).map((event) => event.data)).toEqual([[layout], [layout]]);
+    layout = await charts.undo(agent.id, id, 2, "undo");
+    expect((await next()).map((event) => event.data)).toEqual([[layout], [layout]]);
+    layout = await charts.undo(agent.id, id, 3, "redo", true);
+    expect((await next()).map((event) => event.data)).toEqual([[layout], [layout]]);
+    const copy = await charts.create(agent.id, randomUUID(), { name: "Copy" }, id);
+    expect((await next()).map((event) => event.data.map((item) => item.id).sort())).toEqual([[id, copy.id].sort(), [id, copy.id].sort()]);
+    await charts.delete(agent.id, copy.id, 0);
+    expect((await next()).map((event) => event.data)).toEqual([[layout], [layout]]);
+    await charts.delete(agent.id, id, 4);
+    expect((await next()).map((event) => event.data)).toEqual([[], []]);
+    first.abort(); second.abort(); await streams.close();
+    list.mockClear();
+    const offline = await charts.create(agent.id, randomUUID(), { name: "While disconnected" });
+    expect(list).not.toHaveBeenCalled();
+    streams = new AgentEventStreams(runtime, "chart-layouts");
+    const reconnect = await streams.open(layoutRequest(), agent.id), reader = reconnect.body!.getReader(), buffer = { text: "" };
+    expect((await readEvent<ChartLayout[]>(reader, buffer)).data).toEqual([offline]);
+    await runtime.close();
+    expect((await readEvent(reader, buffer)).event).toBe("shutdown");
+  });
+
+  it("closes chart-layout subscriptions on Agent deletion and rejects reconnects", async () => {
+    await streams.close(); streams = new AgentEventStreams(runtime, "chart-layouts");
+    const agent = await runtime.agents.create("owner", "Charts", randomUUID(), `0x${"12".repeat(20)}`);
+    const response = await streams.open(request(agent.id), agent.id), reader = response.body!.getReader(), buffer = { text: "" };
+    expect((await readEvent<ChartLayout[]>(reader, buffer)).data).toEqual([]);
+    await runtime.agents.delete("owner", agent.id);
+    expect((await readEvent(reader, buffer)).event).toBe("unavailable");
+    expect((await reader.read()).done).toBe(true);
+    expect((await streams.open(request(agent.id), agent.id)).status).toBe(404);
   });
 
   it("restores linked-account monitoring on runtime startup without any dashboard connections", async () => {
