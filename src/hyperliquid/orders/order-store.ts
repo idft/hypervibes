@@ -1,5 +1,6 @@
-import { and, asc, desc, eq, or } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, or } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
+import { assertAgentExecutable } from "../../agents/agent-enablement.js";
 import { hvExchangeNonces, hvOrderActions, hvOrderEvents, hvOrderItems, hvOrderRequests } from "../../db/order-schema.js";
 import { applicationDatabase, type SharedDatabase } from "../../db/shared-database.js";
 import { HyperliquidError } from "../errors.js";
@@ -60,8 +61,9 @@ export class OrderStore {
   matches(row: RequestRow, account: string, kind: string, input: unknown) {
     if (row.account !== account || row.kind !== kind || row.input !== canonical(input)) throw new HyperliquidError("This request_id was already used with different arguments or an account assignment.", 409);
   }
-  async begin(action: ActionRow): Promise<boolean> {
-    return this.database.appTransaction(async (db) => {
+  async begin(action: ActionRow, modelAgentId?: string): Promise<boolean> {
+    return this.database.appTransaction(async (db, tx) => {
+      if (modelAgentId) await assertAgentExecutable(tx, modelAgentId);
       const now = Date.now();
       const rows = await db.update(hvOrderActions).set({ state: "submitting", updatedAt: now })
         .where(and(eq(hvOrderActions.id, action.id), eq(hvOrderActions.state, "prepared"))).returning().all();
@@ -120,7 +122,7 @@ export class OrderStore {
   }
   async local(agentId: string, account: string) {
     // Bounded local history scan. Live open orders are queried separately.
-    const requests = await this.db.select().from(hvOrderRequests).where(and(eq(hvOrderRequests.agentId, agentId), eq(hvOrderRequests.account, account), eq(hvOrderRequests.kind, "submit"))).orderBy(desc(hvOrderRequests.createdAt)).limit(500).all();
+    const requests = await this.db.select().from(hvOrderRequests).where(and(eq(hvOrderRequests.agentId, agentId), eq(hvOrderRequests.account, account), inArray(hvOrderRequests.kind, ["submit", "close_position"]))).orderBy(desc(hvOrderRequests.createdAt)).limit(500).all();
     return (await Promise.all(requests.map((request) => this.allItems(request.id)))).flat();
   }
   async find(agentId: string, account: string, id: string) {

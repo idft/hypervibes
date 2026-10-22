@@ -5,7 +5,8 @@ import type { ExecutionContextService } from "../../agents/execution-context.js"
 import { TradeAdmissionService, type OrderExecutionHandle } from "./trade-admission.js";
 import { preparePositionProtection, prepareProtectedEntry, type PositionProtectionInput, type ProtectedEntryInput } from "./trade-planning.js";
 import { verifyProtection } from "./protection.js";
-import { compare } from "./order-math.js";
+import { compare, positionSize } from "./order-math.js";
+import { assertAgentExecutable } from "../../agents/agent-enablement.js";
 import { privateKeyToAccount } from "viem/accounts";
 import type { SharedDatabase } from "../../db/shared-database.js";
 import type { FastifyBaseLogger } from "fastify";
@@ -84,6 +85,8 @@ export class OrderService {
     this.stopping = true; clearTimeout(this.timer); this.shutdown.abort();
     await Promise.allSettled([...this.tasks]);
   }
+  /** Join the per-agent mutation queue without sealing operator exits or reconciliation. */
+  quiesce(agentId: string) { return this.lock(agentId, async () => {}); }
   /** Seal this agent only; join submissions and reconciliation before cascading its records. */
   async stopAgent(agentId: string) {
     this.stoppedAgents.add(agentId);
@@ -143,6 +146,44 @@ export class OrderService {
       return this.prepareCancel(authority.account, input.request_id, orders.map((order) => ({ symbol: order.coin, oid: String(order.oid) })), abort);
     }, execution);
   }
+  /** Operator-only exit. Browser/model input never supplies side, size, or signing authority. */
+  closePosition(userId: string, agentId: string, symbol: string, key: string) {
+    this.admit(); this.requestKey(key);
+    if (key.length > 100) throw new HyperliquidError("Close request ID must be at most 100 characters");
+    return this.trackAgent(agentId, () => this.lock(agentId, async () => {
+      const account = await this.account(userId, agentId);
+      instrument(await instruments(this.info, this.signal()), symbol);
+      const unresolved = await this.database.get<{ request_key: string }>(`SELECT r.request_key FROM hv_order_requests r JOIN hv_order_actions a ON a.request_id=r.id WHERE r.account=? AND r.kind='close_position' AND json_extract(r.input,'$.symbol')=? AND a.state IN ('submitting','unknown') AND r.request_key!=? LIMIT 1`, account, symbol, `${key}-close`);
+      if (unresolved) throw new HyperliquidError(`An earlier position close has an unknown outcome. Reconcile request ${unresolved.request_key} before issuing another close.`, 409);
+      const cancel = await this.mutate(userId, agentId, `${key}-cancel`, "cancel_all", { symbol }, undefined, async (authority, signal) => {
+        const orders = (await this.info.frontendOpenOrders({ user: authority.account as `0x${string}`, dex: "" }, signal)).filter((order) => order.coin === symbol);
+        if (orders.length > 100) throw new HyperliquidError("More than 100 orders in this market; review manually", 409);
+        return orders.length ? this.prepareCancel(account, `${key}-cancel`, orders.map((order) => ({ symbol, oid: String(order.oid) })), signal) : [];
+      }, undefined, { operator: true, locked: true });
+      const close = await this.mutate(userId, agentId, `${key}-close`, "close_position", { symbol }, undefined, async (authority, signal) => {
+        const state = await this.info.clearinghouseState({ user: account as `0x${string}`, dex: "" }, signal);
+        const current = state.assetPositions.find(({ position }) => position.coin === symbol)?.position;
+        if (!current) return [];
+        const position = positionSize(current.szi);
+        if (position.side === "flat") return [];
+        return prepareSubmit(this.info, `${key}-close`, [{ symbol, side: position.side === "long" ? "sell" : "buy", size: position.size, order_type: "market", reduce_only: true }], authority.builder, signal);
+      }, undefined, { operator: true, locked: true });
+      const warnings = [...close.warnings];
+      if (cancel.uncertain) warnings.push("Cancellation outcome is unknown. Check the original operation instead of retrying with a new ID.");
+      if (cancel.results.some((order) => order.commandStatus === "rejected" || order.commandStatus === "unknown" || order.commandStatus === "not_sent")) warnings.push("Some market orders were not confirmed canceled; inspect remaining orders.");
+      let remainingSize: string | null = null, remainingOrders: number | null = null;
+      try {
+        const [state, orders] = await Promise.all([
+          this.info.clearinghouseState({ user: account as `0x${string}`, dex: "" }, this.signal()),
+          this.info.frontendOpenOrders({ user: account as `0x${string}`, dex: "" }, this.signal()),
+        ]);
+        remainingSize = state.assetPositions.find(({ position }) => position.coin === symbol)?.position.szi ?? "0";
+        remainingOrders = orders.filter((order) => order.coin === symbol).length;
+      } catch { warnings.push("Could not verify remaining position/orders. Inspect the account before retrying."); }
+      return { requestId: key, cancel, close, remainingSize, remainingOrders, warnings,
+        complete: remainingSize !== null && positionSize(remainingSize).side === "flat" && remainingOrders === 0 && !cancel.uncertain && !close.uncertain };
+    }));
+  }
   private async prepareCancel(account: string, key: string, inputs: { symbol: string; oid: string }[], signal: AbortSignal): Promise<PreparedAction[]> {
     const meta = await instruments(this.info, signal);
     const seen = new Set<string>();
@@ -162,26 +203,33 @@ export class OrderService {
     }
     return [{ payload: { kind: "cancel", cancels }, items }];
   }
-  private mutate(userId: string, agentId: string, key: string, kind: string, input: unknown, cancellation: AbortSignal | undefined, prepare: (authority: TradingAuthority, signal: AbortSignal) => Promise<PreparedAction[]>, execution?: OrderExecutionHandle): Promise<OperationResult> {
+  private mutate(userId: string, agentId: string, key: string, kind: string, input: unknown, cancellation: AbortSignal | undefined, prepare: (authority: TradingAuthority, signal: AbortSignal) => Promise<PreparedAction[]>, execution?: OrderExecutionHandle, options: { operator?: boolean; locked?: boolean } = {}): Promise<OperationResult> {
     this.admit(); this.requestKey(key);
+    const operator = options.operator === true;
     if (!this.started) return Promise.reject(new HyperliquidError("Order execution is not started", 503));
-    return this.trackAgent(agentId, () => this.lock(agentId, async () => {
+    const run = async () => {
       const account = await this.account(userId, agentId);
+      if (!operator) await assertAgentExecutable(this.database, agentId);
+      const submission = kind === "submit" || kind === "close_position";
       const signal = this.signal(cancellation);
       signal.throwIfAborted();
       let request = await this.store.request(agentId, key);
       let authority: TradingAuthority | undefined;
-      if (request) this.store.matches(request, account, kind, input);
+      if (request) {
+        this.store.matches(request, account, kind, input);
+        const existing = request;
+        if (operator) await this.lock(existing.id, () => this.reconcile(existing, signal));
+      }
       else {
         if (kind === "submit" && (input as SubmitInput).orders.some((order) => !order.reduce_only && ["limit", "market"].includes(order.order_type)) && await this.store.hasUncertain(account)) {
           throw new HyperliquidError("An earlier command has an unknown outcome on this account. Reconcile it before adding exposure; do not retry with a new request_id.", 409);
         }
-        authority = await this.bindings.authority(userId, agentId, signal, kind === "submit");
+        authority = await this.bindings.authority(userId, agentId, signal, submission);
         if (authority.account !== account) throw new HyperliquidError("Account assignment changed", 409);
         const prepared = await prepare(authority, signal);
         if (kind === "submit" && this.admission) await this.admission.validate(agentId, this.info, account, signal, prepared, execution);
         const capability = kind === "submit" ? "submit_orders" : kind === "cancel" ? "cancel_orders" : "cancel_all_orders";
-        const origin = this.admission?.origin(agentId, execution, capability);
+        const origin = operator ? undefined : this.admission?.origin(agentId, execution, capability);
         request = await this.store.prepare(agentId, account, key, kind, input, prepared, origin);
       }
       // The same request lock is also used by background reconciliation.
@@ -197,13 +245,16 @@ export class OrderService {
             await this.store.outcome(action.id, "not_sent", views.map((view) => ({ ...view, commandStatus: "not_sent", orderStatus: "not_sent", updatedAt: Date.now(), error: "Not sent: previous action uncertain/rejected, request expired, or execution aborted." })), "not_sent");
             continue;
           }
-          authority ??= await this.bindings.authority(userId, agentId, signal, kind === "submit");
+          if (!operator) await assertAgentExecutable(this.database, agentId);
+          authority ??= await this.bindings.authority(userId, agentId, signal, submission);
           if (authority.account !== captured.account) throw new HyperliquidError("Account assignment changed", 409);
           if (kind === "submit" && this.admission) {
             if (views.some((view) => !view.reduceOnly) && await this.store.hasUncertain(account)) throw new HyperliquidError("An earlier command has an unknown outcome on this account. Reconcile it before adding exposure.", 409);
             await this.admission.validate(agentId, this.info, account, signal, [{ payload: JSON.parse(action.payload) as PreparedPayload, items: views }], execution);
           }
-          if (!(await this.store.begin(action))) continue;
+          if (operator && submission && views.some((view) => !view.reduceOnly)) throw new HyperliquidError("Operator exits must be reduce-only", 403);
+          if (!operator) await assertAgentExecutable(this.database, agentId);
+          if (!(await this.store.begin(action, operator ? undefined : agentId))) continue;
           const payload = JSON.parse(action.payload) as PreparedPayload;
           let response: unknown;
           let uncertain = false;
@@ -224,7 +275,8 @@ export class OrderService {
         }
         return this.result(captured);
       });
-    }));
+    };
+    return this.trackAgent(agentId, () => options.locked ? run() : this.lock(agentId, run));
   }
   private async result(request: RequestRow): Promise<OperationResult> {
     const results = (await this.store.allItems(request.id)).map(({ view }) => JSON.parse(view) as OrderView);

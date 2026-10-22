@@ -54,6 +54,19 @@ describe("sub-agent run history and details", () => {
     expect(stop).toHaveBeenCalledWith("running-id");
     expect(navigate).toHaveBeenCalledOnce();
   });
+  it.each([true, false])("copies the run ID with honest feedback (success: %s)", async (success) => {
+    const writeText = success ? vi.fn().mockResolvedValue(undefined) : vi.fn().mockRejectedValue(new Error("Clipboard denied"));
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    await act(async () => root.render(<SubagentRunPage initial={initial} />));
+    const copy = container.querySelector<HTMLButtonElement>('[aria-label="Copy run ID"]')!;
+    expect(copy.querySelector("svg")).not.toBeNull();
+    expect(copy.textContent).toBe("");
+    expect(copy.className).not.toContain("border");
+    expect(copy.className).toContain("cursor-pointer");
+    await act(async () => copy.click());
+    expect(writeText).toHaveBeenCalledWith(run.id);
+    expect(container.querySelector('[aria-label="Run breadcrumb"] [role="status"]')?.textContent).toBe(success ? "Copied" : "Unable to copy");
+  });
   it("shows snapshotted instructions, full transcript, tools and prior context without duplicated sections", async () => {
     await act(async () => root.render(<SubagentRunPage initial={initial} />));
     expect(document.querySelector("dialog")).toBeNull();

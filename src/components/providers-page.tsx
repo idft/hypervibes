@@ -23,11 +23,19 @@ function connectLabel(method: { type: AuthType }): string {
 
 export function ProvidersPage() {
   const client = useQueryClient();
+  const signInTab = useRef<{ tab: Window; loginId: string; eventCount: number } | undefined>(undefined);
+  function closeSignInTab() {
+    signInTab.current?.tab.close();
+    signInTab.current = undefined;
+  }
   const { data: settings, error: refreshError } = useSuspenseQuery(providerSettingsQueryOptions());
   const { data: setup } = useSuspenseQuery(setupQueryOptions());
   const { agentCount } = setup;
   const mutation = useMutation<LoginView | undefined, Error, ProviderOperation>({
     ...providerMutationOptions(client),
+    onError: (_error, operation) => {
+      if (operation.type === "answer") closeSignInTab();
+    },
     onSuccess: (login: LoginView | undefined, operation) => {
       if (operation.type === "begin" && login) {
         if (login.state === "complete") toast.success("Provider connected.");
@@ -46,6 +54,24 @@ export function ProvidersPage() {
   const error = streamError || mutation.error?.message || refreshError?.message;
   const active = login?.state === "pending";
 
+  useEffect(() => () => closeSignInTab(), []);
+  useEffect(() => {
+    const waiting = signInTab.current;
+    if (!waiting) return;
+    if (!login || login.id !== waiting.loginId || login.state !== "pending") {
+      closeSignInTab();
+      return;
+    }
+    const event = login.events.slice(waiting.eventCount).find((event) => event.type === "auth_url");
+    if (event?.type !== "auth_url") return;
+    try {
+      const url = new URL(event.url);
+      if (url.protocol !== "https:" && url.protocol !== "http:") { closeSignInTab(); return; }
+      if (!waiting.tab.closed) waiting.tab.location.replace(url.href);
+      // Once navigated, the provider tab belongs to the user; don't close it.
+      signInTab.current = undefined;
+    } catch { closeSignInTab(); }
+  }, [login]);
   useEffect(() => { setValue(""); }, [login?.prompt?.id]);
   useEffect(() => {
     if (!login || login.state !== "pending") return;
@@ -83,12 +109,25 @@ export function ProvidersPage() {
     setStreamError("");
     mutation.mutate({ type: "begin", providerId, authType: type });
   }
-  function submitAnswer() {
+  function submitAnswer(answer: string) {
     const prompt = login?.prompt;
     if (!login || !prompt) return;
-    mutation.mutate({ type: "answer", id: login.id, promptId: prompt.id, value });
+    if (pending) return;
+    if (answer === "browser" && prompt.input.type === "select" && prompt.input.options.some((option) => option.id === "browser")) {
+      closeSignInTab();
+      try {
+        // Open synchronously during the click, before the asynchronous auth URL arrives.
+        const tab = window.open("about:blank", "_blank");
+        if (tab) {
+          tab.opener = null;
+          signInTab.current = { tab, loginId: login.id, eventCount: login.events.length };
+        }
+      } catch { closeSignInTab(); }
+    }
+    mutation.mutate({ type: "answer", id: login.id, promptId: prompt.id, value: answer });
   }
   function cancelLogin() {
+    closeSignInTab();
     if (!login) return;
     if (login.state !== "pending") { setLogin(undefined); return; }
     mutation.mutate({ type: "cancel", id: login.id });
@@ -203,23 +242,38 @@ function ProviderLoginDialog({ login, providerName, value, onValueChange, pendin
     return () => element.close();
   }, []);
   const prompt = login.prompt;
+  const loginMethods = prompt?.input.type === "select" && prompt.input.options.length === 2
+    && prompt.input.options.some((option) => option.id === "browser")
+    && prompt.input.options.some((option) => option.id === "device_code")
+    ? [...prompt.input.options].sort((a) => a.id === "browser" ? -1 : 1)
+    : undefined;
   return <dialog ref={ref} aria-labelledby={titleId} onCancel={(event) => { event.preventDefault(); if (!pending) onCancel(); }} className="m-auto max-h-[calc(100dvh-2rem)] w-[calc(100%_-_2rem)] max-w-md overflow-y-auto rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6 text-zinc-100 shadow-2xl backdrop:bg-black/70 backdrop:backdrop-blur-sm">
     <h3 id={titleId} className="text-lg font-semibold text-white">{providerName} sign-in</h3>
     {login.events.length > 0 && <div className="mt-4 space-y-3">{login.events.map((event, index) => <LoginEvent key={index} event={event} />)}</div>}
     {login.state === "failed" && <p role="alert" className="mt-4 text-sm text-red-300">{login.error ?? "Sign-in failed."}</p>}
     {login.state === "pending" && prompt && <form id={formId} key={prompt.id} className="mt-4 space-y-3" onSubmit={(event) => { event.preventDefault(); onSubmit(value); }}>
-      <label htmlFor="provider-answer" className="block text-sm">{prompt.input.message}</label>
+      {loginMethods ? <fieldset disabled={pending}>
+        <legend className="text-sm">{prompt.input.message}</legend>
+        <div className="mt-3 grid grid-cols-2 gap-3">
+          {loginMethods.map((option) => <button key={option.id} type="button" aria-label={option.label} title={option.description ? `${option.label} — ${option.description}` : option.label} className={`${button} flex flex-col items-center justify-center gap-2 py-5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400`} onClick={() => onSubmit(option.id)}>
+            <svg aria-hidden="true" className="h-7 w-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              {option.id === "browser" ? <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9h18M7 6.5h.01M10 6.5h.01" /></> : <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="m7 9 3 3-3 3m6 0h4" /></>}
+            </svg>
+            <span>{option.id === "browser" ? "Browser (default)" : "Device code"}</span>
+          </button>)}
+        </div>
+      </fieldset> : <><label htmlFor="provider-answer" className="block text-sm">{prompt.input.message}</label>
       {prompt.input.type === "select" ? <select id="provider-answer" className={input} value={value} onChange={(event) => onValueChange(event.target.value)} required>
         <option value="">Choose…</option>
         {prompt.input.options.map((option) => <option key={option.id} value={option.id}>{option.label}{option.description ? ` — ${option.description}` : ""}</option>)}
-      </select> : <input id="provider-answer" className={input} autoComplete="off" type={prompt.input.type === "secret" ? "password" : "text"} value={value} maxLength={16000} placeholder={"placeholder" in prompt.input ? prompt.input.placeholder : undefined} onChange={(event) => onValueChange(event.target.value)} required={prompt.input.type !== "text"} />}
+      </select> : <input id="provider-answer" className={input} autoComplete="off" type={prompt.input.type === "secret" ? "password" : "text"} value={value} maxLength={16000} placeholder={"placeholder" in prompt.input ? prompt.input.placeholder : undefined} onChange={(event) => onValueChange(event.target.value)} required={prompt.input.type !== "text"} />}</>}
     </form>}
     {login.state === "pending" && !prompt && <p role="status" className="mt-4 text-sm text-zinc-400">Waiting for provider…</p>}
     {login.state === "failed"
       ? <div className="mt-6 flex items-center justify-end gap-3"><button type="button" className={button} onClick={onCancel}>Close</button></div>
       : <div className="mt-6 flex items-center justify-between gap-3">
         <button type="button" className={button} disabled={pending} onClick={onCancel}>Cancel sign-in</button>
-        {prompt && <button type="submit" form={formId} className={primaryButton} disabled={pending || (prompt.input.type !== "text" && !value.trim())}>Continue</button>}
+        {prompt && !loginMethods && <button type="submit" form={formId} className={primaryButton} disabled={pending || (prompt.input.type !== "text" && !value.trim())}>Continue</button>}
       </div>}
   </dialog>;
 }

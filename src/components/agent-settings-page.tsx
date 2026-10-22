@@ -13,6 +13,7 @@ import { saveRiskSettings } from "../web/risk.js";
 import { riskQueryOptions } from "../web/risk-queries.js";
 import { configButton } from "./config-dialog.js";
 import { NotificationSettingsSection } from "./notification-settings-section.js";
+import { AgentEnablementControl } from "./agent-enablement-control.js";
 import { InstrumentPicker } from "./instrument-picker.js";
 
 const button = "cursor-pointer rounded-full bg-violet-600 px-4 py-2 text-sm text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50";
@@ -234,7 +235,7 @@ export function AgentSettingsPage({ initial }: { initial: AgentChat }) {
   return <div className="w-full space-y-2">
     <section className="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
       <h2 className="text-lg font-medium text-white">Settings</h2>
-      <dl className="mt-4 grid gap-4 sm:grid-cols-2"><div><dt className="text-xs uppercase tracking-wide text-zinc-500">Trading account</dt><dd className="mt-2 break-all font-mono text-sm text-zinc-300">{initial.agent.tradingAccountAddress ?? "No account linked (chat only)"}</dd></div><div><dt className="text-xs uppercase tracking-wide text-zinc-500">Agent status</dt><dd className="mt-2 text-sm text-zinc-300">{initial.agent.state}</dd></div></dl>
+      <dl className="mt-4 grid gap-4 sm:grid-cols-2"><div><dt className="text-xs uppercase tracking-wide text-zinc-500">Trading account</dt><dd className="mt-2 break-all font-mono text-sm text-zinc-300">{initial.agent.tradingAccountAddress ?? "No account linked (chat only)"}</dd></div><div><dt className="text-xs uppercase tracking-wide text-zinc-500">Lifecycle status</dt><dd className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-zinc-300">{initial.agent.state === "stopping" || initial.agent.state === "stopped" ? initial.agent.state : <AgentEnablementControl id={initial.agent.id} name={initial.agent.name} enabled={initial.agent.enabled} variant="settings" />}</dd></div></dl>
     </section>
     {initial.agent.state !== "stopping" && initial.agent.state !== "stopped" && <RiskManagementSection agentId={initial.agent.id} />}
     {initial.agent.state !== "stopping" && initial.agent.state !== "stopped" && <NotificationSettingsSection agentId={initial.agent.id} />}

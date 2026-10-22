@@ -3,6 +3,7 @@ import { getSupportedThinkingLevels, type Models } from "@earendil-works/pi-ai/m
 import { defineDoc, InboxDoc, LiveDoc, type AgentChange, type Conversation, type ConversationId, type Cursor, type EntryRecord, type Extension, type Harness, type ModelRef } from "@earendil-works/pi-durable";
 import { and, asc, count, desc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
+import { agentExecutable, assertAgentExecutable } from "./agent-enablement.js";
 import type { AgentRow } from "../db/agent-schema.js";import { hvSubagents, hvSubagentRuns, hvWorkerRequests, type SubagentRow, type SubagentRun, type WorkerRequest } from "../db/subagent-schema.js";
 import type { ApplicationDatabase, SharedDatabase } from "../db/shared-database.js";
 import type { FastifyBaseLogger } from "fastify";
@@ -117,6 +118,27 @@ export class SubagentService {
     this.stoppedAgents.add(agentId);
     await this.pending.get(agentId);
     await this.db.update(hvSubagents).set({ enabled: false, nextRunAt: null }).where(and(eq(hvSubagents.agentId, agentId), eq(hvSubagents.kind, "worker"))).run();
+  }
+  /** Clear application queues without changing each worker's configured enablement. */
+  async discardPending(agentId: string) {
+    const now = Date.now();
+    const affected = await this.database.appTransaction(async (db) => {
+      const discarded = await db.update(hvWorkerRequests).set({ discardedReason: "Agent disabled; request will not replay" }).where(and(eq(hvWorkerRequests.agentId, agentId), isNull(hvWorkerRequests.runId), isNull(hvWorkerRequests.discardedReason))).returning({ id: hvWorkerRequests.subagentId }).all();
+      const definitions = await db.select().from(hvSubagents).where(and(eq(hvSubagents.agentId, agentId), eq(hvSubagents.kind, "worker"))).all();
+      for (const row of definitions) await db.update(hvSubagents).set({ nextRunAt: row.enabled && !row.archived ? nextCandleRun(now, row.schedule, row.delaySeconds) : null }).where(eq(hvSubagents.id, row.id)).run();
+      return [...new Set(discarded.map((row) => row.id))];
+    });
+    for (const id of affected) this.historyChanged(agentId, id);
+    this.dashboardChanged(agentId);
+  }
+  /** Only claim cancellation after the harness has confirmed its ownership tree is idle. */
+  async cancelOutstanding(agentId: string) {
+    const now = Date.now();
+    const cancelled = await this.db.update(hvSubagentRuns).set({ status: "cancelled", result: "Agent disabled. Existing exchange orders and positions were not changed.", finishedAt: now, reportedAt: now }).where(and(eq(hvSubagentRuns.agentId, agentId), inArray(hvSubagentRuns.status, active))).returning({ id: hvSubagentRuns.subagentId }).all();
+    for (const id of new Set(cancelled.map((row) => row.id))) this.historyChanged(agentId, id);
+  }
+  async execute<T>(id: string, action: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    return this.serial(id, async () => { await assertAgentExecutable(this.database, id); return action(); }, signal);
   }
   private admitAgent(id: string) {
     if (this.stoppedAgents.has(id) || this.host.signal(id).aborted) throw new AgentError("Agent is being deleted", 409);
@@ -457,7 +479,7 @@ export class SubagentService {
       const row = (await this.db.update(hvSubagents).set({ ...changes, updatedAt: now }).where(eq(hvSubagents.id, id)).returning().all())[0]!;
       if (current.kind === "orchestrator") {
         await this.applyMain(binding, row);
-        if (this.ready) binding.harness.resume();
+        if (this.ready && await agentExecutable(this.database, agentId)) binding.harness.resume();
       }
       this.host.changed(agentId); this.dashboardChanged(agentId); return row;
     });
@@ -498,6 +520,7 @@ export class SubagentService {
     if (!run) throw new AgentError("Assignment not found", 404); return run;
   }
   private async canWake(agentId: string) {
+    if (!await agentExecutable(this.database, agentId)) return false;
     const binding = this.bindings.get(agentId); if (!binding || !this.ready || this.stopping) return false;
     const model = (await binding.main.agent(context)).model;
     return Boolean(model && (this.injectedModels || await this.providers.configured(binding.userId, model)));
@@ -517,6 +540,7 @@ export class SubagentService {
     return this.admitRun(agentId, id, task, `manual:${submissionId}`, "manual");
   }
   async delegate(agentId: string, id: string, task: string, submissionId: string, signal?: AbortSignal, intent: "operator_trade" | "evaluation" = "evaluation", actor?: MemoryActor, refs: string[] = []) {
+    await assertAgentExecutable(this.database, agentId);
     if (actor && (actor.agentId !== agentId || (actor.runId ? !actor.subagentId : actor.subagentId !== `main:${agentId}`))) throw new AgentError("Invalid delegation caller", 403);
     if (actor?.runId && intent !== "evaluation") throw new AgentError("Only the orchestrator can delegate operator intent", 403);
     if (refs.length > 20 || refs.some((ref) => !/^m[1-9][0-9]*$/.test(ref))) throw new AgentError("Supply up to 20 exact published research references");
@@ -536,7 +560,7 @@ export class SubagentService {
     return this.queueWorker(agentId, target.id, submissionId, payload, actor, signal);
   }
   private queueWorker(agentId: string, id: string, key: string, payload: WorkerRequestPayload, actor?: MemoryActor, signal?: AbortSignal) {
-    return this.serial(agentId, async () => {
+    return this.execute(agentId, async () => {
       if (!this.ready) throw new AgentError("Agent execution is not ready", 503);
       const target = await this.definition(agentId, id);
       if (payload.task.length > 12000) throw new AgentError("Worker requests must contain at most 12,000 characters");
@@ -581,6 +605,7 @@ export class SubagentService {
     return { request, run: request.runId ? view(await this.internalRun(agentId, request.runId)) : null };
   }
   private async drainInbox(agentId: string, id: string, now: number) {
+    await assertAgentExecutable(this.database, agentId);
     const binding = this.bindings.get(agentId); if (!binding) return;
     const target = await this.definition(agentId, id);
     if (target.archived || !target.triggers.inboxEnabled) {
@@ -617,7 +642,7 @@ export class SubagentService {
     await this.dispatch(binding, run);
   }
   private admitRun(agentId: string, id: string, task: string, submissionId: string, source: SubagentRun["source"], signal?: AbortSignal, refs: string[] = []) {
-    return this.serial(agentId, async () => {
+    return this.execute(agentId, async () => {
       if (!this.ready) throw new AgentError("Agent execution is not ready", 503);
       task = assignment(task); const binding = this.binding(agentId);
       const previous = await this.db.select().from(hvSubagentRuns).where(and(eq(hvSubagentRuns.agentId, agentId), eq(hvSubagentRuns.requestId, submissionId))).get();
@@ -644,6 +669,7 @@ export class SubagentService {
     }, signal);
   }
   private async dispatch(binding: Binding, run: SubagentRun, reportOnly = false) {
+    await assertAgentExecutable(this.database, run.agentId);
     const taskId = await binding.main.commit(async (tx) => {
       const receipt = await tx.doc(RunReceipt, binding.main.id, reportOnly ? `${run.id}:report` : run.id, null);
       if (receipt.taskId === null) receipt.taskId = await tx.createTask(binding.runner, { runId: run.id, reportOnly }, { ownership: { kind: "conversation" }, background: true });
@@ -704,7 +730,7 @@ export class SubagentService {
       const pending = await this.db.select().from(hvSubagentRuns).where(or(inArray(hvSubagentRuns.status, active), isNull(hvSubagentRuns.reportedAt))).all();
       for (const run of pending) {
         if (this.stopping || this.draining) return;
-        const binding = this.bindings.get(run.agentId); if (!binding || this.host.signal(run.agentId).aborted) continue;
+        const binding = this.bindings.get(run.agentId); if (!binding || this.host.signal(run.agentId).aborted || !await agentExecutable(this.database, run.agentId)) continue;
         await this.serial(run.agentId, async () => {
           const current = await this.internalRun(run.agentId, run.id);
           if (current.taskId === null && active.includes(current.status as typeof active[number])) await this.dispatch(binding, current);
@@ -727,14 +753,14 @@ export class SubagentService {
       const inboxes = await this.db.selectDistinct({ agentId: hvWorkerRequests.agentId, id: hvWorkerRequests.subagentId }).from(hvWorkerRequests).where(and(isNull(hvWorkerRequests.runId), isNull(hvWorkerRequests.discardedReason))).all();
       for (const inbox of inboxes) {
         if (this.stopping || this.draining) return;
-        if (this.host.signal(inbox.agentId).aborted) continue;
+        if (this.host.signal(inbox.agentId).aborted || !await agentExecutable(this.database, inbox.agentId)) continue;
         try { await this.serial(inbox.agentId, () => this.drainInbox(inbox.agentId, inbox.id, now)); }
         catch (error) { if (!(error instanceof AgentError)) throw error; this.log?.warn({ err: error, ...inbox }, "Worker dispatch deferred"); }
       }
       const due = await this.db.select().from(hvSubagents).where(and(eq(hvSubagents.enabled, true), eq(hvSubagents.archived, false), lte(hvSubagents.nextRunAt, now))).all();
       for (const row of due) {
         if (this.stopping || this.draining) return;
-        if (this.host.signal(row.agentId).aborted) continue;
+        if (this.host.signal(row.agentId).aborted || !await agentExecutable(this.database, row.agentId)) continue;
         await this.schedule(row, now);
       }
       this.schedulerError = null;
@@ -745,7 +771,7 @@ export class SubagentService {
     return this.ticking;
   }
   private schedule(candidate: SubagentRow, now: number) {
-    return this.serial(candidate.agentId, async () => {
+    return this.execute(candidate.agentId, async () => {
       const row = await this.definition(candidate.agentId, candidate.id);
       if (!row.enabled || row.archived || row.nextRunAt !== candidate.nextRunAt) return;
       const binding = this.bindings.get(row.agentId);

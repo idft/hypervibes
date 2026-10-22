@@ -57,23 +57,22 @@ export function compareDecimals(left: string, right: string): number | null {
 }
 
 /**
- * Formats a plain decimal string for the account table: 4 decimal places
- * (half-up), thousands separators and negatives in parentheses. Zero renders
- * as `0.0000`.
+ * Formats a plain decimal string with fixed precision (4 places by default),
+ * half-up rounding, thousands separators and negatives in parentheses.
  */
-export function formatMoneyText(value: string | null): string {
+export function formatMoneyText(value: string | null, decimalPlaces: 2 | 4 = 4): string {
   if (!value) return "-";
   const parsed = parseDecimal(value);
   if (!parsed) return "-";
-  // Scale to 5 digits and round half-up to exactly 4 display decimals.
-  const guard = 5n;
+  // Keep one guard digit for exact half-up rounding at the requested precision.
+  const guard = BigInt(decimalPlaces + 1);
   const scale = 10n ** guard;
   const scaled = parsed.whole * scale
     + BigInt(parsed.fraction.padEnd(Number(guard), "0").slice(0, Number(guard)) || "0");
   const rounded = (scaled + 5n) / 10n;
-  const denominator = 10_000n;
+  const denominator = 10n ** BigInt(decimalPlaces);
   const whole = rounded / denominator;
-  const fraction = (rounded % denominator).toString().padStart(4, "0");
+  const fraction = (rounded % denominator).toString().padStart(decimalPlaces, "0");
   const grouped = whole.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
   const formatted = `${grouped}.${fraction}`;
   return parsed.negative && rounded !== 0n ? `(${formatted})` : formatted;

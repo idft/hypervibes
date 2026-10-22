@@ -9,7 +9,7 @@ export const hvOrderRequests = sqliteTable("hv_order_requests", {
   account: text("account").notNull(), requestKey: text("request_key").notNull(), kind: text("kind").notNull(),
   input: text("input").notNull(), createdAt: integer("created_at").notNull(),
 }, (t) => [uniqueIndex("hv_order_request_identity").on(t.agentId, t.id), uniqueIndex("hv_order_request_key").on(t.agentId, t.requestKey), index("hv_order_requests_agent").on(t.agentId, t.createdAt),
-  check("hv_order_request_kind", sql`${t.kind} IN ('submit', 'cancel', 'cancel_all')`)]);
+  check("hv_order_request_kind", sql`${t.kind} IN ('submit', 'cancel', 'cancel_all', 'close_position')`)]);
 export const hvOrderActions = sqliteTable("hv_order_actions", {
   id: text("id").primaryKey(), requestId: text("request_id").notNull().references(() => hvOrderRequests.id, { onDelete: "cascade" }),
   ordinal: integer("ordinal").notNull(), payload: text("payload").notNull(),

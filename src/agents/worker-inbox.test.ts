@@ -50,6 +50,26 @@ describe("event-driven worker inboxes", () => {
   });
   afterEach(async () => { release?.(); release = undefined; await runtime.close(); vi.restoreAllMocks(); rmSync(directory, { recursive: true, force: true }); });
 
+  it("discards queued work on agent disable and does not collect events while disabled", async () => {
+    const trader = await createWorker({ triggers: inbox({ fills: true }) });
+    const queued = await runtime.agents.subagents.delegate(agentId, trader.id, "Queued operator trade", randomUUID(), undefined, "operator_trade");
+    expect(queued.status).toBe("pending");
+    await runtime.agents.setEnabled("owner", agentId, false);
+    expect((await requests())[0]?.discarded_reason).toContain("Agent disabled");
+    await event("", "fill-while-disabled", "fill");
+    expect(await requests()).toHaveLength(1);
+    await expect(runtime.agents.subagents.delegate(agentId, trader.id, "Blocked", randomUUID(), undefined, "operator_trade")).rejects.toMatchObject({ status: 409 });
+    await runtime.agents.subagents.tick();
+    expect(await runs(trader.id)).toEqual([]);
+    await runtime.agents.setEnabled("owner", agentId, true);
+    await runtime.agents.subagents.tick();
+    expect(await runs(trader.id)).toEqual([]);
+    await event("", "new-fill-after-enable", "fill");
+    await runtime.agents.subagents.tick();
+    await waitCompleted(trader.id);
+    expect(await requests()).toHaveLength(2);
+  });
+
   it("allows multiple inbox subscribers and independent schedules while checking same-Agent sources", async () => {
     const trader = await createWorker({ triggers: inbox() });
     const second = await createWorker({ triggers: inbox(), schedule: "5m" });

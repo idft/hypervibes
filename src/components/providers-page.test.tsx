@@ -41,6 +41,7 @@ describe("Providers page", () => {
   let root: Root, client: QueryClient;
   beforeEach(async () => {
     vi.resetAllMocks();
+    vi.spyOn(window, "open").mockReturnValue(null);
     client = createTestQueryClient({ staleTime: Infinity });
     mocks.getSetupState.mockResolvedValue({ agentCount: 0, providerConnected: false, apiKeyApproved: false, builderFeeApproved: false });
     vi.useFakeTimers();
@@ -110,6 +111,80 @@ describe("Providers page", () => {
     await act(async () => button("API key").click());
     expect(container.querySelector('[role="alert"]')).toBeNull();
     expect(MockEventSource.instances).toHaveLength(1);
+  });
+
+  it.each(["browser", "device_code"])("offers side-by-side login icons and submits %s directly", async (method) => {
+    const login: LoginView = { ...attempt, prompt: { id: "method", input: {
+      type: "select", message: "Choose login method", options: [
+        { id: "device_code", label: "Device code login (headless)" },
+        { id: "browser", label: "Browser login (default)" },
+      ],
+    } } };
+    mocks.beginProviderLogin.mockResolvedValue(login);
+    mocks.getProviderSettings.mockResolvedValue(initial);
+    mocks.answerProviderLogin.mockResolvedValue(undefined);
+    await act(async () => button("OAuth").click());
+    expect(dialog().querySelector("select")).toBeNull();
+    expect(button("Continue")).toBeUndefined();
+    const choices = [...dialog().querySelectorAll<HTMLButtonElement>("fieldset button")];
+    expect(choices.map((choice) => choice.getAttribute("aria-label"))).toEqual([
+      "Browser login (default)", "Device code login (headless)",
+    ]);
+    expect(choices.every((choice) => choice.title && choice.querySelector('svg[aria-hidden="true"]'))).toBe(true);
+    await act(async () => choices[method === "browser" ? 0 : 1]!.click());
+    expect(mocks.answerProviderLogin).toHaveBeenCalledWith({ data: { id: "login", promptId: "method", value: method } });
+  });
+
+  it.each([
+    ["https://auth.example.test/login", false],
+    ["https://auth.example.test/login", true],
+    ["javascript:alert(1)", false],
+  ])("opens the browser sign-in URL safely: %s, blocked=%s", async (url, blocked) => {
+    const tab = { opener: window, closed: false, close: vi.fn(), location: { replace: vi.fn() } };
+    vi.mocked(window.open).mockReturnValue(blocked ? null : tab as unknown as Window);
+    const login: LoginView = { ...attempt, prompt: { id: "method", input: {
+      type: "select", message: "Choose login method", options: [
+        { id: "browser", label: "Browser login (default)" },
+        { id: "device_code", label: "Device code login (headless)" },
+      ],
+    } } };
+    mocks.beginProviderLogin.mockResolvedValue(login);
+    mocks.getProviderSettings.mockResolvedValue(initial);
+    mocks.answerProviderLogin.mockImplementation(() => {
+      expect(window.open).toHaveBeenCalledWith("about:blank", "_blank");
+      return Promise.resolve(undefined);
+    });
+    await act(async () => button("OAuth").click());
+    await act(async () => dialog().querySelector<HTMLButtonElement>('button[aria-label="Browser login (default)"]')!.click());
+    if (!blocked) expect(tab.opener).toBeNull();
+    await act(async () => MockEventSource.instances[0]!.snapshot({ ...login, prompt: undefined, events: [{ type: "auth_url", url }] }));
+    if (!blocked && url.startsWith("https:")) {
+      expect(tab.location.replace).toHaveBeenCalledExactlyOnceWith(url);
+      expect(dialog().querySelector(`a[href="${url}"]`)).not.toBeNull();
+    } else {
+      expect(tab.location.replace).not.toHaveBeenCalled();
+      if (!blocked) expect(tab.close).toHaveBeenCalledOnce();
+    }
+    await act(async () => MockEventSource.instances[0]!.snapshot({ ...login, state: "complete", prompt: undefined }));
+    if (url.startsWith("https:")) expect(tab.close).not.toHaveBeenCalled();
+  });
+
+  it.each(["cancel", "failure"])("closes the waiting browser tab on %s", async (outcome) => {
+    const tab = { opener: window, close: vi.fn() };
+    vi.mocked(window.open).mockReturnValue(tab as unknown as Window);
+    const login: LoginView = { ...attempt, prompt: { id: "method", input: {
+      type: "select", message: "Choose login method", options: [
+        { id: "browser", label: "Browser login (default)" },
+        { id: "device_code", label: "Device code login (headless)" },
+      ],
+    } } };
+    mocks.beginProviderLogin.mockResolvedValue(login);
+    mocks.getProviderSettings.mockResolvedValue(initial);
+    mocks.answerProviderLogin.mockImplementation(() => outcome === "failure" ? Promise.reject(new Error("Sign-in failed")) : Promise.resolve(undefined));
+    await act(async () => button("OAuth").click());
+    await act(async () => dialog().querySelector<HTMLButtonElement>('button[aria-label="Browser login (default)"]')!.click());
+    if (outcome === "cancel") await act(async () => button("Cancel sign-in").click());
+    expect(tab.close).toHaveBeenCalledOnce();
   });
 
   it("bridges secret prompts without reflecting the answer and refreshes models after completion", async () => {

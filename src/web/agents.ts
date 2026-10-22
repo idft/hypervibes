@@ -169,6 +169,23 @@ export const retryAgent = createServerFn({ method: "POST" })
     return agentOperation(() => context.runtime.agents.retry(user.id, data.id));
   });
 
+export const setAgentEnabled = createServerFn({ method: "POST" })
+  .validator((data: unknown) => ({ id: field(data, "id"), enabled: booleanField(data, "enabled") }))
+  .handler(async ({ context, data }) => {
+    const user = await agentUser(context.runtime, getRequestHeaders(), true);
+    return agentOperation(() => context.runtime.agents.setEnabled(user.id, data.id, data.enabled));
+  });
+
+export const closeAgentPosition = createServerFn({ method: "POST" })
+  .validator((data: unknown) => ({ id: field(data, "id"), symbol: field(data, "symbol"), requestId: field(data, "requestId") }))
+  .handler(async ({ context, data }) => {
+    const user = await agentUser(context.runtime, getRequestHeaders(), true);
+    return agentOperation(async () => {
+      await context.runtime.agents.owned(user.id, data.id);
+      return context.runtime.orders.closePosition(user.id, data.id, data.symbol, data.requestId);
+    });
+  });
+
 export const stopAgentChat = createServerFn({ method: "POST" })
   .validator((data: unknown) => ({ id: field(data, "id") }))
   .handler(async ({ context, data }) => {

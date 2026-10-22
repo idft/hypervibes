@@ -38,6 +38,36 @@ describe("subagent definitions, execution and scheduling", () => {
   });
   afterEach(async () => { vi.restoreAllMocks(); await runtime.close(); rmSync(directory, { recursive: true, force: true }); });
 
+  it("halts active workers and all admission paths without changing worker configuration or replaying queues", async () => {
+    const agent = await createAgent();
+    const worker = await createWorker(agent.id, { schedule: "15m" });
+    const paused = await createWorker(agent.id, { enabled: false });
+    faux.setResponses([async (_input, options) => {
+      await new Promise((resolve) => options?.signal?.addEventListener("abort", resolve, { once: true }));
+      return fauxAssistantMessage("Interrupted worker");
+    }]);
+    const run = await runtime.agents.subagents.run("owner", agent.id, worker.id, "Work until stopped", randomUUID());
+    await vi.waitFor(async () => expect((await detail(agent.id, worker.id)).runs[0]?.status).toBe("running"));
+    await runtime.agents.setEnabled("owner", agent.id, false);
+    expect((await runtime.agents.subagents.internalRun(agent.id, run.id)).status).toBe("cancelled");
+    const definitions = await runtime.agents.subagents.list("owner", agent.id);
+    expect(definitions.find((row) => row.id === worker.id)?.enabled).toBe(true);
+    expect(definitions.find((row) => row.id === paused.id)?.enabled).toBe(false);
+    await expect(runtime.agents.subagents.run("owner", agent.id, worker.id, "Manual", randomUUID())).rejects.toMatchObject({ status: 409 });
+    await expect(runtime.agents.subagents.delegate(agent.id, worker.id, "Delegated", randomUUID())).rejects.toMatchObject({ status: 409 });
+    await runtime.agents.subagents.tick(Date.now() + 3600000);
+    expect((await detail(agent.id, worker.id)).runs).toHaveLength(1);
+    await runtime.close(); runtime = await createRuntime(config(), options()); runtime.start();
+    await runtime.agents.subagents.tick();
+    expect((await runtime.agents.owned("owner", agent.id)).enabled).toBe(false);
+    expect((await detail(agent.id, worker.id)).runs).toHaveLength(1);
+    await runtime.agents.setEnabled("owner", agent.id, true);
+    faux.setResponses([fauxAssistantMessage("New assignment")]);
+    await runtime.agents.subagents.run("owner", agent.id, worker.id, "New explicit run", randomUUID());
+    await completed(agent.id, worker.id);
+    expect((await detail(agent.id, worker.id)).runs).toHaveLength(2);
+  });
+
   it("upgrades existing orchestrators once without replacing saved selections or instructions", async () => {
     const opened = vi.spyOn(Harness, "open");
     const agent = await createAgent();

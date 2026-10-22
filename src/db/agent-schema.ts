@@ -8,6 +8,7 @@ export const hvAgents = sqliteTable("hv_agents", {
   name: text("name").notNull(),
   creationRequestId: text("creation_request_id").notNull(),
   state: text("state", { enum: ["provisioning", "ready", "failed", "stopping", "stopped"] }).notNull().default("provisioning"),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
   conversationId: integer("conversation_id"),
   /** Creation intent only; current selection is owned by Durable's pi.agent. */
   initialProvider: text("initial_provider"),

@@ -52,6 +52,71 @@ describe("per-Agent durable execution", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
+  it("durably disables all execution, withdraws queued chat and preserves risk settings and exchange state", async () => {
+    const agent = await create();
+    expect(agent.enabled).toBe(true);
+    await runtime.agents.risk.save(agent.id, { tradingEnabled: true, allowedInstruments: ["BTC"], maxOrderNotional: "100", maxTotalNotional: null });
+    const risk = await runtime.agents.risk.get(agent.id);
+    const cancel = vi.spyOn(runtime.orders, "cancelAll");
+    const close = vi.spyOn(runtime.orders, "closePosition");
+    faux.setResponses([heldResponse("Interrupted", new Promise<void>(() => {}))]);
+    await runtime.agents.send("owner", agent.id, "Active turn", randomUUID());
+    await vi.waitFor(async () => expect((await runtime.agents.chat("owner", agent.id)).busy).toBe(true));
+    await runtime.agents.send("owner", agent.id, "Queued turn", randomUUID());
+    const bridge = await runtime.agents.bridge(agent.id);
+    await expect(runtime.agents.setEnabled("other", agent.id, false)).rejects.toMatchObject({ status: 404 });
+    expect((await runtime.agents.setEnabled("owner", agent.id, false)).enabled).toBe(false);
+    const stopped = await runtime.agents.chat("owner", agent.id);
+    expect(stopped.agent.state).toBe("ready");
+    expect(stopped.busy).toBe(false);
+    expect(stopped.queuedMessages).toEqual([]);
+    expect(await runtime.agents.risk.get(agent.id)).toEqual(risk);
+    await expect(runtime.agents.send("owner", agent.id, "Blocked", randomUUID())).rejects.toMatchObject({ status: 409 });
+    await expect(bridge.submit("Blocked", randomUUID())).rejects.toMatchObject({ status: 409 });
+    await expect(bridge.compact()).rejects.toMatchObject({ status: 409 });
+    await expect(bridge.reset()).rejects.toMatchObject({ status: 409 });
+    expect(cancel).not.toHaveBeenCalled(); expect(close).not.toHaveBeenCalled();
+    await runtime.close();
+    runtime = await createRuntime(config(), options()); runtime.start();
+    expect((await runtime.agents.owned("owner", agent.id)).enabled).toBe(false);
+    const calls = faux.state.callCount;
+    await runtime.agents.providersChanged("owner");
+    expect(faux.state.callCount).toBe(calls);
+    expect((await runtime.agents.chat("owner", agent.id)).queuedMessages).toEqual([]);
+    await runtime.agents.setEnabled("owner", agent.id, true);
+    faux.setResponses([fauxAssistantMessage("Resumed explicitly")]);
+    await runtime.agents.send("owner", agent.id, "New turn", randomUUID());
+    await vi.waitFor(async () => expect((await runtime.agents.chat("owner", agent.id)).messages.some((entry) => entry.text === "Resumed explicitly")).toBe(true));
+  });
+
+  it("recovers a stop interrupted after the flag was saved without replaying queued inputs", async () => {
+    const agent = await create();
+    faux.setResponses([heldResponse("Interrupted", new Promise<void>(() => {}))]);
+    await runtime.agents.send("owner", agent.id, "Running", randomUUID());
+    await vi.waitFor(() => expect(faux.state.callCount).toBe(1));
+    await runtime.agents.send("owner", agent.id, "Must not replay", randomUUID());
+    // Simulate interruption between persisting disablement and completing cleanup.
+    await runtime.db.update(hvAgents).set({ enabled: false }).where(eq(hvAgents.id, agent.id)).run();
+    await runtime.close(AbortSignal.abort());
+    const calls = faux.state.callCount;
+    runtime = await createRuntime(config(), options()); runtime.start();
+    expect((await runtime.agents.chat("owner", agent.id)).queuedMessages).toEqual([]);
+    await runtime.agents.setEnabled("owner", agent.id, true);
+    await runtime.agents.subagents.tick();
+    expect(faux.state.callCount).toBe(calls);
+  });
+
+  it("keeps disablement durable when runtime cleanup fails, and can retry cleanup", async () => {
+    const agent = await create();
+    vi.spyOn(runtime.agents.subagents, "discardPending").mockRejectedValueOnce(new Error("cleanup failed"));
+    await expect(runtime.agents.setEnabled("owner", agent.id, false)).rejects.toThrow("cleanup failed");
+    expect((await runtime.agents.owned("owner", agent.id)).enabled).toBe(false);
+    await expect(runtime.agents.send("owner", agent.id, "Blocked", randomUUID())).rejects.toMatchObject({ status: 409 });
+    await runtime.agents.setEnabled("owner", agent.id, false);
+    await runtime.agents.setEnabled("owner", agent.id, true);
+    expect((await runtime.agents.owned("owner", agent.id)).enabled).toBe(true);
+  });
+
   it("requires a valid linked account before persisting or initializing an agent", async () => {
     for (const account of ["", "none", "invalid", undefined]) {
       await expect(runtime.agents.create("owner", "Invalid", randomUUID(), account as string)).rejects.toThrow("linked Hyperliquid trading account is required");

@@ -13,6 +13,7 @@ vi.mock("@tanstack/react-start", () => {
   });
   return { createServerFn: () => builder() };
 });
+import { closeAgentPosition, setAgentEnabled } from "./agents.js";
 import { beginProviderLogin, getModelChoices, getProviderSettings, refreshProviderModels } from "./providers.js";
 import { approveApiWallet, getAccount, setupApiWallet } from "./account.js";
 import { listSubagents, saveSubagentSection } from "./subagents.js";
@@ -99,6 +100,28 @@ describe("throwing domain server functions", () => {
     edit.mockRejectedValue(conflict);
     await expect(invoke(changeChartLayout, app, { id: "agent", layoutId: uuid, revision: 0, requestId: uuid, action: "edit", edit: {} })).rejects.toBe(conflict);
   });
+  it("authenticates stop/close actions and checks position-close ownership before signing", async () => {
+    const owned = vi.fn().mockRejectedValue(new AgentError("Agent not found", 404));
+    const setEnabled = vi.fn(), closePosition = vi.fn();
+    const app = { ...runtime, agents: { owned, setEnabled }, orders: { closePosition } } as unknown as AppRuntime;
+    expect(() => invoke(setAgentEnabled, app, { id: "agent", enabled: "false" })).toThrow("Invalid request");
+    await expect(invoke(closeAgentPosition, app, { id: "foreign", symbol: "BTC", requestId: "close-1" })).rejects.toMatchObject({ status: 404 });
+    expect(closePosition).not.toHaveBeenCalled();
+    owned.mockResolvedValue({ id: "agent", enabled: false });
+    closePosition.mockResolvedValue({ complete: true });
+    expect(await invoke(closeAgentPosition, app, { id: "agent", symbol: "BTC", requestId: "close-1", size: "999", side: "buy" })).toEqual({ complete: true });
+    expect(closePosition).toHaveBeenCalledWith("owner", "agent", "BTC", "close-1");
+    await invoke(setAgentEnabled, app, { id: "agent", enabled: false });
+    expect(setEnabled).toHaveBeenCalledWith("owner", "agent", false);
+    mocks.headers.mockReturnValue(new Headers({ origin: "https://evil.example" }));
+    await expect(invoke(setAgentEnabled, app, { id: "agent", enabled: false })).rejects.toMatchObject({ status: 403 });
+    await expect(invoke(closeAgentPosition, app, { id: "agent", symbol: "BTC", requestId: "close-2" })).rejects.toMatchObject({ status: 403 });
+    expect(closePosition).toHaveBeenCalledTimes(1); expect(setEnabled).toHaveBeenCalledTimes(1);
+    mocks.user.mockResolvedValue(null);
+    mocks.headers.mockReturnValue(new Headers({ origin: runtime.origin }));
+    expect(isRedirect(await invoke(setAgentEnabled, app, { id: "agent", enabled: false }).catch((error: unknown) => error))).toBe(true);
+  });
+
   it("keeps authentication redirects out of the service boundary", async () => {
     mocks.user.mockResolvedValue(null);
     const result: unknown = await invoke(getProviderSettings, runtime).catch((error: unknown) => error);

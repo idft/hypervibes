@@ -630,6 +630,16 @@
     },
     {
       "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "true",
+      "generated": null,
+      "name": "enabled",
+      "entityType": "columns",
+      "table": "hv_agents"
+    },
+    {
+      "type": "integer",
       "notNull": false,
       "autoincrement": false,
       "default": null,
@@ -5518,7 +5528,7 @@
       "table": "hv_order_items"
     },
     {
-      "value": "\"kind\" IN ('submit', 'cancel', 'cancel_all')",
+      "value": "\"kind\" IN ('submit', 'cancel', 'cancel_all', 'close_position')",
       "name": "hv_order_request_kind",
       "entityType": "checks",
       "table": "hv_order_requests"

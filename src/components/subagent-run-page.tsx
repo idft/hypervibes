@@ -92,6 +92,15 @@ export function SubagentRunPage({ initial }: { initial: RunDetail }) {
     finally { inFlight.current = false; }
   }
   const [instructionsOpen, setInstructionsOpen] = useState(false);
+  const [copyStatus, setCopyStatus] = useState("");
+  async function copyRunId() {
+    try {
+      await navigator.clipboard.writeText(initial.run.id);
+      setCopyStatus("Copied");
+    } catch {
+      setCopyStatus("Unable to copy");
+    }
+  }
   const { detail, connectionError } = useSubagentRun(initial.run.agentId, initial.run.subagentId, initial.run.id, initial);
   const { run } = detail;
   const transcriptEnd = useRef<HTMLDivElement>(null);
@@ -131,6 +140,8 @@ export function SubagentRunPage({ initial }: { initial: RunDetail }) {
           <a href={subagentUrl} className={breadcrumbLink}>{detail.definition.name}</a>
           <span aria-hidden="true" className="text-zinc-600">/</span>
           <h2 aria-current="page" className="break-words text-lg font-medium text-white">Run {run.id}</h2>
+          <button type="button" aria-label="Copy run ID" title="Copy run ID" onClick={() => { void copyRunId(); }} className="shrink-0 cursor-pointer rounded p-1 text-zinc-400 hover:text-white focus-visible:outline-violet-400"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="size-4"><rect x="8" y="8" width="12" height="12" rx="2" /><path strokeLinecap="round" strokeLinejoin="round" d="M16 8V4H4v12h4" /></svg></button>
+          {copyStatus && <span role="status" className="text-xs text-zinc-400">{copyStatus}</span>}
           <RunStatus status={run.status} />
         </nav>
         <div className="flex shrink-0 items-center gap-2">

@@ -111,6 +111,21 @@ describe("Agent multiplexed event stream", () => {
     await dupReader.cancel();
   });
 
+  it("pushes durable enablement changes without closing read-only account streams", async () => {
+    const agent = await runtime.agents.create("owner", "Research", randomUUID(), `0x${"12".repeat(20)}`);
+    const response = await streams.open(streamRequest(agent.id, ["agent"]), agent.id);
+    const reader = response.body!.getReader(), buffer = { text: "" };
+    const initial = await readEvent<typeof agent>(reader, buffer);
+    expect(initial).toMatchObject({ event: "agent", data: { enabled: true, state: "ready" } });
+    await runtime.agents.setEnabled("owner", agent.id, false);
+    expect((await readEvent<typeof agent>(reader, buffer)).data.enabled).toBe(false);
+    await runtime.agents.setEnabled("owner", agent.id, true);
+    let next = await readEvent<typeof agent>(reader, buffer);
+    while (!next.data.enabled) next = await readEvent<typeof agent>(reader, buffer);
+    expect(next.data.state).toBe("ready");
+    await reader.cancel();
+  });
+
   it("delivers an initial frame for every requested topic over one response", async () => {
     const agent = await runtime.agents.create("owner", "Research", randomUUID(), `0x${"12".repeat(20)}`);
     const topics = ["chat", "dashboard", "indicators", "chart-layouts", "subagents", "notifications"];

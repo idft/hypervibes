@@ -4,6 +4,7 @@ CREATE TABLE `hv_agents` (
 	`name` text NOT NULL,
 	`creation_request_id` text NOT NULL,
 	`state` text DEFAULT 'provisioning' NOT NULL,
+	`enabled` integer DEFAULT true NOT NULL,
 	`conversation_id` integer,
 	`error` text,
 	`trading_account_address` text,

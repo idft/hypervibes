@@ -1,3 +1,4 @@
+import { eq } from "drizzle-orm";
 import { HttpTransport } from "@nktkas/hyperliquid";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -33,6 +34,7 @@ describe("durable order gateway", () => {
   let openOrders: Mock<(body: Record<string, unknown>) => Promise<unknown>>;
   let exchanges: Record<string, unknown>[];
   let infoCalls: Record<string, unknown>[];
+  let positions: { coin: string; szi: string }[];
   const transport = () => new HttpTransport();
   const submit = (request_id = "request-1", orders = [order]) => service.submit("owner", agentId, { request_id, orders });
   beforeEach(async () => {
@@ -42,12 +44,12 @@ describe("durable order gateway", () => {
     agentId = randomUUID();
     const db = applicationDatabase(database);
     await db.insert(hvUsers).values({ id: "owner", name: "Owner", email: "owner@example.test" }).run();
-    await db.insert(hvAgents).values({ id: agentId, userId: "owner", name: "Trader", tradingAccountAddress: account, creationRequestId: randomUUID(), createdAt: 1, updatedAt: 1 }).run();
+    await db.insert(hvAgents).values({ id: agentId, userId: "owner", name: "Trader", state: "ready", tradingAccountAddress: account, creationRequestId: randomUUID(), createdAt: 1, updatedAt: 1 }).run();
     bindings = {
       account: vi.fn(async (user, agent) => { if (user !== "owner" || agent !== agentId) throw new HyperliquidError("Agent not found", 404); return account; }),
       authority: vi.fn(async () => ({ account, privateKey, vaultAddress: account as `0x${string}`, builder })),
     };
-    exchanges = []; infoCalls = [];
+    exchanges = []; infoCalls = []; positions = [];
     exchange = vi.fn(async () => receipt([{ resting: { oid: 123 } }]));
     status = vi.fn(async () => ({ status: "unknownOid" }));
     openOrders = vi.fn(async () => []);
@@ -56,6 +58,7 @@ describe("durable order gateway", () => {
       if (body.action) { exchanges.push(body); return Response.json(await exchange(body)); }
       infoCalls.push(body);
       if (body.type === "meta") return Response.json({ universe: [{ name: "BTC", szDecimals: 5, maxLeverage: 50 }, { name: "ETH", szDecimals: 4, maxLeverage: 25 }, { name: "DEAD", szDecimals: 2, isDelisted: true }] });
+      if (body.type === "clearinghouseState") return Response.json({ assetPositions: positions.map((position) => ({ position })) });
       if (body.type === "allMids") return Response.json({ BTC: "100000", ETH: "2000" });
       if (body.type === "orderStatus") return Response.json(await status(body));
       if (body.type === "frontendOpenOrders") return Response.json(await openOrders(body));
@@ -64,6 +67,81 @@ describe("durable order gateway", () => {
     service = new OrderService(database, transport(), bindings); await service.recover(); service.start();
   });
   afterEach(async () => { await service.close(); await database.close(); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.useRealTimers(); rmSync(directory, { recursive: true, force: true }); });
+
+  it("blocks every model mutation while disabled, including prepared retries, but keeps reads available", async () => {
+    vi.spyOn(service.store, "begin").mockRejectedValueOnce(new Error("before send"));
+    await expect(submit("prepared")).rejects.toThrow("before send");
+    await applicationDatabase(database).update(hvAgents).set({ enabled: false }).where(eq(hvAgents.id, agentId)).run();
+    await expect(submit("prepared")).rejects.toMatchObject({ status: 409 });
+    await expect(submit("reduction", [{ ...order, reduce_only: true }])).rejects.toMatchObject({ status: 409 });
+    await expect(service.cancel("owner", agentId, { request_id: "cancel", orders: [{ symbol: "BTC", oid: "123" }] })).rejects.toMatchObject({ status: 409 });
+    await expect(service.cancelAll("owner", agentId, { request_id: "cancel-all" })).rejects.toMatchObject({ status: 409 });
+    expect(await service.request("owner", agentId, "prepared")).toBeDefined();
+    expect(exchange).not.toHaveBeenCalled();
+  });
+
+  it.each(["0.002", "-0.002"])("closes live signed size %s reduce-only while disabled and never resubmits an old operation", async (szi) => {
+    positions = [{ coin: "BTC", szi }];
+    await applicationDatabase(database).update(hvAgents).set({ enabled: false }).where(eq(hvAgents.id, agentId)).run();
+    exchange.mockImplementation(async () => {
+      positions = [];
+      return receipt([{ filled: { oid: 123, totalSz: "0.002", avgPx: "100000" } }]);
+    });
+    const result = await service.closePosition("owner", agentId, "BTC", "manual-close");
+    expect(result.complete).toBe(true);
+    expect(exchanges[0]).toMatchObject({ action: { type: "order", orders: [{ b: szi.startsWith("-"), r: true, s: "0.002", t: { limit: { tif: "Ioc" } } }] } });
+    positions = [{ coin: "BTC", szi }];
+    expect((await service.closePosition("owner", agentId, "BTC", "manual-close")).complete).toBe(false);
+    expect(exchange).toHaveBeenCalledOnce();
+    await expect(service.closePosition("other", agentId, "BTC", "wrong-owner")).rejects.toMatchObject({ status: 404 });
+    await expect(service.closePosition("owner", agentId, "ETH", "manual-close")).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("cancels only the selected market's exchange orders before closing and reports known partial fills", async () => {
+    positions = [{ coin: "BTC", szi: "0.002" }];
+    let orders = [remote(), remote(456, "ETH")];
+    openOrders.mockImplementation(async () => orders);
+    status.mockImplementation(async () => ({ status: "order", order: { order: remote(), status: "open", statusTimestamp: 1 } }));
+    exchange.mockImplementation(async (body) => {
+      if ((body.action as { type: string }).type === "cancel") {
+        orders = [remote(456, "ETH")];
+        return receipt(["success"], "cancel");
+      }
+      positions = [{ coin: "BTC", szi: "0.001" }];
+      return receipt([{ filled: { oid: 789, totalSz: "0.001", avgPx: "100000" } }]);
+    });
+    const result = await service.closePosition("owner", agentId, "BTC", "partial-close");
+    expect(exchanges[0]).toMatchObject({ action: { type: "cancel", cancels: [{ a: 0, o: 123 }] } });
+    expect(exchanges[1]).toMatchObject({ action: { type: "order", orders: [{ r: true, s: "0.002" }] } });
+    expect(result).toMatchObject({ complete: false, remainingSize: "0.001", remainingOrders: 0 });
+    expect(result.warnings.join(" ")).toContain("part");
+    expect(orders[0]?.coin).toBe("ETH");
+  });
+
+  it("preserves unknown closes across retries and refuses a blind new close ID", async () => {
+    positions = [{ coin: "BTC", szi: "0.002" }];
+    exchange.mockRejectedValue(new Error("lost response"));
+    expect((await service.closePosition("owner", agentId, "BTC", "unknown-close")).close.uncertain).toBe(true);
+    expect((await service.closePosition("owner", agentId, "BTC", "unknown-close")).close.uncertain).toBe(true);
+    await expect(service.closePosition("owner", agentId, "BTC", "blind-retry")).rejects.toThrow("unknown outcome");
+    expect(exchange).toHaveBeenCalledOnce();
+  });
+
+  it("joins already-started submissions when disabling without canceling them", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    exchange.mockImplementationOnce(async () => { await held; return receipt([{ resting: { oid: 123 } }]); });
+    const submitting = submit();
+    await vi.waitFor(() => expect(exchange).toHaveBeenCalledOnce());
+    await applicationDatabase(database).update(hvAgents).set({ enabled: false }).where(eq(hvAgents.id, agentId)).run();
+    let joined = false;
+    const joining = service.quiesce(agentId).then(() => { joined = true; });
+    const blocked = expect(submit("blocked")).rejects.toMatchObject({ status: 409 });
+    // The blocked command is behind the in-flight submission too.
+    expect(joined).toBe(false);
+    release(); await submitting; await joining; await blocked;
+    expect(exchange).toHaveBeenCalledOnce();
+  });
 
   it("commits intents before signed transport and deduplicates concurrent requests and restarts", async () => {
     exchange.mockImplementation(async (body) => {

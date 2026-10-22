@@ -8,9 +8,10 @@ vi.mock("@tanstack/react-router", () => ({
   Link: ({ to, params, children, className, title, onClick, "aria-label": label, "aria-expanded": expanded, "aria-controls": controls }: ComponentProps<"a"> & { to: string; params?: { agentId: string }; activeOptions?: unknown; activeProps?: unknown }) => <a href={to.replace("$agentId", params?.agentId ?? "")} className={className} title={title} aria-label={label} aria-expanded={expanded} aria-controls={controls} onClick={(event) => { event.preventDefault(); onClick?.(event); }}>{children}</a>,
   Outlet: () => <p>Page content</p>,
 }));
+vi.mock("./agent-lifecycle-subscriber.js", () => ({ AgentLifecycleSubscriber: () => null }));
 vi.mock("./use-indicator-catalog-events.js", () => ({ useIndicatorCatalogEvents: () => "Indicator updates disconnected. Latest versions may be stale; reconnecting…" }));
 import { AgentLayout } from "./agent-layout.js";
-const agent: AgentRow = { id: "fixture", name: "Research", userId: "owner", state: "ready", conversationId: 1, initialProvider: null, initialModelId: null, error: null, tradingAccountAddress: null, creationRequestId: "fixture", createdAt: 0, updatedAt: 0 };
+const agent: AgentRow = { id: "fixture", name: "Research", userId: "owner", enabled: true, state: "ready", conversationId: 1, initialProvider: null, initialModelId: null, error: null, tradingAccountAddress: null, creationRequestId: "fixture", createdAt: 0, updatedAt: 0 };
 const navCookie = () => document.cookie.split(/;\s*/).find((part) => part.startsWith("hv-agent-nav-expanded="));
 
 describe("Agent navigation", () => {
@@ -23,7 +24,7 @@ describe("Agent navigation", () => {
   });
   afterEach(async () => { await act(async () => root.unmount()); container.remove(); document.cookie = "hv-agent-nav-expanded=; Max-Age=0"; });
   it("links the requested sections, defaults to dashboard and pins Settings below the main links", () => {
-    const links = [...container.querySelectorAll("nav a")];
+    const links = [...container.querySelectorAll("nav a")].filter((link) => !link.closest("#agent-chart-sections, #agent-memory-sections"));
     expect(links.map((link) => link.getAttribute("aria-label"))).toEqual(["Dashboard", "Charts", "Transactions", "Chat", "Sub-Agents", "Memories", "Notifications", "Settings"]);
     expect(links.map((link) => link.getAttribute("href"))).toEqual(["/agents/fixture", "/agents/fixture/chart", "/agents/fixture/transactions", "/agents/fixture/chat", "/agents/fixture/sub-agents", "/agents/fixture/memories", "/agents/fixture/notifications", "/agents/fixture/settings"]);
     expect(links[6]?.closest(".mt-auto")).not.toBeNull();
@@ -37,24 +38,20 @@ describe("Agent navigation", () => {
     expect(container.textContent).not.toContain("Notifications");
     expect(container.textContent).not.toContain("Indicator updates disconnected");
   });
-  it("nests Indicators under Charts", async () => {
+  it("shows Indicators under Charts by default", () => {
     const charts = container.querySelector<HTMLAnchorElement>('a[aria-label="Charts"]')!;
-    expect(charts.getAttribute("aria-expanded")).toBe("false");
-    expect(container.querySelector('#agent-chart-sections a')).toBeNull();
-    await act(async () => charts.click());
+    expect(container.querySelector<HTMLDivElement>('#agent-chart-sections')!.hidden).toBe(false);
     expect(charts.getAttribute("aria-expanded")).toBe("true");
     const indicator = container.querySelector('#agent-chart-sections a')!;
     expect(indicator.getAttribute("aria-label")).toBe("Indicators");
     expect(indicator.getAttribute("href")).toBe("/agents/fixture/indicators");
   });
-  it("links Memories to the Memories page and expands its Insights sub-item without Artifacts", async () => {
+  it("links Memories to the Memories page and shows Insights by default without Artifacts", async () => {
     const button = container.querySelector<HTMLAnchorElement>('a[aria-label="Memories"]')!;
     expect(button.getAttribute("href")).toBe("/agents/fixture/memories");
-    expect(button.getAttribute("aria-expanded")).toBe("false");
-    expect(button.classList.contains("cursor-pointer")).toBe(true);
-    expect(container.querySelector('#agent-memory-sections a')).toBeNull();
-    await act(async () => button.click());
     expect(button.getAttribute("aria-expanded")).toBe("true");
+    expect(button.classList.contains("cursor-pointer")).toBe(true);
+    expect(container.querySelector<HTMLDivElement>('#agent-memory-sections')!.hidden).toBe(false);
     const children = [...container.querySelectorAll('#agent-memory-sections a')];
     expect(children.map((link) => link.getAttribute("aria-label"))).toEqual(["Insights"]);
     expect(container.querySelector('a[aria-label="Artifacts"]')).toBeNull();

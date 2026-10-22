@@ -28,10 +28,11 @@ export async function saveOperation<T>(tx: SqliteExecutor, actor: MemoryActor, k
 }
 /** Call after receipt lookup: successful effects remain replayable after their run finished. */
 export async function assertActiveActor(tx: SqliteExecutor, actor: MemoryActor) {
-  const owner = await tx.get<{ user_id: string; state: string }>("SELECT user_id,state FROM hv_agents WHERE id=?", actor.agentId);
+  const owner = await tx.get<{ user_id: string; state: string; enabled: number }>("SELECT user_id,state,enabled FROM hv_agents WHERE id=?", actor.agentId);
   if (!owner) throw new AgentError("Agent not found", 404);
   if (owner.state === "stopping" || owner.state === "stopped") throw new AgentError("Agent is being deleted", 409);
   if (actor.userId && actor.userId !== owner.user_id) throw new AgentError("Agent not found", 404);
+  if (actor.subagentId && owner.enabled !== 1) throw new AgentError("Agent is disabled", 409);
   if (actor.runId) {
     if (!actor.subagentId) throw new AgentError("Missing run producer", 403);
     const run = await tx.get<{ status: string; conversation_id: number | null }>("SELECT status,conversation_id FROM hv_subagent_runs WHERE agent_id=? AND id=? AND subagent_id=?", actor.agentId, actor.runId, actor.subagentId);

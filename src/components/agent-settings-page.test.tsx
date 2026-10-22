@@ -6,10 +6,10 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentChat } from "../agents/agent-service.js";
 import type { RiskSettings } from "../hyperliquid/orders/risk-settings.js";
-const mocks = vi.hoisted(() => ({ save: vi.fn(), success: vi.fn(), invalidate: vi.fn(), instruments: vi.fn(), remove: vi.fn(), navigate: vi.fn(), addToken: vi.fn(), startLink: vi.fn(), disconnect: vi.fn(), status: vi.fn() }));
+const mocks = vi.hoisted(() => ({ save: vi.fn(), setEnabled: vi.fn(), success: vi.fn(), invalidate: vi.fn(), instruments: vi.fn(), remove: vi.fn(), navigate: vi.fn(), addToken: vi.fn(), startLink: vi.fn(), disconnect: vi.fn(), status: vi.fn() }));
 vi.mock("../web/charts.js", () => ({ getChartInstruments: mocks.instruments }));
 vi.mock("@tanstack/react-router", () => ({ useRouter: () => ({ invalidate: mocks.invalidate, navigate: mocks.navigate }) }));
-vi.mock("../web/agents.js", () => ({ deleteAgent: mocks.remove }));
+vi.mock("../web/agents.js", () => ({ deleteAgent: mocks.remove, setAgentEnabled: mocks.setEnabled }));
 vi.mock("../web/risk.js", () => ({ saveRiskSettings: mocks.save }));
 vi.mock("../web/gateway.js", () => ({ addGatewayToken: mocks.addToken, startGatewayLink: mocks.startLink, disconnectGateway: mocks.disconnect, getGatewayStatus: mocks.status }));
 vi.mock("sonner", () => ({ toast: { success: mocks.success } }));
@@ -17,7 +17,7 @@ import { AgentSettingsPage as AgentSettingsPageComponent } from "./agent-setting
 let queryClient: QueryClient;
 const AgentSettingsPage = withTestQueryClient(AgentSettingsPageComponent, () => queryClient);
 const initial: AgentChat = {
-  agent: { id: "agent-fixture", name: "Research", userId: "owner", state: "ready", conversationId: 1, initialProvider: null, initialModelId: null, error: null, tradingAccountAddress: null, creationRequestId: "fixture", createdAt: 0, updatedAt: 0 },
+  agent: { id: "agent-fixture", name: "Research", userId: "owner", enabled: true, state: "ready", conversationId: 1, initialProvider: null, initialModelId: null, error: null, tradingAccountAddress: null, creationRequestId: "fixture", createdAt: 0, updatedAt: 0 },
   model: { provider: "current", modelId: "old" }, configured: true, busy: false, queuedMessages: [], messages: [], partial: "",
   usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }, history: false, compacting: false,
 };
@@ -37,6 +37,30 @@ describe("Agent settings", () => {
     await act(async () => root.render(<AgentSettingsPage initial={initial} />));
   });
   afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
+  it("shows enablement without duplicate lifecycle readiness text and can disable the agent", async () => {
+    expect(container.querySelector('[aria-label="Agent execution"]')).toBeNull();
+    expect(container.textContent).not.toContain("Lifecycle status describes initialization");
+    const lifecycle = [...container.querySelectorAll("dt")].find((term) => term.textContent === "Lifecycle status")!.nextElementSibling!;
+    expect(lifecycle.textContent).not.toContain("ready");
+    expect(lifecycle.querySelector('[role="status"]')?.textContent).toBe("Agent enabled");
+    mocks.setEnabled.mockResolvedValue({ ...initial.agent, enabled: false });
+    await act(async () => lifecycle.querySelector<HTMLButtonElement>('[aria-label="Disable agent"]')!.click());
+    expect(mocks.setEnabled).not.toHaveBeenCalled();
+    expect(lifecycle.querySelector('[aria-label="Confirm stop"]')!.parentElement?.textContent).toBe("Confirm stopCancel");
+    await act(async () => lifecycle.querySelector<HTMLButtonElement>('[aria-label="Confirm stop"]')!.click());
+    expect(mocks.setEnabled.mock.calls[0]![0]).toEqual({ data: { id: initial.agent.id, enabled: false } });
+  });
+  it("shows ready-but-disabled accurately and offers re-enablement", async () => {
+    await act(async () => root.render(<AgentSettingsPage initial={{ ...initial, agent: { ...initial.agent, enabled: false } }} />));
+    const lifecycle = [...container.querySelectorAll("dt")].find((term) => term.textContent === "Lifecycle status")!.nextElementSibling!;
+    expect(lifecycle.textContent).not.toContain("ready");
+    expect(lifecycle.querySelector('[role="status"]')?.textContent).toBe("Agent disabled");
+    mocks.setEnabled.mockResolvedValue(initial.agent);
+    await act(async () => lifecycle.querySelector<HTMLButtonElement>('[aria-label="Enable agent"]')!.click());
+    expect(lifecycle.querySelector('[aria-label="Confirm enable"]')).toBeNull();
+    expect(mocks.setEnabled).toHaveBeenCalledTimes(1);
+    expect(mocks.setEnabled.mock.calls[0]![0]).toEqual({ data: { id: initial.agent.id, enabled: true } });
+  });
   async function change(label: string, value: string) {
     await act(async () => {
       const element = container.querySelector<HTMLInputElement>(`[aria-label="${label}"]`)!;
@@ -318,6 +342,6 @@ describe("Agent settings", () => {
   });
   it("surfaces a polling error from the gateway status", async () => {
     await act(async () => queryClient.setQueryData(["gateway", initial.agent.id], { hasToken: true, connected: true, botUsername: "my_bot", chatId: 7, chatUsername: "operator", error: "401: Unauthorized: token revoked" }));
-    expect(container.querySelector('[role="status"]')!.textContent).toContain("token revoked");
+    expect(container.querySelector('#telegram [role="status"]')!.textContent).toContain("token revoked");
   });
 });

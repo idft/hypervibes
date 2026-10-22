@@ -6,7 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentDashboard } from "../hyperliquid/agent-dashboard.js";
 const mocks = vi.hoisted(() => ({ sendAgentMessage: vi.fn(), runSubagent: vi.fn(), navigate: vi.fn(), saveSubagentSection: vi.fn(), invalidate: vi.fn().mockResolvedValue(undefined) }));
-vi.mock("../web/agents.js", () => ({ sendAgentMessage: mocks.sendAgentMessage }));
+vi.mock("../web/agents.js", () => ({ sendAgentMessage: mocks.sendAgentMessage, closeAgentPosition: vi.fn() }));
 vi.mock("../web/subagents.js", () => ({ runSubagent: mocks.runSubagent, saveSubagentSection: mocks.saveSubagentSection }));
 vi.mock("@tanstack/react-router", () => ({ useRouter: () => ({ navigate: mocks.navigate, invalidate: mocks.invalidate }) }));
 import { AgentDashboardPage as AgentDashboardPageComponent } from "./agent-dashboard-page.js";
@@ -131,6 +131,40 @@ describe("Agent dashboard", () => {
     expect(mocks.runSubagent.mock.calls[0]![0].data).toMatchObject({ agentId: "fixture", id: "worker", task: "Review BTC" });
     expect(mocks.runSubagent.mock.calls[0]![0].data.requestId).toBe(mocks.runSubagent.mock.calls[1]![0].data.requestId);
     expect(mocks.navigate).toHaveBeenCalledWith({ to: "/agents/$agentId/sub-agents/$subagentId/runs/$runId", params: { agentId: "fixture", subagentId: "worker", runId: "run" } });
+    expect(document.querySelector("dialog")).toBeNull();
+  });
+  it("hides next-run countdowns and blocks manual runs while the parent agent is disabled", async () => {
+    const subagents = [{ id: "worker", name: "Research", enabled: true, schedule: "5m", nextRunAt: Date.now() + 300000, runs: [] }];
+    await act(async () => root.render(<Page id="fixture" initial={initial} subagents={subagents} />));
+    const section = container.querySelector('[aria-label="Sub-agents"]')!;
+    expect(section.textContent).toContain("Next run:");
+    await act(async () => root.render(<Page id="fixture" enabled={false} initial={initial} subagents={subagents} />));
+    expect(section.textContent).not.toContain("Next run:");
+    expect(section.querySelector("header")!.textContent).not.toContain("Agent disabled");
+    expect(section.querySelector('[role="status"]')?.textContent).toBe("Agent disabled");
+    expect(section.querySelector('[role="status"]')?.classList.contains("text-amber-300")).toBe(true);
+    const run = section.querySelector<HTMLButtonElement>('[aria-label="Run now: Research"]')!;
+    expect(run.disabled).toBe(true);
+    expect(section.querySelector('[aria-label="Pause sub-agent"]')).toBeNull();
+    expect(section.querySelector('[aria-label="Enable sub-agent"]')).toBeNull();
+    await act(async () => run.click());
+    expect(document.querySelector("dialog")).toBeNull();
+    await act(async () => workerSource().sendSubagents(subagents));
+    expect(section.textContent).not.toContain("Next run:");
+    await act(async () => root.render(<Page id="fixture" enabled initial={initial} subagents={subagents} />));
+    expect(section.textContent).toContain("Next run:");
+    expect(run.disabled).toBe(false);
+    expect(section.querySelector('[aria-label="Pause sub-agent"]')).not.toBeNull();
+    expect(section.querySelector('[role="status"]')).toBeNull();
+  });
+  it("closes an open manual-run dialog when the agent is disabled", async () => {
+    const subagents = [{ id: "worker", name: "Research", enabled: true, schedule: "", nextRunAt: null, runs: [] }];
+    await act(async () => root.render(<Page id="fixture" initial={initial} subagents={subagents} />));
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Run now: Research"]')!.click());
+    expect(document.querySelector("dialog")).not.toBeNull();
+    await act(async () => root.render(<Page id="fixture" enabled={false} initial={initial} subagents={subagents} />));
+    expect(document.querySelector("dialog")).toBeNull();
+    await act(async () => root.render(<Page id="fixture" enabled initial={initial} subagents={subagents} />));
     expect(document.querySelector("dialog")).toBeNull();
   });
   it("toggles enabled status and shows a live countdown only for enabled schedules", async () => {
@@ -260,17 +294,22 @@ describe("Agent dashboard", () => {
   });
   it("formats position sizes, prices and P&L with separators and monospaced digits", async () => {
     await act(async () => source().send({ ...initial, positions: [
-      { coin: "BTC", size: "-0.00000001", entryPrice: "100.00000001", unrealizedPnl: "-1.23456789", liquidationPrice: "1234.5", leverage: 2 },
+      { coin: "BTC", size: "-0.00000001", entryPrice: "100.00000001", unrealizedPnl: "-1.23456789", liquidationPrice: "1234.5678901234", leverage: 2 },
       { coin: "ETH", size: "2", entryPrice: "2500", unrealizedPnl: "0", liquidationPrice: null, leverage: 3 },
     ] }));
     const section = [...container.querySelectorAll("section")].find((section) => section.querySelector("h3")?.textContent === "Positions")!;
     const first = section.querySelectorAll("tbody tr")[0]!;
-    expect(first.querySelectorAll("td")[1]!.querySelector("span")?.textContent).toBe("(0.00000001)");
+    expect(first.querySelectorAll("td")[1]!.querySelector("span")?.textContent).toBe("Short 0.00000001");
     expect(first.querySelectorAll("td")[3]!.querySelector("span")?.textContent).toBe("100.00000001");
     expect(first.querySelectorAll("td")[4]!.querySelector("span")?.textContent).toBe("(1.2346)");
-    expect(first.querySelectorAll("td")[5]!.querySelector("span")?.textContent).toBe("1,234.50");
+    expect(first.querySelectorAll("td")[4]!.querySelector("span")?.classList.contains("text-red-400")).toBe(true);
+    expect([...section.querySelectorAll("th")].map((header) => header.textContent)).toContain("Size");
+    expect(section.textContent).not.toContain("Size (signed)");
+    expect(first.querySelectorAll("td")[5]!.querySelector("span")?.textContent).toBe("1,234.57");
     const second = section.querySelectorAll("tbody tr")[1]!;
-    expect(second.querySelectorAll("td")[1]!.querySelector("span")?.textContent).toBe("2.00");
+    expect(second.querySelectorAll("td")[1]!.querySelector("span")?.textContent).toBe("Long 2.00");
+    const zeroPnl = second.querySelectorAll("td")[4]!.querySelector("span")!;
+    expect(zeroPnl.classList.contains("text-zinc-300")).toBe(true);
     expect(second.querySelectorAll("td")[5]!.querySelector("span")?.textContent).toBe("-");
     for (const row of [first, second]) for (const index of [1, 3, 4, 5]) expect(row.querySelectorAll("td")[index]!.querySelector("span")?.className).toContain("font-mono");
   });
@@ -279,6 +318,10 @@ describe("Agent dashboard", () => {
     await act(async () => source().send({ ...initial, positions: [position, { ...position, coin: "ETH", unrealizedPnl: "-0.3" }] }));
     const overview = container.querySelector('[aria-label="Account overview"]')!;
     expect(overview.querySelector(".text-red-400")!.textContent).toBe("(0.2000)");
+    const positions = [...container.querySelectorAll("section")].find((section) => section.querySelector("h3")?.textContent === "Positions")!;
+    const rows = positions.querySelectorAll("tbody tr");
+    expect(rows[0]!.querySelectorAll("td")[4]!.querySelector("span")?.classList.contains("text-emerald-400")).toBe(true);
+    expect(rows[1]!.querySelectorAll("td")[4]!.querySelector("span")?.classList.contains("text-red-400")).toBe(true);
   });
   it("handles an invalid development agent without opening an account feed", async () => {
     await act(async () => root.unmount()); root = createRoot(container);

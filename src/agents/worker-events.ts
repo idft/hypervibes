@@ -8,6 +8,7 @@ export async function enqueueWorkerEvent(tx: SqliteExecutor, agentId: string, ev
   const targets = await tx.all<{ id: string }>(`SELECT s.id FROM hv_subagents s
     JOIN hv_worker_subscriptions subscription ON subscription.subagent_id=s.id
     WHERE s.agent_id=? AND s.kind='worker' AND s.enabled=1 AND s.archived=0
+      AND EXISTS (SELECT 1 FROM hv_agents a WHERE a.id=s.agent_id AND a.enabled=1 AND a.state='ready')
       AND subscription.event_type=? AND subscription.source_id=? AND subscription.activated_at<=?`,
   agentId, payload.reason, payload.reason === "research" ? payload.callerSubagentId ?? "" : "", occurredAt);
   for (const target of targets) {

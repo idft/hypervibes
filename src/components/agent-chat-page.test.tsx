@@ -47,7 +47,7 @@ class FakeEventSource {
 vi.stubGlobal("EventSource", FakeEventSource);
 
 const initial: AgentChat = {
-  agent: { id: "agent-fixture", name: "Research", userId: "owner", state: "ready", conversationId: 1, initialProvider: null, initialModelId: null, error: null, tradingAccountAddress: null, creationRequestId: "fixture", createdAt: 0, updatedAt: 0 },
+  agent: { id: "agent-fixture", name: "Research", userId: "owner", enabled: true, state: "ready", conversationId: 1, initialProvider: null, initialModelId: null, error: null, tradingAccountAddress: null, creationRequestId: "fixture", createdAt: 0, updatedAt: 0 },
   model: { provider: "opencode-go", modelId: "deepseek-v4.1-flash" }, configured: true, busy: false, queuedMessages: [], messages: [], partial: "",
   usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }, history: false, compacting: false,
 };
@@ -83,6 +83,17 @@ describe("Agent chat", () => {
   async function submit() {
     await act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
   }
+  it("disables chat and context actions when the agent is disabled while retaining history", async () => {
+    await act(async () => current().emit("chat", { ...initial, agent: { ...initial.agent, enabled: false }, messages: [{ id: "saved", role: "assistant", text: "Saved history", failed: false }] }));
+    expect(container.textContent).toContain("Agent disabled");
+    expect(container.textContent).toContain("Saved history");
+    expect(container.querySelector("textarea")!.disabled).toBe(true);
+    expect(container.querySelector<HTMLButtonElement>('button[type="submit"]')!.disabled).toBe(true);
+    await submit();
+    expect(mocks.sendAgentMessage).not.toHaveBeenCalled();
+    for (const button of container.querySelectorAll("button")) if (["Compact", "Reset context"].includes(button.textContent ?? "")) expect(button.disabled).toBe(true);
+  });
+
   it("subscribes once per agent and closes the stream on unmount", async () => {
     expect(topicsOf(current().url)).toBe("chat");
     expect(current().closed).toBe(false);

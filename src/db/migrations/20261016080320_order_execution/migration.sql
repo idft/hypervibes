@@ -48,7 +48,7 @@ CREATE TABLE `hv_order_requests` (
 	`input` text NOT NULL,
 	`created_at` integer NOT NULL,
 	CONSTRAINT `fk_hv_order_requests_agent_id_hv_agents_id_fk` FOREIGN KEY (`agent_id`) REFERENCES `hv_agents`(`id`) ON DELETE CASCADE,
-	CONSTRAINT "hv_order_request_kind" CHECK("kind" IN ('submit', 'cancel', 'cancel_all'))
+	CONSTRAINT "hv_order_request_kind" CHECK("kind" IN ('submit', 'cancel', 'cancel_all', 'close_position'))
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `hv_order_action_ordinal` ON `hv_order_actions` (`request_id`,`ordinal`);--> statement-breakpoint

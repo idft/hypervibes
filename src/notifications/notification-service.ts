@@ -113,7 +113,7 @@ export class NotificationService {
   }
   /** Runs inside the order outcome transaction; one aggregate receipt per request, plus uncertainty resolution. */
   async orderOutcomeTx(tx: SqliteExecutor, actionId: string) {
-    const request = await tx.get<{ id: string; agent_id: string; request_key: string; created_at: number }>(`SELECT r.* FROM hv_order_requests r JOIN hv_order_actions a ON a.request_id=r.id WHERE a.id=? AND r.kind='submit'`, actionId);
+    const request = await tx.get<{ id: string; agent_id: string; request_key: string; created_at: number }>(`SELECT r.* FROM hv_order_requests r JOIN hv_order_actions a ON a.request_id=r.id WHERE a.id=? AND r.kind IN ('submit','close_position')`, actionId);
     if (!request) return;
     const actions = await tx.all<{ state: string }>("SELECT state FROM hv_order_actions WHERE request_id=?", request.id);
     const existing = await tx.get<{ title: string }>("SELECT title FROM hv_notifications WHERE agent_id=? AND event_key=?", request.agent_id, `order:${request.id}:submission`);

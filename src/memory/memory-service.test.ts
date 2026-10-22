@@ -43,6 +43,14 @@ describe("immutable Agent-scoped memories", () => {
     })).rejects.toThrow();
     expect(await f.db.get("SELECT next_number FROM hv_memory_counters WHERE agent_id='agent'")).toMatchObject({ next_number: 3 });
   });
+  it("blocks new model publications after agent disablement but preserves committed receipts and read access", async () => {
+    const { memory } = f.services(), input = researchInput(f.now);
+    const original = await memory.publishResearch(f.analyst, "before-stop", input);
+    await f.db.run("UPDATE hv_agents SET enabled=0 WHERE id='agent'");
+    expect(await memory.publishResearch(f.analyst, "before-stop", input)).toEqual(original);
+    await expect(memory.publishResearch(f.analyst, "after-stop", input)).rejects.toThrow("Agent is disabled");
+    expect((await memory.get("agent", original.ref)).ref).toBe(original.ref);
+  });
   it("allows terminal/expired exact replay but rejects new effects", async () => {
     const { memory } = f.services(), input = researchInput(f.now);
     const original = await memory.publishResearch(f.analyst, "done", input);

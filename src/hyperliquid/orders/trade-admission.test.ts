@@ -18,7 +18,9 @@ describe("persisted order admission boundary", () => {
   let resting: { coin: string; oid: number; sz: string; origSz?: string; limitPx: string; reduceOnly: boolean; cloid?: string }[];
   let root: SubagentRow, positions: { coin: string; szi: string }[], now: number, sends: number, failTransport: boolean;
   beforeEach(async () => {
-    f = await memoryFixture(); now = f.now + 100000; sends = 0; failTransport = false; positions = []; resting = [];
+    f = await memoryFixture();
+    await f.db.run("UPDATE hv_agents SET state='ready' WHERE id='agent'");
+    now = f.now + 100000; sends = 0; failTransport = false; positions = []; resting = [];
     vi.spyOn(Date, "now").mockImplementation(() => now);
     await f.db.run("INSERT INTO hv_subagents(id,agent_id,kind,name,instructions,provider,model_id,tools,created_at,updated_at) VALUES ('root','agent','orchestrator','Root','Observe','faux','faux',?,0,0)", JSON.stringify(["record_trade_decision", "submit_orders", "cancel_orders", "cancel_all_orders"]));
     root = (await applicationDatabase(f.db).select().from(hvSubagents).where(eq(hvSubagents.id, "root")).get())!;

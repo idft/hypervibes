@@ -1,3 +1,4 @@
+import type { AgentRow } from "../db/agent-schema.js";
 import { HyperliquidError } from "../hyperliquid/errors.js";
 import type { ChartSelection, ChartSnapshot } from "../hyperliquid/chart-contracts.js";
 import { AgentError, agentId } from "../agents/agent-input.js";
@@ -17,9 +18,10 @@ const maxFrameBytes = 2 * 1024 * 1024;
 const frame = (event: string, data: unknown) => encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 export interface ChatEvent { event?: string; data: AgentChat }
 
-export const multiplexTopics = ["chat", "dashboard", "indicators", "chart-layouts", "subagents", "chart", "notifications"] as const;
+export const multiplexTopics = ["agent", "chat", "dashboard", "indicators", "chart-layouts", "subagents", "chart", "notifications"] as const;
 export type MultiplexTopic = (typeof multiplexTopics)[number];
 const topicLimits: Record<MultiplexTopic, number> = {
+  agent: 4096,
   chat: maxFrameBytes,
   dashboard: maxFrameBytes,
   indicators: 4096,
@@ -28,7 +30,7 @@ const topicLimits: Record<MultiplexTopic, number> = {
   subagents: maxFrameBytes,
   chart: maxFrameBytes,
 };
-type TopicSnapshot = AgentChat | AgentDashboard | ChartSnapshot | ChartLayout[] | DashboardSubagent[] | { revision: number };
+type TopicSnapshot = AgentRow | AgentChat | AgentDashboard | ChartSnapshot | ChartLayout[] | DashboardSubagent[] | { revision: number };
 interface TopicContext {
   userId: string;
   id: string;
@@ -94,6 +96,7 @@ export class AgentEventStreams {
   private startTopic(topic: MultiplexTopic, ctx: TopicContext): Promise<void> {
     const publish = (snapshot: TopicSnapshot) => ctx.publish(topic, snapshot);
     switch (topic) {
+      case "agent": return this.runtime.agents.watchAgent(ctx.userId, ctx.id, ctx.signal, publish as (snapshot: AgentRow) => void);
       case "chat": return this.runtime.agents.watchChat(ctx.userId, ctx.id, ctx.signal, publish as (snapshot: AgentChat) => void);
       case "dashboard": return this.runtime.hyperliquid.watchDashboard(ctx.userId, ctx.id, ctx.signal, publish as (snapshot: AgentDashboard) => void);
       case "notifications": return this.runtime.notifications.watch(ctx.id, ctx.signal, publish as (snapshot: { revision: number }) => void);

@@ -1,5 +1,6 @@
 import { Link, Outlet } from "@tanstack/react-router";
 import { useState } from "react";
+import { AgentLifecycleSubscriber } from "./agent-lifecycle-subscriber.js";
 import { AgentEventsProvider } from "./agent-events.js";
 import { useIndicatorCatalogEvents } from "./use-indicator-catalog-events.js";
 import type { AgentRow } from "../db/agent-schema.js";
@@ -29,8 +30,8 @@ function IndicatorCatalogSubscriber({ agentId }: { agentId: string }) {
 
 export function AgentLayout({ agent, initialExpanded }: { agent: AgentRow; initialExpanded: boolean }) {
   const [expanded, setExpanded] = useState(initialExpanded);
-  const [memoriesExpanded, setMemoriesExpanded] = useState(false);
-  const [chartsExpanded, setChartsExpanded] = useState(false);
+  const [memoriesExpanded, setMemoriesExpanded] = useState(true);
+  const [chartsExpanded, setChartsExpanded] = useState(true);
   function toggle() {
     setExpanded((value) => {
       document.cookie = `hv-agent-nav-expanded=${!value}; Max-Age=31536000; Path=/; SameSite=Strict`;
@@ -62,12 +63,13 @@ export function AgentLayout({ agent, initialExpanded }: { agent: AgentRow; initi
         <div id="agent-memory-sections" hidden={!memoriesExpanded} className={expanded ? "ml-4 space-y-1 border-l border-zinc-800 pl-1" : "space-y-1"}>{memoriesExpanded && memorySections.map(link)}</div>
       </div>
       <div className="mt-auto space-y-2">
-        <button type="button" onClick={toggle} aria-expanded={expanded} aria-label={expanded ? "Collapse agent navigation" : "Expand agent navigation"} title={expanded ? "Collapse agent navigation" : "Expand agent navigation"} className="flex h-10 w-full cursor-pointer items-center gap-3 rounded-lg px-3 text-zinc-400 hover:bg-zinc-800 hover:text-white"><span aria-hidden="true">{expanded ? "«" : "»"}</span>{expanded && <span className="text-sm">Collapse</span>}</button>
+        <button type="button" onClick={toggle} aria-expanded={expanded} aria-label={expanded ? "Collapse agent navigation" : "Expand agent navigation"} title={expanded ? "Collapse agent navigation" : "Expand agent navigation"} className="flex h-10 w-full cursor-pointer items-center gap-3 rounded-lg px-3 text-zinc-400 hover:bg-zinc-800 hover:text-white"><span className="flex h-5 w-5 shrink-0 items-center justify-center" aria-hidden="true">{expanded ? "«" : "»"}</span>{expanded && <span className="text-sm">Collapse</span>}</button>
         <div className="space-y-1 border-t border-zinc-800 pt-2">{sections.slice(-2).map(link)}</div>
       </div>
     </nav>
     <div className="flex min-h-[calc(100dvh-5rem)] w-full min-w-0 flex-col">
       <AgentEventsProvider agentId={agent.id}>
+        <AgentLifecycleSubscriber agentId={agent.id} />
         <IndicatorCatalogSubscriber agentId={agent.id} />
         <Outlet />
       </AgentEventsProvider>

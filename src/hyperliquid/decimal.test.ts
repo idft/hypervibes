@@ -39,6 +39,15 @@ describe("string-decimal helpers", () => {
     expect(formatAmountText(null)).toBe("-");
     expect(formatAmountText("NaN")).toBe("-");
   });
+  it("rounds currency displays to two decimal places without floating-point conversion", () => {
+    expect(formatMoneyText("1234.5678901234", 2)).toBe("1,234.57");
+    expect(formatMoneyText("999.995", 2)).toBe("1,000.00");
+    expect(formatMoneyText("12", 2)).toBe("12.00");
+    expect(formatMoneyText("0.0049", 2)).toBe("0.00");
+    expect(formatMoneyText("-0.001", 2)).toBe("0.00");
+    expect(formatMoneyText(null, 2)).toBe("-");
+    expect(formatMoneyText("9007199254740993.125", 2)).toBe("9,007,199,254,740,993.13");
+  });
   it("formats money like the legacy account table", () => {
     expect(formatMoneyText("1234567.8")).toBe("1,234,567.8000");
     expect(formatMoneyText("0.5")).toBe("0.5000");

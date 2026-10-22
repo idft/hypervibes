@@ -11,7 +11,7 @@ vi.mock("@tanstack/react-router", () => ({
   },
 }));
 import { AgentSwitcher } from "./agent-switcher.js";
-const agents = [{ id: "one", name: "Research", tradingEnabled: true }, { id: "two", name: "Momentum", tradingEnabled: false }];
+const agents = [{ id: "one", name: "Research", enabled: true, tradingEnabled: true }, { id: "two", name: "Momentum", enabled: true, tradingEnabled: false }];
 
 describe("Agent switcher", () => {
   let root: Root;
@@ -36,6 +36,18 @@ describe("Agent switcher", () => {
     expect(container.querySelector('summary [aria-label="Trading disabled"]')?.classList.contains("bg-amber-400")).toBe(true);
     await act(async () => root.render(<AgentSwitcher agents={agents.map((agent) => ({ ...agent, tradingEnabled: true }))} selectedAgentId="two" />));
     expect(container.querySelector('summary [aria-label="Trading enabled"]')?.classList.contains("bg-emerald-400")).toBe(true);
+  });
+  it("uses yellow for disabled agents in both the picker and menu even when trading is enabled", async () => {
+    await act(async () => root.render(<AgentSwitcher agents={agents.map((agent) => agent.id === "one" ? { ...agent, enabled: false } : agent)} selectedAgentId="one" />));
+    for (const selector of ["summary", 'a[href="/agents/one"]']) {
+      const dot = container.querySelector(`${selector} [aria-label="Agent disabled"]`)!;
+      expect(dot.classList.contains("bg-amber-400")).toBe(true);
+      expect(dot.getAttribute("title")).toBe("Agent disabled");
+      expect(container.querySelector(`${selector} .bg-emerald-400`)).toBeNull();
+    }
+    await act(async () => root.render(<AgentSwitcher agents={agents} selectedAgentId="one" />));
+    expect(container.querySelector('summary [aria-label="Trading enabled"]')?.classList.contains("bg-emerald-400")).toBe(true);
+    expect(container.querySelector('a[href="/agents/one"] [aria-label="Trading enabled"]')?.classList.contains("bg-emerald-400")).toBe(true);
   });
   it("switches to the chosen Agent dashboard and closes the menu", async () => {
     details().open = true;

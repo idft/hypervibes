@@ -22,6 +22,7 @@ import { IndicatorRuntime } from "../indicators/runtime.js";
 import { createIndicatorExtension } from "../indicators/durable-extension.js";
 import { createResearchResponder } from "../research/tool-response.js";
 
+import { agentExecutable, assertAgentExecutable } from "./agent-enablement.js";
 import { AgentError, agentId, agentName, chatMessage, harnessPrefix, requestId } from "./agent-input.js";
 import { SubagentService } from "./subagent-service.js";
 import { insertDefaultSubagents } from "./default-subagents.js";
@@ -139,6 +140,7 @@ export class AgentService {
   private readonly harnesses = new Map<string, Harness>();
   private readonly opening = new Map<string, Promise<RunningAgent>>();
   private readonly deleting = new Map<string, Promise<void>>();
+  private readonly enablement = new Map<string, Promise<unknown>>();
   private readonly lifetimes = new Map<string, AbortController>();
   private readonly lifecycle = new Map<string, Set<() => void>>();
   private readonly feedShutdown = new AbortController();
@@ -184,7 +186,7 @@ export class AgentService {
     if (this.stopping || this.draining) return;
     for (const agent of await this.list(userId)) {
       const current = this.running.get(agent.id);
-      if (current && this.scheduling && await this.configured(agent, current) && !this.stopping && !this.draining && !this.signal(agent.id).aborted) current.harness.resume();
+      if (current && this.scheduling && await agentExecutable(this.database, agent.id) && await this.configured(agent, current) && !this.stopping && !this.draining && !this.signal(agent.id).aborted) current.harness.resume();
       this.notify(agent.id);
     }
   }
@@ -321,7 +323,8 @@ export class AgentService {
           this.notify(agent.id);
         }
       }).catch(() => { /* A shared-storage failure is also reported by runtime health. */ });
-      if (this.scheduling && await this.configured(agent, current) && !this.signal(agent.id).aborted) harness.resume();
+      if (!await agentExecutable(this.database, agent.id)) await this.disableWork(agent.id, current);
+      else if (this.scheduling && await this.configured(agent, current) && !this.signal(agent.id).aborted) harness.resume();
       return current;
     } catch (error) {
       this.subagents.unbind(agent.id);
@@ -340,15 +343,14 @@ export class AgentService {
     this.scheduling = true;
     this.research.start();
     this.resuming = this.subagents.start().catch(() => { this.subagents.schedulerError = "Unable to initialize subagent scheduling. Restart the backend to retry."; });
-    if (this.options.models) for (const { harness } of this.running.values()) harness.resume();
-    else this.resuming = Promise.all([this.resuming, this.resumeConfigured()]).then(() => {}).catch(() => { /* Storage health reports failures; admission also checks configuration. */ });
+    this.resuming = Promise.all([this.resuming, this.resumeConfigured()]).then(() => {}).catch(() => { /* Storage health reports failures; admission also checks configuration. */ });
   }
   private async resumeConfigured() {
     const agents = await this.db.select().from(hvAgents).all();
     for (const agent of agents) {
       if (this.stopping || this.draining) return;
       const current = this.running.get(agent.id);
-      if (current && await this.configured(agent, current) && !this.stopping && !this.draining && !this.signal(agent.id).aborted) current.harness.resume();
+      if (current && await agentExecutable(this.database, agent.id) && await this.configured(agent, current) && !this.stopping && !this.draining && !this.signal(agent.id).aborted) current.harness.resume();
     }
   }
   async recover() {
@@ -366,6 +368,44 @@ export class AgentService {
     const agent = await this.owned(userId, id);
     try { await this.open(agent); } catch { /* Return the persisted, sanitized failure. */ }
     return this.owned(userId, id);
+  }
+  /** Persist the stop before waiting for work. Never changes exchange orders or positions. */
+  async setEnabled(userId: string, id: string, enabled: boolean): Promise<AgentRow & { stopWarning?: string }> {
+    this.admit();
+    if (typeof enabled !== "boolean") throw new AgentError("Invalid agent enablement");
+    await this.owned(userId, id);
+    const task = (this.enablement.get(id) ?? Promise.resolve()).catch(() => {}).then(async () => {
+      const agent = await this.owned(userId, id);
+      if (enabled) {
+        if (agent.enabled) return agent;
+        // Retry cleanup after an interrupted disable before permitting new work.
+        await this.subagents.serial(id, () => this.disableWork(id, this.running.get(id)));
+        await this.db.update(hvAgents).set({ enabled: true, updatedAt: Date.now() }).where(eq(hvAgents.id, id)).run();
+        const current = this.running.get(id);
+        if (current && this.scheduling && await agentExecutable(this.database, id) && await this.configured(agent, current)) current.harness.resume();
+      } else {
+        await this.db.update(hvAgents).set({ enabled: false, updatedAt: Date.now() }).where(eq(hvAgents.id, id)).run();
+        this.notify(id);
+        await Promise.allSettled([this.opening.get(id)]);
+        try { await this.subagents.serial(id, () => this.disableWork(id, this.running.get(id))); }
+        finally { await this.orders.quiesce(id); }
+      }
+      this.notify(id);
+      const row = await this.owned(userId, id);
+      const uncertain = !enabled && await this.database.get(`SELECT a.id FROM hv_order_actions a JOIN hv_order_requests r ON r.id=a.request_id WHERE r.agent_id=? AND a.state IN ('submitting','unknown') LIMIT 1`, id);
+      return { ...row, ...(uncertain ? { stopWarning: "Agent disabled, but an already-started exchange request has an unknown outcome. Existing orders and positions were not changed by the stop. Inspect the account before taking further action." } : {}) };
+    });
+    this.enablement.set(id, task);
+    void task.finally(() => { if (this.enablement.get(id) === task) this.enablement.delete(id); }).catch(() => {});
+    return task;
+  }
+  private async disableWork(id: string, current?: RunningAgent) {
+    try { await this.subagents.discardPending(id); }
+    finally {
+      // Public API withdraws queued inputs and crosses background worker boundaries.
+      await current?.main.abort(context, { background: true });
+      await this.subagents.cancelOutstanding(id);
+    }
   }
   /** Persist intent before teardown; only a fully quiescent agent releases its account. */
   async delete(userId: string, id: string): Promise<void> {
@@ -500,6 +540,32 @@ export class AgentService {
     try { await task; }
     finally { this.feeds.delete(task); }
   }
+  /** Small lifecycle feed for controls on every agent page, independent of model streaming. */
+  async watchAgent(userId: string, id: string, signal: AbortSignal, publish: (agent: AgentRow) => void): Promise<void> {
+    this.admit(true);
+    const lifetime = AbortSignal.any([signal, this.feedShutdown.signal, this.signal(id)]);
+    let changed = true;
+    let wake: (() => void) | undefined;
+    const notify = () => { changed = true; wake?.(); };
+    const listeners = this.lifecycle.get(id) ?? new Set<() => void>();
+    this.lifecycle.set(id, listeners); listeners.add(notify);
+    lifetime.addEventListener("abort", notify);
+    const task = (async () => {
+      try {
+        while (!lifetime.aborted) {
+          if (changed) { changed = false; const agent = await this.owned(userId, id); if (!lifetime.aborted) publish(agent); }
+          if (!changed && !lifetime.aborted) await new Promise<void>((resolve) => { wake = resolve; });
+          wake = undefined;
+        }
+      } finally {
+        listeners.delete(notify);
+        if (!listeners.size) this.lifecycle.delete(id);
+        lifetime.removeEventListener("abort", notify);
+      }
+    })();
+    this.feeds.add(task);
+    try { await task; } finally { this.feeds.delete(task); }
+  }
   /** Pushes committed snapshots; no SQL reads are needed for conversation updates. */
   async watchChat(userId: string, id: string, signal: AbortSignal, publish: (chat: AgentChat) => void): Promise<void> {
     this.admit(true);
@@ -580,7 +646,7 @@ export class AgentService {
     submissionRequestId = requestId(submissionRequestId);
     // Serialize admission (not model execution) so concurrent browser requests
     // cannot race past the persisted inbox limit.
-    return this.subagents.serial(agent.id, async () => {
+    return this.subagents.execute(agent.id, async () => {
       this.admit();
       const current = this.running.get(agent.id);
       if (!current) throw new AgentError("Agent is unavailable. Retry initialization.", 503);
@@ -614,15 +680,16 @@ export class AgentService {
     const agent = await this.owned(userId, id);
     const current = this.running.get(agent.id);
     if (!current) throw new AgentError("Agent is unavailable. Retry initialization.", 503);
-    await current.main.reset(undefined, context);
+    await this.subagents.execute(agent.id, () => current.main.reset(undefined, context));
   }
   /** Manually compacts the visible transcript into a summary entry. */
   async compact(userId: string, id: string): Promise<{ message?: string }> {
     this.admit();
     const agent = await this.owned(userId, id);
-    return this.compactAgent(agent);
+    return this.subagents.execute(agent.id, () => this.compactAgent(agent));
   }
   private async compactAgent(agent: AgentRow): Promise<{ message?: string }> {
+    await assertAgentExecutable(this.database, agent.id);
     if (!this.scheduling) throw new AgentError("Agent execution is not ready", 503);
     const current = this.running.get(agent.id);
     if (!current) throw new AgentError("Agent is unavailable. Retry initialization.", 503);
@@ -681,13 +748,13 @@ export class AgentService {
         return page.items.flatMap((entry) => assistantTexts(entry));
       },
       stop: async () => { this.admit(); await current().main.abort(context); },
-      reset: async () => { this.admit(); await current().main.reset(undefined, context); },
-      compact: () => this.compactAgent(agent),
+      reset: () => this.subagents.execute(agent.id, async () => { this.admit(); await current().main.reset(undefined, context); }),
+      compact: () => this.subagents.execute(agent.id, () => this.compactAgent(agent)),
     };
   }
   /** Serialized submission without an owning user session; the bridge's own authorization applies first. */
   private submitMain(agent: AgentRow, message: string, submissionRequestId: string): Promise<Submission> {
-    return this.subagents.serial(agent.id, async () => {
+    return this.subagents.execute(agent.id, async () => {
       this.admit();
       if (!this.scheduling) throw new AgentError("Agent execution is not ready", 503);
       const current = this.running.get(agent.id);
@@ -707,7 +774,7 @@ export class AgentService {
     return this.draining = (async () => {
       await this.resuming;
       await subagents;
-      await Promise.allSettled(this.opening.values());
+      await Promise.allSettled([...this.opening.values(), ...this.enablement.values()]);
       await this.drainInFlight(force);
     })();
   }
