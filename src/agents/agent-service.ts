@@ -5,7 +5,7 @@ import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import type { JsonRepresentation } from "@earendil-works/chord";
 import { getSupportedThinkingLevels, type Models } from "@earendil-works/pi-ai/models";
 import { estimateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
-import { createRegistry, Harness, InboxDoc, LiveDoc, UsageDoc, type EntryId, type TaskId, type UsageState, type UserInput, type InputEntry } from "@earendil-works/pi-durable";
+import { createRegistry, Harness, InboxDoc, LiveDoc, UsageDoc, type EntryId, type Submission, type TaskId, type UsageState, type UserInput, type InputEntry } from "@earendil-works/pi-durable";
 import type { Conversation, ConversationView, EntryRecord, InboxState, LiveState, ModelRef } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { and, desc, eq, inArray } from "drizzle-orm";
@@ -96,6 +96,35 @@ export interface AgentChat {
 }
 /** One page of transcript older than the client's current view. */
 export interface AgentChatHistory { messages: ChatEntry[]; before?: number; more: boolean }
+
+/** Trusted gateway operations on an Agent's persistent main conversation, admission-checked like the web chat path. */
+export interface AgentBridge {
+  /** Submits user text; the returned Submission settles with the turn's answer entries. */
+  submit(message: string, requestId: string): Promise<Submission>;
+  /** Assistant text of the entries from `from` through `to` (inclusive), in transcript order. */
+  replyText(from: EntryId, to: EntryId): Promise<string[]>;
+  stop(): Promise<void>;
+  reset(): Promise<void>;
+  compact(): Promise<{ message?: string }>;
+}
+
+/**
+ * The operator-facing text of a failed turn. An abort is the user's own action and carries no provider
+ * error; a model failure keeps the provider's recorded message, which is the only place an operator can
+ * see why the request failed (quota, privacy policy, auth) and what to do about it.
+ */
+function failureText(message: { readonly stopReason?: string; readonly errorMessage?: string }): string {
+  if (message.stopReason === "aborted") return "Response interrupted. Send another message to retry.";
+  const detail = message.errorMessage?.trim();
+  return detail ? `${[...detail].slice(0, 2000).join("")}\n\nSend another message to retry.` : "The model request failed. Send another message to retry.";
+}
+
+/** The assistant text of one transcript entry, excluding failed or aborted responses. */
+function assistantTexts(entry: EntryRecord): string[] {
+  return (entry.model ?? []).filter((message) => message.role === "assistant" && message.stopReason !== "error" && message.stopReason !== "aborted")
+    .map((message) => typeof message.content === "string" ? message.content : message.content.filter((part) => part.type === "text").map((part) => part.text).join(""))
+    .filter((text) => text.trim() !== "");
+}
 
 /** Owns every Agent harness; no request owns a harness or waits for model work. */
 export class AgentService {
@@ -444,7 +473,7 @@ export class AgentService {
         }
         if (message.role !== "user" && message.role !== "assistant") continue;
         const failed = message.role === "assistant" && (message.stopReason === "error" || message.stopReason === "aborted");
-        const text = failed ? "Response interrupted or failed. You can send another message to retry." : typeof message.content === "string" ? message.content : message.content.filter((part) => part.type === "text").map((part) => part.text).join("");
+        const text = failed ? failureText(message) : typeof message.content === "string" ? message.content : message.content.filter((part) => part.type === "text").map((part) => part.text).join("");
         if (text) messages.push({ id: `${entry.id}:${index}`, role: message.role, text, failed });
       }
     }
@@ -582,6 +611,9 @@ export class AgentService {
   async compact(userId: string, id: string): Promise<{ message?: string }> {
     this.admit();
     const agent = await this.owned(userId, id);
+    return this.compactAgent(agent);
+  }
+  private async compactAgent(agent: AgentRow): Promise<{ message?: string }> {
     if (!this.scheduling) throw new AgentError("Agent execution is not ready", 503);
     const current = this.running.get(agent.id);
     if (!current) throw new AgentError("Agent is unavailable. Retry initialization.", 503);
@@ -615,6 +647,49 @@ export class AgentService {
       before: page.items.length ? page.items.at(-1)!.id : before,
       more: page.items.length === 100,
     };
+  }
+  /** Trusted agent lookup by id for gateways; the caller must already hold authority. */
+  private async ownedAgent(id: string) {
+    this.admit(true);
+    const row = await this.db.select().from(hvAgents).where(eq(hvAgents.id, agentId(id))).get();
+    if (!row) throw new AgentError("Agent not found", 404);
+    this.assertRunning(row.id);
+    if (row.state === "stopping" || row.state === "stopped") throw new AgentError("Agent is being deleted. Retry deletion in Settings.", 409);
+    return row;
+  }
+  /** Gateway access to an Agent's persistent main conversation; admission-checked like the web chat path. */
+  async bridge(id: string): Promise<AgentBridge> {
+    const agent = await this.ownedAgent(id);
+    const current = () => {
+      const running = this.running.get(agent.id);
+      if (!running) throw new AgentError("Agent is unavailable. Retry initialization.", 503);
+      return running;
+    };
+    return {
+      submit: (message, requestId) => this.submitMain(agent, message, requestId),
+      replyText: async (from, to) => {
+        const page = await current().main.entries({ order: "ascending", minEntryId: from, maxEntryId: to }, 1000, undefined, context);
+        return page.items.flatMap((entry) => assistantTexts(entry));
+      },
+      stop: async () => { this.admit(); await current().main.abort(context); },
+      reset: async () => { this.admit(); await current().main.reset(undefined, context); },
+      compact: () => this.compactAgent(agent),
+    };
+  }
+  /** Serialized submission without an owning user session; the bridge's own authorization applies first. */
+  private submitMain(agent: AgentRow, message: string, submissionRequestId: string): Promise<Submission> {
+    return this.subagents.serial(agent.id, async () => {
+      this.admit();
+      if (!this.scheduling) throw new AgentError("Agent execution is not ready", 503);
+      const current = this.running.get(agent.id);
+      if (!current) throw new AgentError("Agent is unavailable. Retry initialization.", 503);
+      message = chatMessage(message);
+      submissionRequestId = requestId(submissionRequestId);
+      if (!await this.configured(agent, current)) throw new AgentError("Reconnect this Agent's provider or select an available model on the Providers page.", 409);
+      const inbox = await current.harness.snapshot(InboxDoc, current.main.id, context);
+      if ((inbox?.items.length ?? 0) >= 20) throw new AgentError("Agent message queue is full. Wait for a response.", 429);
+      return current.main.submit({ type: "input", content: message, requestId: submissionRequestId }, context);
+    });
   }
   /** Seals execution admission while keeping read access and live feeds available to the web host. */
   drain(force?: AbortSignal) {

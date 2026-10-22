@@ -6,11 +6,12 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentChat } from "../agents/agent-service.js";
 import type { RiskSettings } from "../hyperliquid/orders/risk-settings.js";
-const mocks = vi.hoisted(() => ({ save: vi.fn(), success: vi.fn(), invalidate: vi.fn(), instruments: vi.fn(), remove: vi.fn(), navigate: vi.fn() }));
+const mocks = vi.hoisted(() => ({ save: vi.fn(), success: vi.fn(), invalidate: vi.fn(), instruments: vi.fn(), remove: vi.fn(), navigate: vi.fn(), addToken: vi.fn(), startLink: vi.fn(), disconnect: vi.fn(), status: vi.fn() }));
 vi.mock("../web/charts.js", () => ({ getChartInstruments: mocks.instruments }));
 vi.mock("@tanstack/react-router", () => ({ useRouter: () => ({ invalidate: mocks.invalidate, navigate: mocks.navigate }) }));
 vi.mock("../web/agents.js", () => ({ deleteAgent: mocks.remove }));
 vi.mock("../web/risk.js", () => ({ saveRiskSettings: mocks.save }));
+vi.mock("../web/gateway.js", () => ({ addGatewayToken: mocks.addToken, startGatewayLink: mocks.startLink, disconnectGateway: mocks.disconnect, getGatewayStatus: mocks.status }));
 vi.mock("sonner", () => ({ toast: { success: mocks.success } }));
 import { AgentSettingsPage as AgentSettingsPageComponent } from "./agent-settings-page.js";
 let queryClient: QueryClient;
@@ -27,6 +28,7 @@ describe("Agent settings", () => {
     vi.resetAllMocks();
     queryClient = createTestQueryClient({ staleTime: Infinity });
     queryClient.setQueryData(["risk", initial.agent.id], { tradingEnabled: false, allowedInstruments: null, maxOrderNotional: null, maxTotalNotional: null });
+    queryClient.setQueryData(["gateway", initial.agent.id], { hasToken: false, connected: false, botUsername: null, chatId: null, chatUsername: null });
     mocks.instruments.mockResolvedValue(["BTC", "ETH", "SOL"]);
     mocks.save.mockImplementation(async ({ data }: { data: { settings: RiskSettings } }) => data.settings);
     vi.stubGlobal("EventSource", eventSource);
@@ -37,6 +39,14 @@ describe("Agent settings", () => {
   async function change(label: string, value: string) {
     await act(async () => {
       const element = container.querySelector<HTMLInputElement>(`[aria-label="${label}"]`)!;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(element, value);
+      element.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+  /** Like change(), but for inputs rendered into the dialog portal in document.body. */
+  async function dialogChange(label: string, value: string) {
+    await act(async () => {
+      const element = document.querySelector<HTMLInputElement>(`dialog [aria-label="${label}"]`)!;
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(element, value);
       element.dispatchEvent(new Event("input", { bubbles: true }));
     });
@@ -236,7 +246,77 @@ describe("Agent settings", () => {
     expect(container.textContent).not.toContain("Execution backend"); expect(container.textContent).toContain("Telegram");
     expect(container.querySelector("select")).toBeNull();
     expect(container.textContent).not.toContain("Edit orchestrator model");
+    expect(eventSource).not.toHaveBeenCalled();
+  });
+  it("keeps application settings without orchestrator editing controls", () => {
+    expect(container.textContent).not.toContain("Execution backend"); expect(container.textContent).toContain("Telegram");
+    expect(container.querySelector("select")).toBeNull();
+    expect(container.textContent).not.toContain("Edit orchestrator model");
+    // The setup wizard and its links live in the dialog, never in the inline section.
     expect(container.querySelector("a")).toBeNull();
     expect(eventSource).not.toHaveBeenCalled();
+  });
+  it("completes the Telegram setup flow inside the connect dialog", async () => {
+    const configured = { hasToken: true, connected: false, botUsername: "my_bot", chatId: null, chatUsername: null };
+    mocks.addToken.mockResolvedValue(configured);
+    mocks.startLink.mockResolvedValue({ link: "https://t.me/my_bot?start=abc-123" });
+    await act(async () => [...container.querySelectorAll("button")].find((button) => button.textContent === "Connect Telegram")!.click());
+    const dialog = () => document.querySelector("dialog")!;
+    expect(dialog().getAttribute("aria-labelledby")).toBeDefined();
+    expect(dialog().textContent).toContain("@BotFather");
+    await dialogChange("Telegram bot token", "123456789:AAE-fixture");
+    await act(async () => [...dialog().querySelectorAll("button")].find((button) => button.textContent === "Add bot token")!.click());
+    expect(mocks.addToken).toHaveBeenCalledWith({ data: { id: initial.agent.id, token: "123456789:AAE-fixture" } });
+    expect(mocks.success).toHaveBeenCalledWith("Telegram bot added");
+    expect(dialog().textContent).toContain("@my_bot");
+    expect(queryClient.getQueryData(["gateway", initial.agent.id])).toEqual(configured);
+    await act(async () => [...dialog().querySelectorAll("button")].find((button) => button.textContent === "Link Telegram chat")!.click());
+    expect(mocks.startLink).toHaveBeenCalledWith({ data: { id: initial.agent.id } });
+    const anchor = [...dialog().querySelectorAll<HTMLAnchorElement>("a")].find((anchor) => anchor.href === "https://t.me/my_bot?start=abc-123")!;
+    expect(anchor.target).toBe("_blank");
+    expect(anchor.className).toContain("cursor-pointer");
+    expect(dialog().querySelector('[role="alert"]')).toBeNull();
+    await act(async () => [...dialog().querySelectorAll("button")].find((button) => button.textContent === "Close")!.click());
+    expect(document.querySelector("dialog")).toBeNull();
+    expect(container.querySelector("a")).toBeNull();
+  });
+  it("advances to connected when the linked chat arrives while the dialog is open", async () => {
+    vi.useFakeTimers();
+    try {
+      await act(async () => queryClient.setQueryData(["gateway", initial.agent.id], { hasToken: true, connected: false, botUsername: "my_bot", chatId: null, chatUsername: null }));
+      mocks.status.mockResolvedValue({ hasToken: true, connected: true, botUsername: "my_bot", chatId: 7, chatUsername: "operator" });
+      await act(async () => [...container.querySelectorAll("button")].find((button) => button.textContent === "Connect Telegram")!.click());
+      await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
+      expect(document.querySelector("dialog")!.textContent).toContain("Telegram connected");
+      expect(document.querySelector("dialog")!.textContent).toContain("@operator");
+      // The parent section stays in sync with the connected chat.
+      await act(async () => {});
+      expect(queryClient.getQueryData(["gateway", initial.agent.id])).toMatchObject({ connected: true, chatId: 7 });
+    } finally { vi.useRealTimers(); }
+  });
+  it("shows the connected chat and disconnects Telegram", async () => {
+    await act(async () => queryClient.setQueryData(["gateway", initial.agent.id], { hasToken: true, connected: true, botUsername: "my_bot", chatId: 7, chatUsername: "operator" }));
+    expect(container.textContent).toContain("@my_bot");
+    expect(container.textContent).toContain("@operator");
+    expect(container.textContent).toContain("7");
+    const removed = { hasToken: false, connected: false, botUsername: null, chatId: null, chatUsername: null };
+    mocks.disconnect.mockResolvedValue(removed);
+    await act(async () => [...container.querySelectorAll("button")].find((button) => button.textContent === "Disconnect Telegram")!.click());
+    expect(mocks.disconnect).toHaveBeenCalledWith({ data: { id: initial.agent.id } });
+    expect(queryClient.getQueryData(["gateway", initial.agent.id])).toEqual(removed);
+    expect([...container.querySelectorAll("button")].find((button) => button.textContent === "Connect Telegram")).toBeDefined();
+  });
+  it("reports Telegram failures inside the dialog without losing the draft", async () => {
+    mocks.addToken.mockRejectedValue(new Error("Telegram rejected this bot token"));
+    await act(async () => [...container.querySelectorAll("button")].find((button) => button.textContent === "Connect Telegram")!.click());
+    const dialog = () => document.querySelector("dialog")!;
+    await dialogChange("Telegram bot token", "bad-token");
+    await act(async () => [...dialog().querySelectorAll("button")].find((button) => button.textContent === "Add bot token")!.click());
+    expect(dialog().querySelector('[role="alert"]')!.textContent).toContain("Telegram rejected this bot token");
+    expect(dialog().querySelector<HTMLInputElement>('[aria-label="Telegram bot token"]')!.value).toBe("bad-token");
+  });
+  it("surfaces a polling error from the gateway status", async () => {
+    await act(async () => queryClient.setQueryData(["gateway", initial.agent.id], { hasToken: true, connected: true, botUsername: "my_bot", chatId: 7, chatUsername: "operator", error: "401: Unauthorized: token revoked" }));
+    expect(container.querySelector('[role="status"]')!.textContent).toContain("token revoked");
   });
 });

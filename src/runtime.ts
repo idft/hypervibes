@@ -12,6 +12,8 @@ import { SharedHyperliquidFeeds } from "./hyperliquid/shared-feeds.js";
 import { HttpTransport } from "@nktkas/hyperliquid";
 import { exchangeHistory, JournalService, type HistoryFetcher, type JournalFeedFactory } from "./hyperliquid/journal-service.js";
 import { ProviderService, type ProviderServiceOptions } from "./providers/provider-service.js";
+import { GatewayBridge } from "./gateway/bridge-service.js";
+import { telegramConnector } from "./gateway/telegram/connector.js";
 import type { FastifyBaseLogger } from "fastify";
 import { resolve } from "node:path";
 
@@ -32,19 +34,23 @@ export async function createRuntime(config: AppConfig, options: AgentServiceOpti
   let hyperliquid: HyperliquidService | undefined;
   let providers: ProviderService | undefined;
   let orders: OrderService | undefined;
+  let gateway: GatewayBridge | undefined;
   let closing: Promise<void> | undefined;
   let failure: Error | undefined;
   const close = (force?: AbortSignal) => closing ??= (async () => {
-    try { await agents?.close(force); }
+    try { await gateway?.close(); }
     finally {
-      try {
-        try { await orders?.close(); }
-        finally { await hyperliquid?.close(); }
-      } finally {
-        try { await providers?.close(); }
-        finally {
-          try { await database.close(); }
-          finally { await release?.(); }
+      try { await agents?.close(force); }
+      finally {
+        try {
+          try { await orders?.close(); }
+          finally { await hyperliquid?.close(); }
+        } finally {
+          try { await providers?.close(); }
+          finally {
+            try { await database.close(); }
+            finally { await release?.(); }
+          }
         }
       }
     }
@@ -82,6 +88,8 @@ export async function createRuntime(config: AppConfig, options: AgentServiceOpti
     providerService.onChanged = (userId) => agentService.providersChanged(userId);
     agents = agentService;
     await agentService.recover();
+    // One bridge per supported gateway platform; Telegram bridges the persistent main conversation.
+    gateway = new GatewayBridge(db, agentService, config.encryptionKey, telegramConnector, { logger: logger?.child({ component: "gateway" }) });
     return {
       db,
       database,
@@ -91,11 +99,13 @@ export async function createRuntime(config: AppConfig, options: AgentServiceOpti
       hyperliquid,
       orders: orderService,
       providers: providerService,
+      gateway,
       start() {
         if (closing || failure) throw new Error("Runtime is unavailable");
         hyperliquid?.start();
         orderService.start();
         agentService.start();
+        gateway?.start();
       },
       status(): RuntimeStatus {
         if (closing || failure || !database.available || !connection.isOpen) throw new Error("Runtime is unavailable");

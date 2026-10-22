@@ -71,9 +71,12 @@ export function ModelDialog({ choices, value, thinkingLevel, onCancel, onApply }
     <fieldset disabled={saving} className="space-y-5 disabled:opacity-60">
     <label className="block space-y-2 text-sm">Search providers and models<input autoFocus type="search" value={search} onChange={(event) => { setSearch(event.target.value); setProvider(""); }} className={configInput} placeholder="Provider, model name or ID" /></label>
     <div className="grid gap-4 sm:grid-cols-[12rem_minmax(0,1fr)]">
-      <nav aria-label="Model providers" className="flex max-h-40 flex-wrap content-start gap-2 overflow-y-auto sm:max-h-80 sm:flex-col">
-        {[{ id: "", name: "" }, ...providers].map((entry) => <button type="button" key={entry.id} aria-pressed={provider === entry.id} onClick={() => setProvider(entry.id)} className={`${configButton} flex items-center gap-2 rounded-lg text-left aria-pressed:border-violet-500 aria-pressed:bg-violet-950`}>{entry.id ? <ProviderLogo provider={entry.id} className="h-5 w-5 shrink-0 rounded-sm bg-white p-0.5" /> : null}{entry.name || "All providers"}</button>)}
-      </nav>
+      <div className="space-y-2">
+        <nav aria-label="Model providers" className="flex max-h-40 flex-wrap content-start gap-2 overflow-y-auto sm:max-h-80 sm:flex-col">
+          {[{ id: "", name: "" }, ...providers].map((entry) => <button type="button" key={entry.id} aria-pressed={provider === entry.id} onClick={() => setProvider(entry.id)} className={`${configButton} flex items-center gap-2 rounded-lg text-left aria-pressed:border-violet-500 aria-pressed:bg-violet-950`}>{entry.id ? <ProviderLogo provider={entry.id} className="h-5 w-5 shrink-0 rounded-sm bg-white p-0.5" /> : null}{entry.name || "All providers"}</button>)}
+        </nav>
+        <a href="/providers" className="block cursor-pointer text-xs text-violet-300 hover:underline">Manage Providers</a>
+      </div>
       <div className="h-[28rem] space-y-2 overflow-y-auto" role="group" aria-label="Models">
         {visible.map((choice) => <label key={modelKey(choice)} className="flex cursor-pointer items-center gap-3 rounded-xl border border-zinc-800 p-3 hover:bg-zinc-900 has-checked:border-violet-500 has-checked:bg-violet-950/40 has-focus-visible:ring-2 has-focus-visible:ring-violet-400">
           <input type="radio" name="model" checked={draft === modelKey(choice)} onChange={() => { setDraft(modelKey(choice)); setThinking(""); }} className="h-0 w-0 cursor-pointer" />

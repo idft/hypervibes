@@ -39,6 +39,7 @@
     "better-auth": "1.7.10",
     "drizzle-orm": "1.0.0-rc.4",
     "fastify": "5.12.7",
+    "grammy": "^1.46.0",
     "htmx-ext-sse": "2.2.4",
     "htmx.org": "2.0.10",
     "lightweight-charts": "5.2.1",

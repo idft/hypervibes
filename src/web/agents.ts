@@ -155,6 +155,7 @@ export const deleteAgent = createServerFn({ method: "POST" })
       const agent = await context.runtime.agents.owned(user.id, data.id, true);
       if (data.confirmation !== agent.name) throw new AgentError("Type the agent name to confirm deletion.");
       await context.runtime.agents.delete(user.id, agent.id);
+      await context.runtime.gateway.removed(agent.id);
       return { deleted: true };
     });
   });
