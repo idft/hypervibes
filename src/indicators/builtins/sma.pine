@@ -1,0 +1,5 @@
+//@version=6
+indicator("SMA", overlay=true)
+period = input.int(20, "Period", minval=2, maxval=500)
+source = input.source(close, "Source")
+plot(ta.sma(source, period), "SMA", color=color.blue)

@@ -18,8 +18,8 @@ describe("safe artifact rendering", () => {
     expect(artifactContentUrl("root/other", id)).toContain("root%2Fother");
   });
   it("shows queued calls and execution timings without queue wait timings", () => {
-    const html = renderToStaticMarkup(<ToolActivity tools={[{ id: "waiting", name: "↳ ta_rsi", status: "queued" }, { id: "completed", name: "↳ ta_ema", status: "ok", durationMs: 2, queuedMs: 35 }]} />);
-    expect(html).toContain("ta_rsi · queued"); expect(html).toContain("ta_ema · ok · 2ms"); expect(html).not.toContain("35ms"); expect(html).toContain("open=\"\"");
+    const html = renderToStaticMarkup(<ToolActivity tools={[{ id: "waiting", name: "↳ indicator_list", status: "queued" }, { id: "completed", name: "↳ indicator_get", status: "ok", durationMs: 2, queuedMs: 35 }]} />);
+    expect(html).toContain("indicator_list · queued"); expect(html).toContain("indicator_get · ok · 2ms"); expect(html).not.toContain("35ms"); expect(html).toContain("open=\"\"");
   });
   it("shows only execution time for inline tool calls", () => {
     const html = renderToStaticMarkup(<ToolCall tool={{ id: "call", name: "research_candles", status: "ok", durationMs: 202, queuedMs: 403 }} />);
@@ -28,7 +28,7 @@ describe("safe artifact rendering", () => {
     expect(html).not.toContain("queued");
   });
   it("shows nested failure summaries without artifact navigation", () => {
-    const html = renderToStaticMarkup(<ToolActivity tools={[{ id: "call", name: "↳ ta_macd", status: "error", error: "Missing candles", arguments: '{"coin":"BTC"}', durationMs: 10 }]} />);
-    expect(html).toContain("Missing candles"); expect(html).toContain("ta_macd"); expect(html).toContain("10ms"); expect(html).not.toContain("Open artifacts"); expect(html).not.toContain("/agents/root/artifacts");
+    const html = renderToStaticMarkup(<ToolActivity tools={[{ id: "call", name: "↳ indicator_run", status: "error", error: "Missing candles", arguments: '{"coin":"BTC"}', durationMs: 10 }]} />);
+    expect(html).toContain("Missing candles"); expect(html).toContain("indicator_run"); expect(html).toContain("10ms"); expect(html).not.toContain("Open artifacts"); expect(html).not.toContain("/agents/root/artifacts");
   });
 });

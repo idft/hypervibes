@@ -22,7 +22,7 @@ function makeChart() {
   type Hover = { hoveredInfo?: { objectId: string; type: "marker" }; point?: { x: number; y: number } };
   const crosshairs = new Set<(event: Hover) => void>();
   return { addSeries: vi.fn().mockReturnValueOnce(price).mockReturnValueOnce(volume), timeScale: () => timeScale, price, volume,
-    priceScale: () => ({ width: () => 50 }), chartElement: () => ({ clientWidth: 900, clientHeight: 500 }), subscribeCrosshairMove: vi.fn((callback) => crosshairs.add(callback)), unsubscribeCrosshairMove: vi.fn((callback) => crosshairs.delete(callback)),
+    panes: () => [{ getHeight: () => 470 }], priceScale: () => ({ width: () => 50 }), chartElement: () => ({ clientWidth: 900, clientHeight: 500 }), subscribeCrosshairMove: vi.fn((callback) => crosshairs.add(callback)), unsubscribeCrosshairMove: vi.fn((callback) => crosshairs.delete(callback)),
     hover: (event: Hover) => crosshairs.forEach((callback) => callback(event)),
     remove: vi.fn(), scroll: (from: number) => listener?.({ from, to: from + 120 }) };
 }
@@ -55,7 +55,7 @@ describe("annotated market chart", () => {
   let root: Root, container: HTMLDivElement, chartMount: HTMLDivElement, statusHost: HTMLDivElement, handle: MarketChartHandle | null;
   let layout: ChartLayout, client: QueryClient;
   beforeEach(() => {
-    layout = { id: crypto.randomUUID(), revision: 0, document: { name: "Test", coin: "BTC", interval: "1h", drawings: [], notes: "", magnet: true, hideDrawings: false }, updatedAt: 0, canUndo: false, canRedo: false, lastChange: "Created" };
+    layout = { id: crypto.randomUUID(), revision: 0, document: { name: "Test", coin: "BTC", interval: "1h", drawings: [], indicators: [], notes: "", magnet: true, hideDrawings: false }, updatedAt: 0, canUndo: false, canRedo: false, lastChange: "Created" };
     mocks.history.mockReset().mockResolvedValue({ candles: [candle(3600), candle(7200)], hasMore: true });
     mocks.fills.mockReset().mockResolvedValue({ fills: [], nextCursor: null, historyLimited: false, sync: { updatedAt: 1, error: null } });
     client = createTestQueryClient();
@@ -72,18 +72,41 @@ describe("annotated market chart", () => {
   it("renders connection and history status in the toolbar without an extra row above the chart", async () => {
     await render();
     const indicator = statusHost.querySelector<HTMLElement>("[aria-label='Chart connection']")!;
-    expect(indicator.textContent).toContain("Connecting…");
+    expect(indicator.textContent).toContain("Loading");
     expect(chartMount.querySelector("[aria-label='Chart connection']")).toBeNull();
+    expect(chartMount.querySelector("[aria-label='Account overlay status']")).toBeNull();
+    const details = statusHost.querySelector("details")!;
+    expect(details.open).toBe(false);
+    expect(statusHost.querySelector("[aria-label='Chart data status']")?.textContent).toContain("Connecting account");
+    await act(async () => statusHost.querySelector("summary")!.click());
+    expect(details.open).toBe(true);
     expect(chartMount.firstElementChild!.children).toHaveLength(1);
     expect(chartMount.firstElementChild!.firstElementChild!.getAttribute("aria-label")).toBe("BTC 1h candlestick and volume chart");
     await act(async () => FakeEventSource.instances[0]!.send({ status: "live", candles: [] }));
+    expect(indicator.textContent).toContain("Loading");
+    expect(indicator.querySelector(".bg-amber-400")).not.toBeNull();
+    await act(async () => accountSource().dashboard(snapshot()));
     expect(indicator.textContent).toContain("Connected");
+    expect(indicator.querySelector(".bg-emerald-400")).not.toBeNull();
     mocks.history.mockResolvedValueOnce({ candles: [candle(0)], hasMore: false });
     await act(async () => mocks.charts[0]!.scroll(0));
     expect(indicator.title).toContain("No older candles available");
     await act(async () => FakeEventSource.instances[0]!.onerror?.());
     expect(indicator.textContent).toContain("Disconnected"); expect(indicator.title).toContain("Data may be stale");
+    expect(indicator.querySelector(".bg-red-400")).not.toBeNull();
     expect(chartSources()).toHaveLength(1); expect(FakeEventSource.instances).toHaveLength(2); expect(mocks.history).toHaveBeenCalledTimes(2);
+  });
+  it("keeps history errors and retry actions in the toolbar status panel", async () => {
+    mocks.history.mockRejectedValue(new Error("History request failed"));
+    await render();
+    expect(chartMount.textContent).not.toContain("History request failed");
+    const panel = statusHost.querySelector("[aria-label='Chart data status']")!;
+    expect(panel.textContent).toContain("History request failed");
+    const retry = [...panel.querySelectorAll("button")].find((button) => button.textContent === "Retry chart")!;
+    expect(retry).toBeDefined();
+    mocks.history.mockResolvedValue({ candles: [candle(3600)], hasMore: true });
+    await act(async () => { retry.click(); await new Promise((resolve) => setTimeout(resolve, 10)); });
+    expect(statusHost.textContent).not.toContain("History request failed");
   });
   it("keeps saved agent annotations above the library's canvas layers", async () => {
     const level = { ...newDrawing("horizontal", "BTC", [{ time: 3600, price: 12 }]), author: "agent" as const, name: "Agent support" };
@@ -160,7 +183,7 @@ describe("annotated market chart", () => {
     const obsolete = mocks.charts[1]!;
     layout = { ...layout, document: { ...layout.document, interval: "5m" } }; await render();
     await act(async () => chartSources()[1]!.onerror?.());
-    expect(statusHost.querySelector("[aria-label='Chart connection']")!.textContent).toContain("Connecting…");
+    expect(statusHost.querySelector("[aria-label='Chart connection']")!.textContent).toContain("Loading");
     await act(async () => resolve({ candles: [candle(999)], hasMore: false }));
     expect(obsolete.price.setData).not.toHaveBeenCalled();
     expect(obsolete.remove).toHaveBeenCalledOnce();
@@ -210,11 +233,12 @@ describe("annotated market chart", () => {
   });
   it("offers retry on history failure and cleans up subscriptions", async () => {
     mocks.history.mockRejectedValueOnce(new Error("History offline")); await render();
-    expect(container.querySelector("[role=alert]")!.textContent).toContain("History offline");
-    await act(async () => container.querySelector<HTMLButtonElement>("button")!.click());
+    expect(statusHost.querySelector("[aria-label='Chart data status']")!.textContent).toContain("History offline");
+    await act(async () => [...statusHost.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Retry chart")!.click());
     expect(mocks.history).toHaveBeenCalledTimes(2);
     expect(mocks.charts[0]!.remove).toHaveBeenCalledOnce();
-    expect(mocks.charts[0]!.unsubscribeCrosshairMove).toHaveBeenCalledTimes(2);
+    // redraw + account overlays crosshair + read-only generated-object hover.
+    expect(mocks.charts[0]!.unsubscribeCrosshairMove).toHaveBeenCalledTimes(3);
     expect(mocks.plugins[0]!.detach).toHaveBeenCalledOnce();
     expect(mocks.plugins[0]!.detach.mock.invocationCallOrder[0]).toBeLessThan(mocks.charts[0]!.remove.mock.invocationCallOrder[0]!);
     expect(container.querySelector("[role=alert]")).toBeNull();

@@ -1,5 +1,6 @@
 import { Link, Outlet } from "@tanstack/react-router";
 import { useState } from "react";
+import { useIndicatorCatalogEvents } from "./use-indicator-catalog-events.js";
 import type { AgentRow } from "../db/agent-schema.js";
 
 const sections = [
@@ -11,29 +12,41 @@ const sections = [
   { label: "Settings", to: "/agents/$agentId/settings", icon: "M4 6h16M4 12h16M4 18h16M8 3v6M16 9v6M10 15v6" },
 ] as const;
 
+const chartSections = [
+  { label: "Indicators", to: "/agents/$agentId/indicators", icon: "M3 12h18M3 18l5-12 5 10 4-8 4 10" },
+] as const;
+
 const memorySections = [
   { label: "Insights", to: "/agents/$agentId/memories", search: { scope: "" }, icon: "M4 4h16v16H4zM8 8h8M8 12h8M8 16h5" },
 ] as const;
 
 export function AgentLayout({ agent, initialExpanded }: { agent: AgentRow; initialExpanded: boolean }) {
+  useIndicatorCatalogEvents(agent.id);
   const [expanded, setExpanded] = useState(initialExpanded);
   const [memoriesExpanded, setMemoriesExpanded] = useState(false);
+  const [chartsExpanded, setChartsExpanded] = useState(false);
   function toggle() {
     setExpanded((value) => {
       document.cookie = `hv-agent-nav-expanded=${!value}; Max-Age=31536000; Path=/; SameSite=Strict`;
       return !value;
     });
   }
-  const link = (section: typeof sections[number] | typeof memorySections[number]) => <Link key={section.label} to={section.to} params={{ agentId: agent.id }} search={"search" in section ? section.search : undefined} activeOptions={{ exact: true }} title={section.label} aria-label={section.label}
+  const link = (section: typeof sections[number] | typeof memorySections[number] | typeof chartSections[number]) => <Link key={section.label} to={section.to} params={{ agentId: agent.id }} search={"search" in section ? section.search : undefined} activeOptions={{ exact: true }} title={section.label} aria-label={section.label}
+    onClick={section.label === "Charts" ? () => setChartsExpanded(true) : undefined}
+    aria-expanded={section.label === "Charts" ? chartsExpanded : undefined}
+    aria-controls={section.label === "Charts" ? "agent-chart-sections" : undefined}
     className="flex h-10 cursor-pointer items-center gap-3 rounded-lg px-3 text-zinc-400 hover:bg-zinc-800 hover:text-white"
     activeProps={{ className: "bg-zinc-800 text-white", "aria-current": "page" }}>
     <svg className="h-5 w-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={section.icon} /></svg>
-    {expanded && <span className="text-sm">{section.label}</span>}
+    {expanded && <><span className="text-sm">{section.label}</span>{section.label === "Charts" && <span className="ml-auto text-xs" aria-hidden="true">{chartsExpanded ? "▾" : "▸"}</span>}</>}
   </Link>;
   return <div className={expanded ? "pl-48" : "pl-14 sm:pl-16"}>
     <nav aria-label="Agent sections" className={`fixed bottom-0 left-0 top-14 z-30 flex flex-col border-r border-zinc-800 bg-[#111214] p-1.5 ${expanded ? "w-48" : "w-14 sm:w-16"}`}>
       <div className="flex min-h-0 flex-col gap-1 overflow-y-auto">
-        {sections.slice(0, 3).map(link)}
+        {link(sections[0])}
+        {link(sections[1])}
+        <div id="agent-chart-sections" hidden={!chartsExpanded} className={expanded ? "ml-4 space-y-1 border-l border-zinc-800 pl-1" : "space-y-1"}>{chartsExpanded && chartSections.map(link)}</div>
+        {link(sections[2])}
         <hr className="my-2 border-zinc-800" />
         {sections.slice(3, -1).map(link)}
         <Link to="/agents/$agentId/memories" params={{ agentId: agent.id }} search={{}} onClick={() => setMemoriesExpanded(true)} activeOptions={{ exact: true, includeSearch: true }} activeProps={{ className: "bg-zinc-800 text-white", "aria-current": "page" }} aria-expanded={memoriesExpanded} aria-controls="agent-memory-sections" aria-label="Memories" title="Memories" className="flex h-10 shrink-0 cursor-pointer items-center gap-3 rounded-lg px-3 text-zinc-400 hover:bg-zinc-800 hover:text-white">

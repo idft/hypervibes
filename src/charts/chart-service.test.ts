@@ -104,4 +104,22 @@ describe("persistent collaborative chart layouts", () => {
     for (const table of ["hv_chart_layouts", "hv_chart_operations", "hv_chart_snapshots"]) expect(await db.all(`SELECT * FROM ${table}`)).toEqual([]);
     expect(await db.all("PRAGMA foreign_key_check")).toEqual([]);
   });
+  it("normalizes legacy documents, validates instance ownership and duplicates with fresh identities", async () => {
+    await db.run("UPDATE hv_chart_layouts SET document=? WHERE id=?", JSON.stringify({ name: "Legacy", coin: "BTC", interval: "1h", drawings: [], notes: "", hideDrawings: false, magnet: true }), layout.id);
+    expect((await charts.get("a", layout.id)).document.indicators).toEqual([]);
+    // A foreign custom indicator in a forged document is rejected before any edit is stored.
+    const foreign = { id: randomUUID(), indicatorId: "custom:12345678-1234-4234-8234-123456789abc", inputs: {}, configuredVersion: 1, hidden: false, pane: "auto", styles: {} };
+    await expect(charts.edit("a", layout.id, 0, { label: "Forge", settings: { indicators: [foreign] } }, "forge")).rejects.toThrow("not found in this Agent");
+    await expect(charts.create("a", randomUUID(), { indicators: [{ indicatorId: "builtin:nope" }] })).rejects.toThrow();
+    const own = await db.run("INSERT INTO hv_indicators(id,agent_id,name,description,interpretation,current_version,created_at,updated_at) VALUES ('12345678-1234-4234-8234-123456789abc','a','Mine','','',1,1,1)");
+    expect(own).toBeUndefined();
+    const saved = await charts.edit("a", layout.id, 0, { label: "Add indicator", settings: { indicators: [foreign] } }, "add");
+    expect(saved.document.indicators).toEqual([foreign]);
+    const copy = await charts.create("a", randomUUID(), {}, layout.id);
+    expect(copy.document.indicators).toHaveLength(1);
+    expect(copy.document.indicators[0]!.id).not.toBe(foreign.id);
+    expect(copy.document.indicators[0]!.indicatorId).toBe(foreign.indicatorId);
+    await db.run("DELETE FROM hv_agents WHERE id='a'");
+    expect(await db.all("SELECT * FROM hv_indicators")).toEqual([]);
+  });
 });

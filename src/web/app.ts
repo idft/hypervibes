@@ -6,6 +6,7 @@ import { CurrencyLogoCache } from "../hyperliquid/logo-cache.js";
 import { isPerpetualLogoSymbol } from "../hyperliquid/currency-logo.js";
 import { ProviderLogoCache, isProviderSlug } from "../providers/provider-logo.js";
 import { NodeRequest, sendNodeResponse } from "srvx/node";
+import { StartRequest } from "./start-request.js";
 import type { AppConfig } from "../config.js";
 import { createRuntime } from "../runtime.js";
 import { AgentEventStreams } from "./agent-events.js";
@@ -61,12 +62,13 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
   const dashboards = new AgentEventStreams(runtime, "dashboard");
   const charts = new AgentEventStreams(runtime, "chart");
   const chartLayouts = new AgentEventStreams(runtime, "chart-layouts");
+  const indicators = new AgentEventStreams(runtime, "indicators");
   const runs = new AgentEventStreams(runtime, "runs");
   const runDetails = new AgentEventStreams(runtime, "run");
   const subagents = new AgentEventStreams(runtime, "subagents");
   let web: StartApplication | undefined;
   // SSE responses must finish before Fastify waits for active HTTP connections.
-  app.addHook("preClose", async () => { await Promise.all([streams.close(), providerLogins.close(), dashboards.close(), charts.close(), chartLayouts.close(), runs.close(), runDetails.close(), subagents.close(), logos.close(), providerLogos.close()]); });
+  app.addHook("preClose", async () => { await Promise.all([streams.close(), providerLogins.close(), dashboards.close(), charts.close(), chartLayouts.close(), indicators.close(), runs.close(), runDetails.close(), subagents.close(), logos.close(), providerLogos.close()]); });
   app.addHook("onClose", async () => {
     try { await web?.close(); }
     finally { await runtime.close(options.forceShutdown); }
@@ -168,6 +170,13 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
       await sendNodeResponse(reply.raw, response);
     });
 
+    app.get<{ Params: { id: string } }>("/api/agents/:id/indicators/events", async (request, reply) => {
+      reply.hijack();
+      const webRequest = new NodeRequest({ req: request.raw, res: reply.raw, maxRequestBodySize: 1024 * 1024 });
+      const response = await indicators.open(webRequest, request.params.id);
+      await sendNodeResponse(reply.raw, response);
+    });
+
     app.get<{ Params: { id: string } }>("/api/agents/:id/chart/layouts/events", async (request, reply) => {
       reply.hijack();
       const webRequest = new NodeRequest({ req: request.raw, res: reply.raw, maxRequestBodySize: 1024 * 1024 });
@@ -208,17 +217,19 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
       reply.hijack();
       try {
         if (start.middleware && await runMiddleware(start.middleware, request.raw, reply.raw)) return;
-        const webRequest = new NodeRequest({ req: request.raw, res: reply.raw, maxRequestBodySize: 1024 * 1024 });
+        const webRequest = new StartRequest({ req: request.raw, res: reply.raw, maxRequestBodySize: 1024 * 1024 });
         // Set this on the Web Request, whose headers may be reconstructed from
         // Node rawHeaders rather than Fastify's normalized header object.
         webRequest.headers.set("x-hv-client-ip", request.ip);
         const response = new URL(webRequest.url).pathname.startsWith("/api/auth/")
           ? await runtime.auth.handler(webRequest)
           : await start.fetch(webRequest, { context: { runtime } });
+        if (reply.raw.destroyed) { await response.body?.cancel(); return; }
         // Never cache cookie-sensitive HTML, server functions or auth responses.
         response.headers.set("Cache-Control", "no-store");
         await sendNodeResponse(reply.raw, response);
       } catch (error) {
+        if (error instanceof Error && error.name === "AbortError" && (request.raw.aborted || reply.raw.destroyed)) return;
         request.log.error(error, "Web request failed");
         if (reply.raw.headersSent) reply.raw.destroy();
         else {

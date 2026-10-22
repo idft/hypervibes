@@ -138,7 +138,7 @@ describe("Agent memory and insight UI", () => {
     const statusCell = container.querySelectorAll("tbody td")[4]!;
     expect(statusCell.textContent).toContain("fresh");
     expect(statusCell.textContent).toContain("Corrected by: m2");
-    expect(statusCell.textContent).toContain("Superseded by: m3");
+    expect(statusCell.textContent).not.toContain("Superseded by:");
   });
   it("does not show a replacement notice for an unreplaced publication", async () => {
     await renderDetail();

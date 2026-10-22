@@ -64,7 +64,7 @@ export function SubagentsPage({ agentId }: { agentId: string }) {
     <header className="flex flex-wrap items-center justify-between gap-4"><h2 className="text-lg font-medium text-white">Sub-agents</h2><div className="flex items-center gap-3">
       {archivedCount > 0 && <button type="button" aria-pressed={showArchived} onClick={() => setShowArchived((current) => !current)} className="cursor-pointer rounded-full border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800">{showArchived ? "Hide archived" : `Show archived (${archivedCount})`}</button>}
       <button type="button" aria-expanded={confirmImport} disabled={importPending} onClick={() => setConfirmImport(true)} className="cursor-pointer rounded-full border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800 disabled:cursor-wait">Import default sub-agents</button>
-      <Link to="/agents/$agentId/sub-agents/new" params={{ agentId }} className="cursor-pointer rounded-full bg-violet-600 px-4 py-2 text-sm text-white hover:bg-violet-500">Create subagent</Link>
+      <Link to="/agents/$agentId/sub-agents/new" params={{ agentId }} className="cursor-pointer rounded-full border border-violet-500 px-4 py-2 text-sm text-violet-300 hover:bg-violet-950">Create subagent</Link>
     </div></header>
     {confirmImport && <div className="space-y-3 rounded-xl border border-zinc-700 p-4">
       <h3 className="font-medium text-white">Import default sub-agents</h3>

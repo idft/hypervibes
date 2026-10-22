@@ -1,0 +1,18 @@
+//@version=6
+indicator("MACD", overlay=false)
+fastPeriod = input.int(12, "Fast period", minval=2, maxval=500)
+slowPeriod = input.int(26, "Slow period", minval=2, maxval=500)
+signalPeriod = input.int(9, "Signal period", minval=2, maxval=500)
+source = input.source(close, "Source")
+average = input.string("ema", "Average", options=["ema", "dema"])
+signalAverage = input.string("ema", "Signal average", options=["ema", "dema"])
+f_average(x, length, kind) =>
+    first = ta.ema(x, length)
+    second = ta.ema(first, length)
+    kind == "dema" ? 2 * first - second : first
+macd = f_average(source, fastPeriod, average) - f_average(source, slowPeriod, average)
+signal = f_average(macd, signalPeriod, signalAverage)
+plot(macd, "MACD", color=color.blue)
+plot(signal, "Signal", color=color.orange)
+plot(macd - signal, "Histogram", style=plot.style_histogram, color=macd >= signal ? color.green : color.red)
+hline(0, "Zero")

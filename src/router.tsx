@@ -23,6 +23,12 @@ export function getRouter() {
     defaultErrorComponent: RouteErrorPage,
     context: { queryClient },
   });
+  router.subscribe("onBeforeNavigate", ({ pathChanged }) => {
+    if (!pathChanged) return;
+    // Route loaders (including auth) need a free HTTP connection before the old
+    // chart unmounts. Abort its disposable calculations at navigation start.
+    void queryClient.cancelQueries({ predicate: ({ queryKey }) => queryKey[0] === "indicators" && queryKey[2] === "render" });
+  });
   // Dehydrates the query cache with the server-rendered page and wraps the
   // router output in a QueryClientProvider on both server and client.
   setupRouterSsrQueryIntegration({ router, queryClient });

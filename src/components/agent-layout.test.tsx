@@ -8,6 +8,7 @@ vi.mock("@tanstack/react-router", () => ({
   Link: ({ to, params, children, className, title, onClick, "aria-label": label, "aria-expanded": expanded, "aria-controls": controls }: ComponentProps<"a"> & { to: string; params?: { agentId: string }; activeOptions?: unknown; activeProps?: unknown }) => <a href={to.replace("$agentId", params?.agentId ?? "")} className={className} title={title} aria-label={label} aria-expanded={expanded} aria-controls={controls} onClick={(event) => { event.preventDefault(); onClick?.(event); }}>{children}</a>,
   Outlet: () => <p>Page content</p>,
 }));
+vi.mock("./use-indicator-catalog-events.js", () => ({ useIndicatorCatalogEvents: () => "Indicator updates disconnected. Latest versions may be stale; reconnecting…" }));
 import { AgentLayout } from "./agent-layout.js";
 const agent: AgentRow = { id: "fixture", name: "Research", userId: "owner", state: "ready", conversationId: 1, initialProvider: null, initialModelId: null, error: null, tradingAccountAddress: null, creationRequestId: "fixture", createdAt: 0, updatedAt: 0 };
 const navCookie = () => document.cookie.split(/;\s*/).find((part) => part.startsWith("hv-agent-nav-expanded="));
@@ -33,6 +34,17 @@ describe("Agent navigation", () => {
     expect(container.textContent).not.toContain("← Agents");
     expect(container.querySelector("h1")).toBeNull();
     expect(container.textContent).not.toContain("Notifications");
+    expect(container.textContent).not.toContain("Indicator updates disconnected");
+  });
+  it("nests Indicators under Charts", async () => {
+    const charts = container.querySelector<HTMLAnchorElement>('a[aria-label="Charts"]')!;
+    expect(charts.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector('#agent-chart-sections a')).toBeNull();
+    await act(async () => charts.click());
+    expect(charts.getAttribute("aria-expanded")).toBe("true");
+    const indicator = container.querySelector('#agent-chart-sections a')!;
+    expect(indicator.getAttribute("aria-label")).toBe("Indicators");
+    expect(indicator.getAttribute("href")).toBe("/agents/fixture/indicators");
   });
   it("links Memories to the Memories page and expands its Insights sub-item without Artifacts", async () => {
     const button = container.querySelector<HTMLAnchorElement>('a[aria-label="Memories"]')!;

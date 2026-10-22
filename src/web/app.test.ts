@@ -175,7 +175,7 @@ describe("embedded HTTP host", () => {
     const closeStreams = vi.spyOn(AgentEventStreams.prototype, "close");
     const closeServer = app.server.close.bind(app.server);
     const drain = vi.spyOn(app.server, "close").mockImplementation((callback) => {
-      expect(closeStreams).toHaveBeenCalledTimes(8);
+      expect(closeStreams).toHaveBeenCalledTimes(9);
       expect(runtime.status().database).toBe("connected");
       expect(start.close).not.toHaveBeenCalled();
       return closeServer(callback);
@@ -210,7 +210,7 @@ describe("embedded HTTP host", () => {
       expect((await app.inject("/")).statusCode).toBe(200);
       finishDrain();
       await shuttingDown;
-      expect(closeStreams).toHaveBeenCalledTimes(8);
+      expect(closeStreams).toHaveBeenCalledTimes(9);
       expect(start.close).toHaveBeenCalledOnce();
       await expect(runtime.database.get("SELECT 1")).rejects.toThrow("closed");
     } finally {

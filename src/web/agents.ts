@@ -2,6 +2,7 @@ import { isNotFound, isRedirect, notFound, redirect } from "@tanstack/react-rout
 import { createServerFn } from "@tanstack/react-start";
 import { getRequestHeaders } from "@tanstack/react-start/server";
 import { AgentError, isAgentError, requestId } from "../agents/agent-input.js";
+import { IndicatorError } from "../indicators/validation.js";
 import { HyperliquidError } from "../hyperliquid/errors.js";
 import { currentUser } from "../auth-user.js";
 import type { AppRuntime } from "../runtime.js";
@@ -42,6 +43,7 @@ export function optionalNumber(data: unknown, key: string): number | undefined {
 export async function agentOperation<T>(action: () => Promise<T>): Promise<T> {
   try { return await action(); }
   catch (error) {
+    if (error instanceof IndicatorError) throw new AgentError(error.message, error.status);
     if (isAgentError(error) || error instanceof HyperliquidError || isRedirect(error) || isNotFound(error)) throw error;
     throw new AgentError("Agent operation failed. Please try again.", 500);
   }

@@ -8,12 +8,14 @@ export { candleIntervals } from "./candle-intervals.js";
 export const accountToolNames = ["get_account", "prepare_protected_entry", "prepare_position_protection", "get_protection_status", "list_orders", "get_order", "get_order_request", "submit_orders", "cancel_orders", "cancel_all_orders"] as const;
 export const hyperliquidToolNames = [...accountToolNames, "list_instruments", "get_market_snapshot"] as const;
 export const researchToolNames = ["codemode", "research_candles", "research_journal", "artifact_create", "artifact_list", "artifact_read", "artifact_retention", "artifact_delete"] as const;
-export const taToolNames = ["ta_sma", "ta_ema", "ta_rsi", "ta_macd", "ta_bollinger", "ta_atr", "ta_adx"] as const;
-export const workerToolNames = [...hyperliquidToolNames, ...researchToolNames, ...taToolNames, ...memoryToolNames, "list_subagents", "delegate_subagent", "list_subagent_runs", "get_subagent_run"] as const;
+export const indicatorReadToolNames = ["indicator_list", "indicator_get", "indicator_run"] as const;
+export const indicatorDevelopToolNames = ["indicator_preview", "indicator_save"] as const;
+export const indicatorToolNames = [...indicatorReadToolNames, ...indicatorDevelopToolNames] as const;
+export const workerToolNames = [...hyperliquidToolNames, ...researchToolNames, ...indicatorToolNames, ...memoryToolNames, "list_subagents", "delegate_subagent", "list_subagent_runs", "get_subagent_run"] as const;
 
 /** Upgrade saved selections without enabling any previously unselected capability. */
 export function normalizeDelegationTools(tools: string[]): string[] {
-  return [...new Set(tools.map((tool) => tool === "list_trader_targets" ? "list_subagents" : tool === "request_trader_evaluation" ? "delegate_subagent" : tool))];
+  return [...new Set(tools.flatMap((tool) => /^ta_(sma|ema|rsi|macd|bollinger|atr|adx)$/.test(tool) ? [...indicatorReadToolNames] : [tool === "list_trader_targets" ? "list_subagents" : tool === "request_trader_evaluation" ? "delegate_subagent" : tool]))];
 }
 // Existing saved selections are preserved apart from the one-time market snapshot upgrade.
 // New roots get explicit memory reads
@@ -49,7 +51,7 @@ export function subagentInput(data: unknown, main = false): SubagentInput {
   const schedule = bounded(get("schedule"), 8, "schedule");
   if (schedule && !Object.hasOwn(candleIntervals, schedule)) throw new AgentError("Select a supported candle interval.");
   const tools = get("tools");
-  const allowed: readonly string[] = main ? [...mainToolNames, ...researchToolNames, ...taToolNames, ...memoryToolNames] : workerToolNames;
+  const allowed: readonly string[] = main ? [...mainToolNames, ...researchToolNames, ...indicatorToolNames, ...memoryToolNames] : workerToolNames;
   if (!Array.isArray(tools) || tools.length > new Set(allowed).size || tools.some((tool) => typeof tool !== "string" || !allowed.includes(tool)) || new Set(tools).size !== tools.length) throw new AgentError("Select supported tools.");
   const completion = get("completion");
   if (completion !== "save" && completion !== "notify" && completion !== "wake") throw new AgentError("Invalid completion policy.");

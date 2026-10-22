@@ -6,6 +6,15 @@ import { bodyHash, canonical } from "../canonical.js";
 import type { SharedDatabase } from "../db/shared-database.js";
 import { chartCapture, chartEdit, chartSettings, type ChartAttachment, type ChartContext, type ChartDocument, type ChartEdit, type ChartLayout } from "./contracts.js";
 
+import { chartIndicatorInstances } from "../indicators/chart-contracts.js";
+import { parseIndicatorId } from "../indicators/validation.js";
+function normalizeDocument(document: ChartDocument): ChartDocument { return { ...document, indicators: chartIndicatorInstances(document.indicators) }; }
+async function validateIndicators(db: SqliteExecutor, agentId: string, document: ChartDocument) {
+  for (const instance of document.indicators) {
+    const id = parseIndicatorId(instance.indicatorId);
+    if (id.kind === "custom" && !await db.get("SELECT id FROM hv_indicators WHERE id=? AND agent_id=?", id.uuid, agentId)) throw new AgentError("Indicator not found in this Agent", 404);
+  }
+}
 interface HistoryItem { document: ChartDocument; label: string }
 interface History { past: HistoryItem[]; future: HistoryItem[]; label: string }
 interface LayoutRow { id: string; document: string; revision: number; history: string; updated_at: number }
@@ -15,7 +24,7 @@ interface SnapshotRow { id: string; context: string; image: string | null; reque
 function project(row: LayoutRow | LayoutSummaryRow): ChartLayout {
   const summary = "history" in row ? (() => { const h = JSON.parse(row.history) as History; return { canUndo: h.past.length > 0, canRedo: h.future.length > 0, lastChange: h.label }; })()
     : { canUndo: row.undo_count > 0, canRedo: row.redo_count > 0, lastChange: row.label };
-  return { id: row.id, document: JSON.parse(row.document) as ChartDocument, revision: row.revision, updatedAt: row.updated_at, ...summary };
+  return { id: row.id, document: normalizeDocument(JSON.parse(row.document) as ChartDocument), revision: row.revision, updatedAt: row.updated_at, ...summary };
 }
 function attachment(id: string, context: ChartContext): ChartAttachment {
   return { snapshotId: id, layoutId: context.layoutId, name: context.document.name, coin: context.document.coin, interval: context.document.interval, capturedAt: context.capturedAt, image: context.screenshotIncluded, ...(context.selectedDrawingId ? { selectedDrawingId: context.selectedDrawingId } : {}) };
@@ -73,9 +82,10 @@ export class ChartService {
       }
       if ((await db.get<{ total: number }>("SELECT count(*) AS total FROM hv_chart_layouts WHERE agent_id=?", agentId))!.total >= 50) throw new AgentError("An Agent can have up to 50 chart layouts");
       const source = sourceId ? project(await this.row(db, agentId, sourceId)).document : undefined;
-      const document: ChartDocument = { name: "Untitled chart", coin: "BTC", interval: "1h", drawings: [], notes: "", hideDrawings: false, magnet: true, ...source, ...parsed };
+      const document: ChartDocument = { name: "Untitled chart", coin: "BTC", interval: "1h", drawings: [], indicators: [], notes: "", hideDrawings: false, magnet: true, ...source, ...parsed };
       // Copies get fresh object identities; old conversational references still identify the original.
-      if (source) document.drawings = source.drawings.map((d) => ({ ...d, id: randomUUID() }));
+      if (source) { document.drawings = source.drawings.map((d) => ({ ...d, id: randomUUID() })); document.indicators = document.indicators.map((i) => ({ ...i, id: randomUUID() })); }
+      await validateIndicators(db, agentId, document);
       await db.run("INSERT INTO hv_chart_layouts(id,agent_id,document,revision,history,updated_at) VALUES (?,?,?,0,?,?)", id, agentId, JSON.stringify(document), JSON.stringify({ past: [], future: [], label: "Created layout" }), Date.now());
       await db.run("INSERT INTO hv_chart_operations(agent_id,key,hash,result) VALUES (?,?,?,?)", agentId, `create:${id}`, hash, id);
       return { layout: project(await this.row(db, agentId, id)), changed: true };
@@ -117,8 +127,9 @@ export class ChartService {
       const row = await this.row(db, agentId, id);
       if (saved) return { layout: project(row), changed: false };
       if (row.revision !== expectedRevision) throw new AgentError("Chart changed elsewhere. Reload the layout and reconcile your edit.", 409);
-      const document = JSON.parse(row.document) as ChartDocument, history = JSON.parse(row.history) as History;
-      const next = apply(document, history);
+      const document = normalizeDocument(JSON.parse(row.document) as ChartDocument), history = JSON.parse(row.history) as History;
+      const next = normalizeDocument(apply(document, history));
+      await validateIndicators(db, agentId, next);
       if (JSON.stringify(next).length > 250_000) throw new AgentError("Chart layout is too large");
       history.past = history.past.slice(-30); history.future = history.future.slice(-30);
       while (JSON.stringify(history).length > 2_000_000 && history.past.length > 1) history.past.shift();
@@ -159,8 +170,9 @@ export class ChartService {
     const row = await this.db.get<SnapshotRow>("SELECT * FROM hv_chart_snapshots WHERE agent_id=? AND id=?", agentId, requestId(id));
     if (!row) throw new AgentError("Chart snapshot not found", 404);
     const context = JSON.parse(row.context) as ChartContext;
+    context.document = normalizeDocument(context.document); context.indicators ??= [];
     return { snapshotId: id, ...context, candles: context.candles.slice(offset, offset + limit), totalCandles: context.candles.length, nextOffset: offset + limit < context.candles.length ? offset + limit : null,
-      warning: "Frozen browser display data, not verified execution prices. Candle times and range are UTC seconds; capturedAt is milliseconds. formingCandleTime identifies a forming candle using the browser capture clock, or null when none is identified. Use research_candles/TA tools for verified closed-candle research. Screenshot is attached to the original user input only." };
+      warning: "Frozen browser display data, not verified execution prices. Candle times and range are UTC seconds; capturedAt is milliseconds. formingCandleTime identifies a forming candle using the browser capture clock, or null when none is identified. Indicators are frozen partial display evidence, with closed-only inputs even if chart candles are forming. The displayed version may be older than current. A result hash identifies evidence, not permanently retrievable full history. Use indicator_run for a fresh verified calculation, never silently replace frozen evidence. Screenshot is attached to the original user input only." };
   }
 }
 function applyEdit(document: ChartDocument, edit: ChartEdit, actor: "user" | "agent"): ChartDocument {

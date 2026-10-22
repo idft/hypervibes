@@ -1,0 +1,22 @@
+//@version=6
+indicator("ADX", overlay=false)
+period = input.int(14, "Period", minval=2, maxval=500)
+smoothing = input.string("wilder", "Smoothing", options=["wilder", "sma", "ema", "wma"])
+f_smooth(x, length, kind) =>
+    wilder = ta.rma(x, length)
+    simple = ta.sma(x, length)
+    exponential = ta.ema(x, length)
+    weighted = ta.wma(x, length)
+    kind == "sma" ? simple : kind == "ema" ? exponential : kind == "wma" ? weighted : wilder
+upMove = ta.change(high)
+downMove = -ta.change(low)
+plusDM = na(upMove) ? na : upMove > downMove and upMove > 0 ? upMove : 0
+minusDM = na(downMove) ? na : downMove > upMove and downMove > 0 ? downMove : 0
+tr = f_smooth(ta.tr(true), period, smoothing)
+plus = f_smooth(plusDM, period, smoothing)
+minus = f_smooth(minusDM, period, smoothing)
+plusDI = tr == 0 ? 0 : 100 * plus / tr
+minusDI = tr == 0 ? 0 : 100 * minus / tr
+diSum = plusDI + minusDI
+dx = diSum == 0 ? 0 : 100 * math.abs(plusDI - minusDI) / diSum
+plot(f_smooth(dx, period, smoothing), "ADX", color=color.purple)

@@ -1,0 +1,11 @@
+//@version=6
+indicator("ATR", overlay=false)
+period = input.int(14, "Period", minval=2, maxval=500)
+smoothing = input.string("wilder", "Smoothing", options=["wilder", "sma", "ema", "wma"])
+f_smooth(x, length, kind) =>
+    wilder = ta.rma(x, length)
+    simple = ta.sma(x, length)
+    exponential = ta.ema(x, length)
+    weighted = ta.wma(x, length)
+    kind == "sma" ? simple : kind == "ema" ? exponential : kind == "wma" ? weighted : wilder
+plot(f_smooth(ta.tr(true), period, smoothing), "ATR", color=color.orange)

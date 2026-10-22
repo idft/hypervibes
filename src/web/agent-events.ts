@@ -23,7 +23,7 @@ export class AgentEventStreams {
   private readonly connections = new Set<() => void>();
   private readonly tasks = new Set<Promise<void>>();
   private readonly users = new Map<string, number>();
-  constructor(private readonly runtime: AppRuntime, private readonly kind: "chat" | "dashboard" | "chart" | "chart-layouts" | "runs" | "run" | "subagents" | "provider-login" = "chat") {}
+  constructor(private readonly runtime: AppRuntime, private readonly kind: "chat" | "dashboard" | "chart" | "chart-layouts" | "indicators" | "runs" | "run" | "subagents" | "provider-login" = "chat") {}
 
   async open(request: Request, id: string, subagentId?: string, runId?: string): Promise<Response> {
     try {
@@ -118,11 +118,11 @@ export class AgentEventStreams {
       } catch { finish("unavailable", "Unable to verify this session. Reconnecting…"); }
       finally { checking = false; }
     };
-    const publish = (snapshot: AgentChat | AgentDashboard | ChartSnapshot | RunHistory | RunDetail | DashboardSubagent[] | LoginView | ChartLayout[]) => {
+    const publish = (snapshot: AgentChat | AgentDashboard | ChartSnapshot | RunHistory | RunDetail | DashboardSubagent[] | LoginView | ChartLayout[] | { revision: number }) => {
       if (closed) return;
       if (Date.now() >= expiry) { finish("unauthorized", "Session expired. Please sign in again."); return; }
       const value = frame(this.kind, snapshot);
-      if (value.byteLength > maxFrameBytes) { finish("stream-error", "Snapshot is too large to stream. Reload the page to view it."); return; }
+      if (value.byteLength > (this.kind === "indicators" ? 4096 : maxFrameBytes)) { finish("stream-error", "Snapshot is too large to stream. Reload the page to view it."); return; }
       // Keep one newest pending snapshot, not an unbounded queue of token events.
       pending = value;
       flush();
@@ -151,6 +151,7 @@ export class AgentEventStreams {
         ? this.runtime.providers.watchLogin(userId, id, abort.signal, publish)
         : this.kind === "chat"
         ? this.runtime.agents.watchChat(userId, id, abort.signal, publish)
+        : this.kind === "indicators" ? this.runtime.agents.indicators.watch(id, abort.signal, publish)
         : this.kind === "chart-layouts" ? this.runtime.agents.watchChartLayouts(userId, id, abort.signal, publish)
         : this.kind === "subagents" ? this.runtime.agents.subagents.watchDashboard(userId, id, abort.signal, publish)
         : run ? this.runtime.agents.subagents.watchRun(userId, id, run.subagentId, run.runId, abort.signal, publish)

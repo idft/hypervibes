@@ -15,6 +15,10 @@ import type { ApplicationDatabase, SharedDatabase } from "../db/shared-database.
 import type { FastifyBaseLogger } from "fastify";
 import { toolActivity, type ToolActivity } from "../research/tool-activity.js";
 import { ResearchService } from "../research/research-service.js";
+import { IndicatorService } from "../indicators/indicator-service.js";
+import { IndicatorRuntime } from "../indicators/runtime.js";
+import { createIndicatorExtension } from "../indicators/durable-extension.js";
+import { createResearchResponder } from "../research/tool-response.js";
 
 import { AgentError, agentId, agentName, chatMessage, harnessPrefix, requestId } from "./agent-input.js";
 import { SubagentService } from "./subagent-service.js";
@@ -144,6 +148,7 @@ export class AgentService {
   private resuming: Promise<void> = Promise.resolve();
   readonly subagents: SubagentService;
   readonly research: ResearchService;
+  readonly indicators: IndicatorService;
   readonly execution: ExecutionContextService;
   readonly risk: RiskSettingsService;
   readonly charts: ChartService;
@@ -153,6 +158,7 @@ export class AgentService {
     this.orders.installAdmission(this.execution);
     this.risk = new RiskSettingsService(database);
     this.research = new ResearchService(database, hyperliquid, this.risk, (error) => options.logger?.error(error, "Artifact maintenance failed"));
+    this.indicators = new IndicatorService(database, hyperliquid.charts, new IndicatorRuntime({}, (message) => options.logger?.warn(message)), (error) => options.logger?.error(error, "Indicator catalog listener failed"));
     this.subagents = new SubagentService(db, database, providers, {
       owned: (userId, id) => this.owned(userId, id), models: (userId) => this.models(userId), changed: (id) => this.notify(id), signal: (id) => this.signal(id),
     }, this.execution, Boolean(options.models), options.logger?.child({ component: "scheduler" }));
@@ -274,7 +280,7 @@ export class AgentService {
       const registry = createRegistry();
       const hyperliquid = createHyperliquidExtension(this.hyperliquid, agent.userId, agent.id, this.orders);
       registry.install(hyperliquid);
-      const capabilities = [createMemoryExtension(agent.id, this.execution, this.database), ...this.research.extensions(agent.id), createChartExtension(agent.id, this.charts, this.execution)];
+      const capabilities = [createMemoryExtension(agent.id, this.execution, this.database), ...this.research.extensions(agent.id), createIndicatorExtension(agent.id, this.indicators, this.execution, createResearchResponder(this.research.artifacts, agent.id, true)), createChartExtension(agent.id, this.charts, this.execution)];
       for (const extension of capabilities) registry.install(extension);
       const execution = this.subagents.extension(agent.id, hyperliquid, capabilities);
       registry.install(execution.extension);
@@ -345,6 +351,7 @@ export class AgentService {
   }
   async recover() {
     await this.research.initialize();
+    await this.indicators.initialize();
     const agents = await this.db.select().from(hvAgents).all();
     for (const agent of agents) {
       try {
@@ -376,7 +383,7 @@ export class AgentService {
     try {
       // Stop admission first, then close the harness to abort/join its tools.
       // Do not hold the shared SQL queue while waiting for runtime work.
-      const services = Promise.allSettled([this.subagents.stopAgent(agent.id), this.orders.stopAgent(agent.id)]);
+      const services = Promise.allSettled([this.subagents.stopAgent(agent.id), this.orders.stopAgent(agent.id), this.indicators.deleteAgent(agent.id)]);
       await Promise.allSettled([this.opening.get(agent.id)]);
       const harness = this.harnesses.get(agent.id);
       const settled = [...await Promise.allSettled([harness?.close(context)]), ...await services];
@@ -715,7 +722,11 @@ export class AgentService {
       this.harnesses.clear();
       const errors = results.filter((result) => result.status === "rejected").map((result) => result.reason as unknown);
       if (errors.length) throw new AggregateError(errors, "Unable to close Agent execution");
-    })().finally(() => this.research.close());
+    })().finally(async () => {
+      const cleanup = await Promise.allSettled([this.research.close(), this.indicators.close()]);
+      const errors = cleanup.filter((result) => result.status === "rejected").map((result) => result.reason as unknown);
+      if (errors.length) throw new AggregateError(errors, "Unable to close research/indicator services");
+    });
   }
   /**
    * Waits for the agent jobs already executing when shutdown began, so closing never interrupts them. A forced

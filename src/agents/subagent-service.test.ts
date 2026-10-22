@@ -214,35 +214,33 @@ describe("subagent definitions, execution and scheduling", () => {
     expect(transcript.tools).toContainEqual(expect.objectContaining({ name: "↳ artifact_read", status: "ok" }));
   });
 
-  it("selects the ta extension independently of research and Code Mode", async () => {
+  it("selects indicators independently of research and Code Mode", async () => {
     const opened = vi.spyOn(Harness, "open");
     const agent = await createAgent();
     const harness = await opened.mock.results[0]!.value as Harness;
     const main = await harness.root(context);
-    expect((await main.agent(context)).extensions.map((extension) => extension.name)).not.toContain("ta");
+    expect((await main.agent(context)).extensions.map((extension) => extension.name)).not.toContain("indicators");
     expect((await main.agent(context)).tools.some((tool) => tool.name === "codemode")).toBe(false);
     const candles = Array.from({ length: 80 }, (_, i) => ({ time: i * 3600, open: i + 10, high: i + 12, low: i + 9, close: i + 11, volume: 20 }));
     vi.spyOn(runtime.hyperliquid.charts, "researchHistory").mockResolvedValue({ coin: "BTC", interval: "1h", start: 0, end: 80 * 3600000, pageEnd: 80 * 3600000, candles, nextStart: null, coverage: { complete: true, returned: 80, expected: 80, closedOnly: true, sourceLimit: "fixture" } });
-    const worker = await createWorker(agent.id, { tools: ["ta_macd"] });
-    faux.setResponses([fauxAssistantMessage(fauxToolCall("ta_macd", { coin: "BTC", interval: "1h", start: 0, end: 288000000, fastPeriod: 8, slowPeriod: 21, signalPeriod: 5 }), { stopReason: "toolUse" }), fauxAssistantMessage("MACD complete")]);
+    const worker = await createWorker(agent.id, { tools: ["indicator_run"] });
+    faux.setResponses([fauxAssistantMessage(fauxToolCall("indicator_run", { indicatorId: "builtin:macd", coin: "BTC", interval: "1h", start: 0, end: 288000000, inputs: { fastPeriod: 8, slowPeriod: 21, signalPeriod: 5 } }), { stopReason: "toolUse" }), fauxAssistantMessage("MACD complete")]);
     await runtime.agents.subagents.run("owner", agent.id, worker.id, "Calculate MACD 8/21/5", randomUUID());
     const run = await completed(agent.id, worker.id);
     const child = await harness.conversation(run.conversationId! as ConversationId, context);
     const resolved = await child!.agent(context);
-    expect(resolved.extensions.map((extension) => extension.name)).toEqual(["hyperliquid", "ta"]);
-    expect(resolved.tools.map((tool) => tool.name)).toEqual(["ta_macd"]);
+    expect(resolved.extensions.map((extension) => extension.name)).toEqual(["hyperliquid", "indicators"]);
+    expect(resolved.tools.map((tool) => tool.name)).toEqual(["indicator_run"]);
     const transcript = await runtime.agents.subagents.runDetail("owner", agent.id, worker.id, run.id);
-    expect(transcript.tools).toContainEqual(expect.objectContaining({ name: "ta_macd", status: "done" }));
+    expect(transcript.tools).toContainEqual(expect.objectContaining({ name: "indicator_run", status: "done" }));
     const system = JSON.stringify(transcript.entries.filter((entry) => entry.kind === "pi.system"));
-    expect(system).toContain("Code Mode is not selected");
-    expect(system).toContain("at least 5 times the longest configured indicator period");
-    expect(system).toContain("5000-input cap");
-    expect(system).not.toContain("function scalar(result");
+    expect(system).toContain("Only closed contiguous candles");
+    expect(system).toContain("Defaults live in input.* source");
     const definition = (await runtime.agents.subagents.list("owner", agent.id)).find((row) => row.kind === "orchestrator")!;
-    await runtime.agents.subagents.updateTools("owner", agent.id, definition.id, ["ta_rsi"]);
+    await runtime.agents.subagents.updateTools("owner", agent.id, definition.id, ["indicator_get"]);
     const rootAgent = await main.agent(context);
-    expect(rootAgent.extensions.map((extension) => extension.name)).toEqual(["hyperliquid", "subagents", "ta", "orchestrator-insights"]);
-    expect(rootAgent.tools.map((tool) => tool.name)).toEqual(["ta_rsi"]);
+    expect(rootAgent.extensions.map((extension) => extension.name)).toEqual(["hyperliquid", "subagents", "indicators", "orchestrator-insights"]);
+    expect(rootAgent.tools.map((tool) => tool.name)).toEqual(["indicator_get"]);
   });
 
   it("rejects cross-user and cross-Agent access, unknown tools, recursive delegation and malformed schedules", async () => {

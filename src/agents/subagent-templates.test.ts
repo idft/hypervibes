@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accountToolNames, mainToolNames, researchToolNames, subagentInput, taToolNames, workerToolNames } from "./subagent-input.js";
+import { accountToolNames, mainToolNames, researchToolNames, subagentInput, indicatorReadToolNames, workerToolNames } from "./subagent-input.js";
 import analysisManifest from "./templates/basic-analysis.json" with { type: "json" };
 import tradingManifest from "./templates/basic-trading.json" with { type: "json" };
 import { parseTemplateCatalog, parseTemplateManifest } from "./template-manifest.js";
@@ -7,7 +7,8 @@ import { subagentTemplates, templateDraft } from "./subagent-templates.js";
 import { createSubagentExtension } from "./subagent-extension.js";
 import { createMemoryExtension } from "../memory/durable-extension.js";
 import { createHyperliquidExtension } from "../hyperliquid/durable-extension.js";
-import { createTaExtension } from "../research/ta-extension.js";
+import { createIndicatorExtension } from "../indicators/durable-extension.js";
+import type { IndicatorService } from "../indicators/indicator-service.js";
 import type { OrderService } from "../hyperliquid/orders/order-service.js";
 import type { HyperliquidService } from "../hyperliquid/service.js";
 import type { ExecutionContextService } from "./execution-context.js";
@@ -71,7 +72,7 @@ describe("bundled editable worker manifests", () => {
   });
   it("gives the analyst Code Mode, all TA and artifact tools without trading permissions", () => {
     const draft = templateDraft("basic-analysis", { provider: "operator-selected", modelId: "operator-model", thinkingLevel: "" });
-    expect(draft.tools).toEqual(expect.arrayContaining(["list_instruments", "codemode", "research_candles", ...taToolNames, ...researchToolNames.filter((name) => name.startsWith("artifact_")), "publish_research"]));
+    expect(draft.tools).toEqual(expect.arrayContaining(["list_instruments", "codemode", "research_candles", ...indicatorReadToolNames, ...researchToolNames.filter((name) => name.startsWith("artifact_")), "publish_research"]));
     expect(draft.tools.some((name) => (accountToolNames as readonly string[]).includes(name))).toBe(false);
     expect(draft.instructions).toContain("evidenceAsOf");
     expect(draft.instructions).toContain("closed candles");
@@ -143,7 +144,7 @@ describe("bundled editable worker manifests", () => {
     expect(mainToolNames.filter((tool) => insightTools.includes(tool))).toEqual([]);
   });
   it("has only real permitted tools, no recursive delegation, no credentials or enabled/funded defaults", () => {
-    const tools = [...createMemoryExtension("agent", {} as ExecutionContextService, {} as SharedDatabase).tools!, ...createHyperliquidExtension({} as HyperliquidService, "owner", "agent", {} as OrderService).tools!, ...createTaExtension({} as HyperliquidService["charts"], (() => { throw new Error("No execution in manifest test"); }) as ResearchResponder).tools!].map((tool) => tool.name);
+    const tools = [...createMemoryExtension("agent", {} as ExecutionContextService, {} as SharedDatabase).tools!, ...createHyperliquidExtension({} as HyperliquidService, "owner", "agent", {} as OrderService).tools!, ...createIndicatorExtension("agent", {} as IndicatorService, {} as ExecutionContextService, (() => { throw new Error("No execution in manifest test"); }) as ResearchResponder).tools!].map((tool) => tool.name);
     // Research tools are defined by the existing research extension, validated by
     // its integration tests; no remote catalog or import-time host is needed.
     tools.push("list_instruments", ...researchToolNames, ...createSubagentExtension({} as Parameters<typeof createSubagentExtension>[0], "agent", { name: "test-hyperliquid" }, [], {} as ExecutionContextService).extension.tools!.map((tool) => tool.name));

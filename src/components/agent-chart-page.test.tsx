@@ -4,11 +4,12 @@ import { type QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createTestQueryClient } from "../test/query.js";
 import { chartLayoutsQueryOptions } from "../web/chart-queries.js";
 import { createRoot, type Root } from "react-dom/client";
+import { renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentChat } from "../agents/agent-service.js";
 import { chartEdit, newDrawing, type ChartLayout } from "../charts/contracts.js";
 
-const mocks = vi.hoisted(() => ({ create: vi.fn(), change: vi.fn(), remove: vi.fn(), list: vi.fn(), capture: vi.fn(), chartProps: {} as Record<string, unknown>, chatProps: {} as Record<string, unknown> }));
+const mocks = vi.hoisted(() => ({ create: vi.fn(), change: vi.fn(), remove: vi.fn(), list: vi.fn(), capture: vi.fn(), chatRender: vi.fn(), chartProps: {} as Record<string, unknown>, chatProps: {} as Record<string, unknown> }));
 vi.mock("../web/charts.js", () => ({ createChartLayout: mocks.create, changeChartLayout: mocks.change, deleteChartLayout: mocks.remove, getChartLayouts: mocks.list }));
 vi.mock("./market-chart.js", async () => {
   const { useImperativeHandle } = await import("react");
@@ -19,7 +20,7 @@ vi.mock("./market-chart.js", async () => {
     return <>{props.statusHost && createPortal(<span role="status" aria-label="Chart connection">Connected</span>, props.statusHost)}<div aria-label="Market fixture"><button onClick={() => { const d = newDrawing("horizontal", "BTC", [{ time: 3600, price: 100 }]); props.onSave(d); props.onSelect(d.id); }}>Place fixture level</button></div></>;
   } };
 });
-vi.mock("./agent-chat-page.js", () => ({ AgentChatPage: (props: Record<string, unknown>) => { mocks.chatProps = props; return <div aria-label="Root chat fixture">Main conversation</div>; } }));
+vi.mock("./agent-chat-page.js", () => ({ AgentChatPage: (props: Record<string, unknown>) => { mocks.chatProps = props; mocks.chatRender(props); return <div aria-label="Root chat fixture">Main conversation</div>; } }));
 import { AgentChartPage } from "./agent-chart-page.js";
 const instruments = ["BTC", "ETH"];
 const chat = { agent: { id: "fixture" } } as AgentChat;
@@ -42,7 +43,7 @@ describe("chart workspace", () => {
     HTMLElement.prototype.setPointerCapture = vi.fn((id: number) => { captured.add(id); });
     HTMLElement.prototype.hasPointerCapture = vi.fn((id: number) => captured.has(id));
     HTMLElement.prototype.releasePointerCapture = vi.fn((id: number) => { captured.delete(id); });
-    layout = { id: crypto.randomUUID(), revision: 0, document: { name: "My chart", coin: "BTC", interval: "1h", drawings: [], notes: "", hideDrawings: false, magnet: true }, updatedAt: 0, canUndo: false, canRedo: false, lastChange: "Created" }; initial = [layout];
+    layout = { id: crypto.randomUUID(), revision: 0, document: { name: "My chart", coin: "BTC", interval: "1h", drawings: [], indicators: [], notes: "", hideDrawings: false, magnet: true }, updatedAt: 0, canUndo: false, canRedo: false, lastChange: "Created" }; initial = [layout];
     mocks.list.mockImplementation(async () => [layout]);
     mocks.change.mockImplementation(async ({ data }: { data: { action: string; edit: unknown } }) => {
       const edit = data.action === "edit" ? chartEdit(data.edit) : { label: data.action, upsert: [], remove: [] };
@@ -76,10 +77,32 @@ describe("chart workspace", () => {
     }
     await act(async () => { const e = container.querySelector<HTMLSelectElement>(`[aria-label="${label}"]`)!; e.value = value; e.dispatchEvent(new Event("change", { bubbles: true })); });
   }
+  it("renders a neutral server placeholder instead of an open chat before restoring preferences", () => {
+    client.setQueryData(chartLayoutsQueryOptions("fixture").queryKey, initial);
+    const html = renderToString(<QueryClientProvider client={client}><AgentChartPage id="fixture" instruments={instruments} initialChat={chat} choices={[]} /></QueryClientProvider>);
+    expect(html).toContain("Loading chart workspace");
+    expect(html).not.toContain("Chart chat panel");
+    expect(mocks.chatRender).not.toHaveBeenCalled();
+  });
+  it("never renders chat as visible when restoring a saved closed panel", async () => {
+    localStorage.setItem("hypervibes:chart-panel:fixture", JSON.stringify({ open: false, width: 420 }));
+    await render();
+    expect(mocks.chatRender).toHaveBeenCalled();
+    expect(mocks.chatRender.mock.calls.every(([props]) => props.visible === false)).toBe(true);
+    expect(container.querySelector<HTMLElement>("[aria-label='Chart chat panel']")!.hidden).toBe(true);
+    expect(container.querySelector("[aria-label='Chart canvas']")).not.toBeNull();
+  });
+  it("restores chat width before its first visible render", async () => {
+    localStorage.setItem("hypervibes:chart-panel:fixture", JSON.stringify({ open: true, width: 420 }));
+    await render();
+    const panel = container.querySelector<HTMLElement>("[aria-label='Chart chat panel']")!;
+    expect(panel.hidden).toBe(false);
+    expect(panel.style.width).toBe("432px");
+  });
   it("uses one non-wrapping toolbar in the requested order, with accessible icon-only toggles", async () => {
     await render();
     const toolbar = container.querySelector("[role=toolbar][aria-label='Chart controls']")!;
-    expect([...toolbar.children].map((item) => item.getAttribute("aria-label"))).toEqual(["Layout", "Layout settings", "Instrument", "Timeframe", "Account overlays", "Magnet", "Hide drawings", "Show annotation tools", "Lock objects", "Hide chat", "Chart status"]);
+    expect([...toolbar.children].map((item) => item.getAttribute("aria-label"))).toEqual(["Layout", "Layout settings", "Instrument", "Timeframe", "Indicators", "Account overlays", "Magnet", "Hide drawings", "Show annotation tools", "Lock objects", "Hide chat", "Chart status"]);
     expect(toolbar.classList.contains("flex-nowrap")).toBe(true);
     expect(toolbar.querySelector("label")).toBeNull();
     const status = toolbar.querySelector("[aria-label='Chart status']")!;

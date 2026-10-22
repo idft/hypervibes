@@ -10,8 +10,10 @@ export interface ChartDrawing {
   text: string; color: string; width: number; dashed: boolean; fillOpacity: number;
   locked: boolean; hidden: boolean; intervals: ChartInterval[]; group: string; author: "user" | "agent";
 }
+import { chartIndicatorEvidence, chartIndicatorInstances } from "../indicators/chart-contracts.js";
+import type { ChartIndicatorEvidence, ChartIndicatorInstance } from "../indicators/contracts.js";
 export interface ChartDocument extends ChartSelection {
-  name: string; drawings: ChartDrawing[]; notes: string; hideDrawings: boolean; magnet: boolean;
+  name: string; drawings: ChartDrawing[]; notes: string; hideDrawings: boolean; magnet: boolean; indicators: ChartIndicatorInstance[];
 }
 export interface ChartLayout { id: string; revision: number; document: ChartDocument; updatedAt: number; canUndo: boolean; canRedo: boolean; lastChange: string }
 export interface ChartEdit {
@@ -20,7 +22,7 @@ export interface ChartEdit {
 }
 export interface ChartCapture {
   layoutId: string; revision: number; capturedAt: number; status: "connecting" | "live" | "reconnecting";
-  range: { from: number; to: number }; candles: ChartCandle[]; selectedDrawingId?: string; image?: string;
+  range: { from: number; to: number }; candles: ChartCandle[]; selectedDrawingId?: string; image?: string; indicators?: ChartIndicatorEvidence[]; selectedGeneratedObjectId?: string;
 }
 export interface ChartAttachment { snapshotId: string; layoutId: string; name: string; coin: string; interval: ChartInterval; capturedAt: number; image: boolean; selectedDrawingId?: string }
 export interface ChartContext extends Omit<ChartCapture, "image"> { document: ChartDocument; screenshotIncluded: boolean; formingCandleTime: number | null }
@@ -79,6 +81,7 @@ export function chartSettings(value: unknown): Partial<Omit<ChartDocument, "draw
     else if (key === "notes") result.notes = text(s.notes, 8000);
     else if (key === "hideDrawings") result.hideDrawings = bool(s.hideDrawings);
     else if (key === "magnet") result.magnet = bool(s.magnet);
+    else if (key === "indicators") result.indicators = chartIndicatorInstances(s.indicators);
     else return fail("setting");
   }
   return result;
@@ -103,7 +106,8 @@ export function chartCapture(value: unknown): ChartCapture {
   });
   if (candles.some((candle, index) => index > 0 && candle.time <= candles[index - 1]!.time)) return fail("candle ordering");
   if (!["live", "connecting", "reconnecting"].includes(String(c.status))) return fail("connection status");
-  return { layoutId: requestId(text(c.layoutId, 36)), revision: revision(c.revision), capturedAt: number(c.capturedAt, 0, 32_503_680_000_000), status: c.status as ChartCapture["status"], range: { from, to }, candles,
+  return { layoutId: requestId(text(c.layoutId, 36)), revision: revision(c.revision), capturedAt: number(c.capturedAt, 0, 32_503_680_000_000), status: c.status as ChartCapture["status"], range: { from, to }, candles, indicators: chartIndicatorEvidence(c.indicators),
+    ...(c.selectedGeneratedObjectId === undefined ? {} : { selectedGeneratedObjectId: text(c.selectedGeneratedObjectId, 200) }),
     ...(c.selectedDrawingId === undefined ? {} : { selectedDrawingId: requestId(text(c.selectedDrawingId, 36)) }),
     ...(c.image === undefined ? {} : { image: text(c.image, 700_000, false) }) };
 }

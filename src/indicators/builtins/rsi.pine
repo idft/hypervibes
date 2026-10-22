@@ -1,0 +1,18 @@
+//@version=6
+indicator("RSI", overlay=false)
+period = input.int(14, "Period", minval=2, maxval=500)
+source = input.source(close, "Source")
+smoothing = input.string("wilder", "Smoothing", options=["wilder", "sma", "ema", "wma"])
+f_smooth(x, length, kind) =>
+    wilder = ta.rma(x, length)
+    simple = ta.sma(x, length)
+    exponential = ta.ema(x, length)
+    weighted = ta.wma(x, length)
+    kind == "sma" ? simple : kind == "ema" ? exponential : kind == "wma" ? weighted : wilder
+change = ta.change(source)
+up = f_smooth(math.max(change, 0), period, smoothing)
+down = f_smooth(math.max(-change, 0), period, smoothing)
+rsi = down == 0 ? 100 : up == 0 ? 0 : 100 - 100 / (1 + up / down)
+plot(rsi, "RSI", color=color.purple)
+hline(70, "Overbought")
+hline(30, "Oversold")

@@ -7,7 +7,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRow } from "../db/subagent-schema.js";
-import { hyperliquidToolNames, mainToolNames, taToolNames } from "../agents/subagent-input.js";
+import { hyperliquidToolNames, mainToolNames, indicatorReadToolNames } from "../agents/subagent-input.js";
 const mocks = vi.hoisted(() => ({ invalidate: vi.fn(), navigate: vi.fn(), success: vi.fn(), saveSubagent: vi.fn(), saveSubagentSection: vi.fn(), saveSubagentAssignments: vi.fn(), saveSubagentIdentity: vi.fn(), saveSubagentTools: vi.fn(), getSubagent: vi.fn(), runSubagent: vi.fn(), archiveSubagent: vi.fn(), unarchiveSubagent: vi.fn(), stopSubagentRun: vi.fn(), listSubagents: vi.fn() }));
 vi.mock("../web/subagents.js", () => mocks);
 vi.mock("sonner", () => ({ toast: { success: mocks.success } }));
@@ -382,15 +382,14 @@ describe("subagent pages", () => {
     const discovery = [...hyperliquid.querySelectorAll("label")].find((label) => label.textContent === "list_instruments")!;
     expect(discovery.querySelector("input")!.checked).toBe(false);
   });
-  it("selects the separate TA group without enabling Code Mode, account or delegation tools", async () => {
+  it("selects indicator reads without enabling development, Code Mode, account or delegation tools", async () => {
     await render(); await click("Edit tools");
-    expect(document.querySelector("dialog")!.textContent).toContain("Technical analysis · TA");
-    expect(document.querySelector("dialog")!.textContent).not.toContain("research_ta");
-    await click("All tools in Technical analysis · TA");
-    expect(document.querySelectorAll("dialog input[type=checkbox]:checked")).toHaveLength(7);
+    expect(document.querySelector("dialog")!.textContent).toContain("Indicators — Read & Calculate");
+    await click("All tools in Indicators — Read & Calculate");
+    expect(document.querySelectorAll("dialog input[type=checkbox]:checked")).toHaveLength(3);
     await click("Apply");
-    expect(mocks.saveSubagentTools.mock.calls[0]![0].data.tools).toEqual([...taToolNames]);
-    expect(container.textContent).toContain("Technical analysis · TA:");
+    expect(mocks.saveSubagentTools.mock.calls[0]![0].data.tools).toEqual([...indicatorReadToolNames]);
+    expect(container.textContent).toContain("Indicators — Read & Calculate:");
     expect(container.textContent).not.toContain("Hyperliquid: get_account");
   });
   it("selects and clears all tools per extension even while searching", async () => {

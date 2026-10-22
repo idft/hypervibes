@@ -17,7 +17,7 @@ class LayoutSource extends EventTarget {
   constructor(readonly url: string) { super(); LayoutSource.instances.push(this); }
   emit(event: string, data: unknown) { this.dispatchEvent(new MessageEvent(event, { data: JSON.stringify(data) })); }
 }
-const fixture = (id = "first", revision = 0): ChartLayout => ({ id, revision, document: { name: id, coin: "BTC", interval: "1h", drawings: [], notes: "", hideDrawings: false, magnet: true }, updatedAt: revision, canUndo: revision > 0, canRedo: false, lastChange: "Saved" });
+const fixture = (id = "first", revision = 0): ChartLayout => ({ id, revision, document: { name: id, coin: "BTC", interval: "1h", drawings: [], indicators: [], notes: "", hideDrawings: false, magnet: true }, updatedAt: revision, canUndo: revision > 0, canRedo: false, lastChange: "Saved" });
 
 describe("SSE chart layouts", () => {
   let root: Root | undefined, container: HTMLDivElement, state: ReturnType<typeof useChartLayouts>, initial: ChartLayout[];

@@ -18,7 +18,7 @@ describe("chart drawing interactions", () => {
   const save = vi.fn(), select = vi.fn(), edit = vi.fn(), drawn = vi.fn();
   beforeEach(() => {
     vi.resetAllMocks();
-    documentValue = { name: "Test", coin: "BTC", interval: "1h", drawings: [], notes: "", magnet: true, hideDrawings: false };
+    documentValue = { name: "Test", coin: "BTC", interval: "1h", drawings: [], indicators: [], notes: "", magnet: true, hideDrawings: false };
     container = document.createElement("div"); document.body.append(container); root = createRoot(container);
     const captures = new WeakMap<SVGElement, Set<number>>();
     SVGElement.prototype.setPointerCapture = vi.fn(function (this: SVGElement, id: number) { const ids = captures.get(this) ?? new Set<number>(); ids.add(id); captures.set(this, ids); });

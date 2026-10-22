@@ -74,7 +74,7 @@ describe("Better Auth SIWE on Node SQLite", () => {
     await runtime.close();
     runtime = await createRuntime(config());
     expect(await currentUser(runtime, headers(cookie))).toEqual(identity);
-    expect(await runtime.db.values((sql`SELECT * FROM hv_schema_migrations`))).toHaveLength(11);
+    expect(await runtime.db.values((sql`SELECT * FROM hv_schema_migrations`))).toHaveLength(12);
   });
 
   it("reuses the same user on subsequent logins", async () => {

@@ -1,0 +1,10 @@
+//@version=6
+indicator("Bollinger Bands", overlay=true)
+period = input.int(20, "Period", minval=2, maxval=500)
+deviations = input.float(2.0, "Deviations", minval=0.1, maxval=10, step=0.1)
+source = input.source(close, "Source")
+[basis, upper, lower] = ta.bb(source, period, deviations)
+pUpper = plot(upper, "Upper", color=color.blue)
+pLower = plot(lower, "Lower", color=color.blue)
+plot(basis, "Middle", color=color.orange)
+fill(pUpper, pLower, color=color.new(color.blue, 90), title="Band fill")

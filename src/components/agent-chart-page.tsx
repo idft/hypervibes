@@ -10,6 +10,7 @@ import { ChartDrawingEditor } from "./chart-drawing-editor.js";
 import { ChartLayoutSettings, type LayoutAction } from "./chart-layout-settings.js";
 import { ConfigDialog, configInput } from "./config-dialog.js";
 import { SingleInstrumentPicker } from "./instrument-picker.js";
+import { ChartIndicatorControls } from "./chart-indicator-controls.js";
 import { defaultChartOverlays, type ChartOverlayVisibility } from "../charts/trading-contracts.js";
 
 const control = "cursor-pointer rounded-lg border border-zinc-700 text-xs text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40";
@@ -61,6 +62,7 @@ export function AgentChartPage({ id, instruments, initialChat, choices }: { id: 
   }, []);
   const resize = useRef<{ x: number; width: number; pointerId: number } | null>(null);
   const preferences = `hypervibes:chart-panel:${id}`;
+  const [restoredPreferences, setRestoredPreferences] = useState<string | null>(null);
   useEffect(() => {
     try {
       const saved: unknown = JSON.parse(localStorage.getItem(preferences) ?? "null");
@@ -70,6 +72,7 @@ export function AgentChartPage({ id, instruments, initialChat, choices }: { id: 
         if ("width" in saved && typeof saved.width === "number" && Number.isFinite(saved.width)) setChatWidth(Math.max(minChatWidth, Math.min(maxChatWidth, saved.width)));
       }
     } catch { /* Optional preference. */ }
+    setRestoredPreferences(preferences);
   }, [preferences]);
   function panelPreference(open: boolean, width: number) {
     setChatOpen(open); setChatWidth(width);
@@ -98,6 +101,9 @@ export function AgentChartPage({ id, instruments, initialChat, choices }: { id: 
     if ((event.key === "Delete" || event.key === "Backspace") && selectedObject && !selectedObject.locked && !pending) { event.preventDefault(); void change("edit", { label: `Delete ${selectedObject.name}`, remove: [selectedObject.id] }); }
   }
   if (!instruments.length) return <p role="alert" className="text-amber-200">No perpetual instruments are available.</p>;
+  if (restoredPreferences !== preferences || (!layout && !ready)) return <section ref={workspace} aria-label="Trading chart" aria-busy="true" className="flex h-[calc(100dvh-6rem)] min-h-[480px] w-full items-center justify-center rounded-xl border border-zinc-800 bg-[#0d0d10]">
+    <p role="status" className="text-sm text-zinc-500">Loading chart workspace…</p>
+  </section>;
   return <section ref={workspace} aria-label="Trading chart" onKeyDown={onKey} className="flex h-[calc(100dvh-6rem)] min-h-[480px] w-full min-w-0 flex-col gap-2">
     <h2 className="sr-only">Chart workspace</h2>
     <div role="toolbar" aria-label="Chart controls" className="flex shrink-0 flex-nowrap items-center gap-1.5 overflow-x-auto pb-1">
@@ -116,6 +122,7 @@ export function AgentChartPage({ id, instruments, initialChat, choices }: { id: 
       <select aria-label="Timeframe" value={layout?.document.interval ?? ""} disabled={pending || !layout} onChange={(e) => { if (isChartInterval(e.target.value)) { setTool("select"); void change("edit", { label: "Change timeframe", settings: { interval: e.target.value } }); } }} className={`${button} h-8 w-20 shrink-0 bg-zinc-950`}>
         {!layout && <option value="">Timeframe</option>}{chartIntervals.map((interval) => <option key={interval}>{interval}</option>)}
       </select>
+      {layout && <ChartIndicatorControls agentId={id} instances={layout.document.indicators} disabled={pending} onChange={async (indicators) => Boolean(await change("edit", { label: "Configure indicators", settings: { indicators } }))} />}
       <button type="button" className={iconButton} aria-label="Account overlays" title="Account overlays · Trades, position and orders (read-only)" disabled={!layout} onClick={() => setOverlayDialog(true)}><ChartIcon name="account" /></button>
       <button type="button" className={iconButton} aria-label="Magnet" aria-pressed={layout?.document.magnet ?? false} disabled={pending || !layout} title={`${layout?.document.magnet ? "Magnet on" : "Magnet off"} · Snap to candle OHLC · Ctrl/Cmd temporarily inverts snapping`} onClick={() => { if (layout) void change("edit", { label: "Toggle magnet", settings: { magnet: !layout.document.magnet } }); }}><ChartIcon name="magnet" /></button>
       <button type="button" className={iconButton} aria-label={layout?.document.hideDrawings ? "Show drawings" : "Hide drawings"} aria-pressed={Boolean(layout && !layout.document.hideDrawings)} disabled={pending || !layout} title={layout?.document.hideDrawings ? "Show drawings" : "Hide drawings"} onClick={() => { if (layout) void change("edit", { label: "Toggle drawings", settings: { hideDrawings: !layout.document.hideDrawings } }); }}><ChartIcon name={layout?.document.hideDrawings ? "hidden" : "eye"} /></button>

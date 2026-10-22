@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { format } from "timeago.js";
-import { candleIntervals, hyperliquidToolNames, researchToolNames, taToolNames, type AssignmentSettings, type SubagentInput } from "../agents/subagent-input.js";
+import { candleIntervals, hyperliquidToolNames, researchToolNames, indicatorReadToolNames, indicatorDevelopToolNames, type AssignmentSettings, type SubagentInput } from "../agents/subagent-input.js";
 import { memoryToolNames } from "../memory/memory-contracts.js";
 import { chartToolNames } from "../charts/contracts.js";
 import { ConfigDialog, configButton, configInput } from "./config-dialog.js";
@@ -55,7 +55,8 @@ function IdentityDialog({ value, onCancel, onApply }: { value: Identity; onCance
 const toolGroups = [
   { name: "Hyperliquid", tools: hyperliquidToolNames },
   { name: "Research · Code Mode & Artifacts", tools: researchToolNames },
-  { name: "Technical analysis · TA", tools: taToolNames },
+  { name: "Indicators — Read & Calculate", tools: indicatorReadToolNames },
+  { name: "Indicators — Develop", tools: indicatorDevelopToolNames },
   { name: "Memories & Insights", tools: memoryToolNames },
   { name: "Chart workspace · Orchestrator only", tools: chartToolNames },
   { name: "HyperVibes · Subagents", tools: ["list_subagents", "delegate_subagent", "list_subagent_runs", "get_subagent_run"] },

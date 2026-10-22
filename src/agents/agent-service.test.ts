@@ -7,10 +7,11 @@ import { eq } from "drizzle-orm";
 import { HttpTransport } from "@nktkas/hyperliquid";
 import { loadAccountStatus } from "../hyperliquid/account-status.js";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync, utimesSync } from "node:fs";
+import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hvAgents } from "../db/agent-schema.js";
 import { hvUsers } from "../db/auth-schema.js";
@@ -378,10 +379,13 @@ describe("per-Agent durable execution", () => {
   it("recovers admitted work after a process kill and stale ownership lock", async () => {
     const agent = await create();
     await runtime.close();
-    const child = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
-      import { createRuntime } from './src/runtime.ts';
-      import { createModels } from '@earendil-works/pi-ai/models';
-      import { fauxProvider, fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux';
+    // A file entry (not `node --input-type -e`) matches production startup: worker
+    // threads inherit the parent's entry options and reject eval-entry flags.
+    const childEntry = join(directory, "recover-child.mts");
+    writeFileSync(childEntry, `
+      const { createRuntime } = await import(${JSON.stringify(pathToFileURL(join(process.cwd(), "src/runtime.ts")).href)});
+      const { createModels } = await import(${JSON.stringify(import.meta.resolve("@earendil-works/pi-ai/models"))});
+      const { fauxProvider, fauxAssistantMessage } = await import(${JSON.stringify(import.meta.resolve("@earendil-works/pi-ai/providers/faux"))});
       const faux = fauxProvider({ tokensPerSecond: 1 });
       faux.setResponses([fauxAssistantMessage('This response must not finish before the process is killed.')]);
       const models = createModels();
@@ -391,7 +395,8 @@ describe("per-Agent durable execution", () => {
       await runtime.agents.send('owner', '${agent.id}', 'Survive a crash', '${randomUUID()}');
       while (faux.state.callCount === 0) await new Promise(resolve => setTimeout(resolve, 5));
       process.kill(process.pid, 'SIGKILL');
-    `], { cwd: process.cwd(), encoding: "utf8", timeout: 15_000 });
+    `);
+    const child = spawnSync(process.execPath, ["--import", "tsx", childEntry], { cwd: process.cwd(), encoding: "utf8", timeout: 15_000 });
     expect(child.error).toBeUndefined();
     expect(child.signal, child.stderr).toBe("SIGKILL");
     // The process is confirmed dead. Advance only its orphaned heartbeat instead
