@@ -94,14 +94,38 @@ describe("bounded no-capability PineTS runtime", () => {
     await expect(task).rejects.toThrow();
     await expect.poll(async () => (await run(program('plot(close)'))).values.length).toBe(candles.length);
   });
-  it("enforces admission and permanently aborts a deleted Agent", async () => {
-    const bounded = new IndicatorRuntime({ workers: 1, workersPerAgent: 1 });
+  it("runs a seven-indicator Promise.all sweep for one Agent", async () => {
+    expect(runtime.limits.workers).toBe(8);
+    const requests = [
+      { name: "ema", inputs: { period: 20 } }, { name: "ema", inputs: { period: 50 } },
+      ...["atr", "rsi", "macd", "adx", "bollinger"].map((name) => ({ name, inputs: {} })),
+    ];
+    const results = await Promise.all(requests.map(({ name, inputs }) => run(catalog.get(`builtin:${name}`).source, inputs)));
+    expect(results).toHaveLength(7);
+    for (const result of results) expect(result.values).toHaveLength(candles.length);
+  }, 60_000);
+  it("drains concurrent single and batch calculations through one global worker", async () => {
+    const bounded = new IndicatorRuntime({ workers: 1 });
     await bounded.initialize();
     try {
-      const task = expect(run(program('plot(close)'), {}, candles, bounded)).rejects.toThrow();
-      await expect(run(program('plot(close)'), {}, candles, bounded)).rejects.toMatchObject({ status: 429 });
+      const source = program('plot(close)');
+      const results = await Promise.all([
+        run(source, {}, candles, bounded),
+        bounded.executeBatch("agent-a", [{ source, inputs: {}, candles, coin: "BTC", pineTimeframe: "60", intervalMs: 3600_000 }]),
+        run(source, {}, candles, bounded),
+      ]);
+      expect(results[0].values).toHaveLength(candles.length);
+      expect(results[1][0]!.values).toHaveLength(candles.length);
+      expect(results[2].values).toHaveLength(candles.length);
+    } finally { await bounded.close(); }
+  }, 30_000);
+  it("permanently aborts a deleted Agent's active and queued calculations", async () => {
+    const bounded = new IndicatorRuntime({ workers: 1 });
+    await bounded.initialize();
+    try {
+      const tasks = Array.from({ length: 3 }, () => expect(run(program('plot(close)'), {}, candles, bounded)).rejects.toThrow());
       await bounded.abortAgent("agent-a");
-      await task;
+      await Promise.all(tasks);
       await expect(run(program('plot(close)'), {}, candles, bounded)).rejects.toMatchObject({ status: 503 });
     } finally { await bounded.close(); }
   });
@@ -133,7 +157,7 @@ describe("bounded no-capability PineTS runtime", () => {
       const bounded = new IndicatorRuntime(budgets);
       await bounded.initialize();
       const source = "memoryLimitBytes" in budgets ? program('var huge = array.new_string(0)\nfor i = 0 to 9999\n    array.push(huge, str.repeat(str.tostring(i), 10000))\nplot(array.size(huge))') : program('plot(close)');
-      try { await expect(run(source, {}, candles, bounded)).rejects.toThrow(/timeout|memory|allocat/i); }
+      try { await expect(run(source, {}, candles, bounded)).rejects.toThrow(/timeout|timed out|memory|allocat/i); }
       finally { await bounded.close(); }
     }
   });

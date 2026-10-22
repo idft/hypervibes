@@ -5,6 +5,7 @@ import { normalizePineContext } from "./normalize.js";
 import { runHyperVibesIndicator } from "./runtime-wrapper.js";
 import { validateNormalizedIndicatorResult } from "./result-schema.js";
 import { IndicatorError, validateInputs, validateSource } from "./validation.js";
+import { IndicatorWorkerQueue } from "./worker-queue.js";
 
 /** Startup drift message; null when the installed pin matches the validated pin. */
 export function pineVersionDrift(installed: string, expected: string): string | null {
@@ -18,9 +19,8 @@ export class IndicatorRuntime {
   private initializing?: Promise<void>;
   private stopping = false;
   private closing?: Promise<void>;
-  private workers = 0;
-  private readonly perAgent = new Map<string, number>();
-  private readonly exits = new Set<Promise<void>>();
+  private readonly queue: IndicatorWorkerQueue;
+  private readonly exits = new Map<Promise<void>, string>();
   private readonly calls = new Set<{ agentId: string; controller: AbortController; done: Promise<void> }>();
   private readonly deleted = new Set<string>();
   private engineInfo: IndicatorEngineInfo = indicatorEngine;
@@ -32,6 +32,7 @@ export class IndicatorRuntime {
       const value = this.limits[key];
       if (!Number.isSafeInteger(value) || value < 1 || value > indicatorLimits[key]) throw new Error(`Invalid indicator budget: ${key}`);
     }
+    this.queue = new IndicatorWorkerQueue(this.limits.workers, this.limits.queuedCalls);
   }
   initialize(): Promise<void> {
     if (this.stopping) return Promise.reject(new IndicatorError("Indicator runtime is closed", 503));
@@ -51,19 +52,54 @@ export class IndicatorRuntime {
   }
   private admit(agentId: string) {
     if (this.stopping || this.deleted.has(agentId)) throw new IndicatorError("Indicator execution is shutting down", 503, "indicator_closed");
-    const admitted = [...this.calls].filter((call) => call.agentId === agentId).length;
-    if (this.workers >= this.limits.workers || (this.perAgent.get(agentId) ?? 0) >= this.limits.workersPerAgent || this.calls.size >= this.limits.workers || admitted >= this.limits.workersPerAgent) throw new IndicatorError("Indicator workers are busy; retry later", 429, "indicator_busy");
   }
-  private reserve(agentId: string) {
-    if (this.stopping || this.deleted.has(agentId)) throw new IndicatorError("Indicator runtime is closed", 503);
-    if (this.workers >= this.limits.workers || (this.perAgent.get(agentId) ?? 0) >= this.limits.workersPerAgent) throw new IndicatorError("Indicator workers are busy; retry later", 429);
-    this.workers++;
-    this.perAgent.set(agentId, (this.perAgent.get(agentId) ?? 0) + 1);
-    return () => {
-      this.workers--;
-      const remaining = (this.perAgent.get(agentId) ?? 1) - 1;
-      if (remaining) this.perAgent.set(agentId, remaining); else this.perAgent.delete(agentId);
+  private async withWorker<T>(agentId: string, signal: AbortSignal | undefined, operation: (sandbox: CodemodeSandbox, signal: AbortSignal, timeoutMs: number) => Promise<T>): Promise<T> {
+    const controller = new AbortController();
+    const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+    let settled!: () => void;
+    const call = { agentId, controller, done: new Promise<void>((resolve) => { settled = resolve; }) };
+    this.calls.add(call);
+    // Queueing and VM execution share one deadline. Keep workers observable until
+    // actual exit, including during startup before the host has a listening socket.
+    const timeout = new IndicatorError("Indicator execution timed out (including queue wait)", 408, "indicator_timeout");
+    const deadline = Date.now() + this.limits.timeoutMs;
+    const timer = setTimeout(() => controller.abort(timeout), this.limits.timeoutMs);
+    const keepAlive = setInterval(() => { /* Keep admitted execution/exit observable. */ }, 1000);
+    let release: (() => void) | undefined;
+    let started = false;
+    let finished = false;
+    let sandbox: CodemodeSandbox | undefined;
+    const check = () => {
+      if (Date.now() >= deadline) controller.abort(timeout);
+      combined.throwIfAborted();
+      this.admit(agentId);
+      if (finished) throw new IndicatorError("Indicator execution has already ended", 503, "indicator_closed");
     };
+    try {
+      release = await this.queue.acquire(combined);
+      check();
+      sandbox = new CodemodeSandbox({ tools: [], globals: [], memoryLimitBytes: this.limits.memoryLimitBytes,
+        // WASM loading may finish after cancellation/result settlement. Never
+        // launch that stale worker after its reservation has been released.
+        acquireWorker: () => { check(); return () => { release?.(); clearInterval(keepAlive); }; },
+        onWorkerStarted: (exit) => { started = true; this.exits.set(exit, agentId); void exit.then(() => this.exits.delete(exit)); },
+      });
+      const result = await operation(sandbox, combined, Math.max(1, deadline - Date.now()));
+      check();
+      return result;
+    } catch (error) {
+      if (combined.aborted) throw combined.reason;
+      throw error;
+    } finally {
+      finished = true;
+      clearTimeout(timer);
+      try { await sandbox?.close(); }
+      finally {
+        if (!started) { release?.(); clearInterval(keepAlive); }
+        this.calls.delete(call);
+        settled();
+      }
+    }
   }
   private prepare(request: Omit<IndicatorVmRequest, "limits">): IndicatorVmRequest {
     validateSource(request.source, this.limits.sourceBytes);
@@ -82,31 +118,16 @@ export class IndicatorRuntime {
     this.admit(agentId);
     if (!this.bundle) throw new IndicatorError("Indicator runtime is not initialized", 503);
     const payload = this.prepare(request);
-    const controller = new AbortController();
-    let settled!: () => void;
-    const call = { agentId, controller, done: new Promise<void>((resolve) => { settled = resolve; }) };
-    this.calls.add(call);
-    // The host starts this service before it has a listening socket. WASM loading
-    // and worker termination can otherwise leave only unreferenced promises in Node.
-    const keepAlive = setInterval(() => { /* Keep admitted execution/exit observable. */ }, 1000);
-    let started = false;
-    const sandbox = new CodemodeSandbox({ tools: [], globals: [], timeoutMs: this.limits.timeoutMs, memoryLimitBytes: this.limits.memoryLimitBytes,
-      acquireWorker: () => { const release = this.reserve(agentId); return () => { release(); clearInterval(keepAlive); }; },
-      onWorkerStarted: (exit) => { started = true; this.exits.add(exit); void exit.then(() => this.exits.delete(exit)); },
-    });
-    try {
+    return this.withWorker(agentId, signal, async (sandbox, combined, timeoutMs) => {
       // tsx emits esbuild's __name helper inside function bodies. Bind that trusted
       // compiler helper in the VM too; never capture a Node closure in serialized code.
       const code = `${this.bundle}\nreturn await ((__name) => (${runHyperVibesIndicator.toString()})(${JSON.stringify(payload)}, PineTSLib, (${normalizePineContext.toString()})))((target, name) => Object.defineProperty(target, "name", { value: name, configurable: true }));`;
-      const result = await sandbox.execute(code, { signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal, timeoutMs: this.limits.timeoutMs });
+      const result = await sandbox.execute(code, { signal: combined, timeoutMs });
       if (!result.ok) throw new IndicatorError(`PineTS ${result.error.kind}: ${result.error.message}`, result.error.kind === "aborted" ? 499 : 400, `indicator_${result.error.kind}`);
       if (result.calls.length) throw new IndicatorError("Indicator attempted a host tool call");
       // storeWrites are deliberately discarded; indicator calculations have no persistent capabilities.
       return validateNormalizedIndicatorResult(result.value, this.limits);
-    } finally {
-      try { await sandbox.close(); }
-      finally { if (!started) clearInterval(keepAlive); this.calls.delete(call); settled(); }
-    }
+    });
   }
   /** One worker for several trusted calculations (startup built-in validation): a
    * single bundle parse and VM spawn instead of one per program. */
@@ -116,28 +137,15 @@ export class IndicatorRuntime {
     this.admit(agentId);
     if (!this.bundle) throw new IndicatorError("Indicator runtime is not initialized", 503);
     const payloads = requests.map((request) => this.prepare(request));
-    const controller = new AbortController();
-    let settled!: () => void;
-    const call = { agentId, controller, done: new Promise<void>((resolve) => { settled = resolve; }) };
-    this.calls.add(call);
-    const keepAlive = setInterval(() => { /* Keep admitted execution/exit observable. */ }, 1000);
-    let started = false;
-    const sandbox = new CodemodeSandbox({ tools: [], globals: [], timeoutMs: this.limits.timeoutMs, memoryLimitBytes: this.limits.memoryLimitBytes,
-      acquireWorker: () => { const release = this.reserve(agentId); return () => { release(); clearInterval(keepAlive); }; },
-      onWorkerStarted: (exit) => { started = true; this.exits.add(exit); void exit.then(() => this.exits.delete(exit)); },
-    });
-    try {
+    return this.withWorker(agentId, signal, async (sandbox, combined, timeoutMs) => {
       const code = `${this.bundle}\nreturn await ((__name) => (async () => { const results = []; for (const request of ${JSON.stringify(payloads)}) results.push(await (${runHyperVibesIndicator.toString()})(request, PineTSLib, (${normalizePineContext.toString()}))); return results; })())((target, name) => Object.defineProperty(target, "name", { value: name, configurable: true }));`;
-      const result = await sandbox.execute(code, { signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal, timeoutMs: this.limits.timeoutMs });
+      const result = await sandbox.execute(code, { signal: combined, timeoutMs });
       if (!result.ok) throw new IndicatorError(`PineTS ${result.error.kind}: ${result.error.message}`, result.error.kind === "aborted" ? 499 : 400, `indicator_${result.error.kind}`);
       if (result.calls.length) throw new IndicatorError("Indicator attempted a host tool call");
       const values = result.value;
       if (!Array.isArray(values) || values.length !== payloads.length) throw new IndicatorError("Malformed indicator batch result");
       return values.map((value) => validateNormalizedIndicatorResult(value, this.limits));
-    } finally {
-      try { await sandbox.close(); }
-      finally { if (!started) clearInterval(keepAlive); this.calls.delete(call); settled(); }
-    }
+    });
   }
   async abortAgent(agentId: string) {
     this.deleted.add(agentId);
@@ -145,14 +153,14 @@ export class IndicatorRuntime {
     for (const call of active) call.controller.abort(new Error("Agent deleted"));
     await Promise.all(active.map((call) => call.done));
     // Exits may include other Agents; deletion must not wait for their work.
-    while ((this.perAgent.get(agentId) ?? 0) > 0) await Promise.race(this.exits);
+    await Promise.all([...this.exits].filter(([, owner]) => owner === agentId).map(([exit]) => exit));
   }
   close(): Promise<void> {
     return this.closing ??= (async () => {
       this.stopping = true;
       for (const call of this.calls) call.controller.abort(new Error("Indicator runtime closed"));
       await Promise.all([...this.calls].map((call) => call.done));
-      await Promise.allSettled([...this.exits]);
+      await Promise.allSettled(this.exits.keys());
       await this.initializing?.catch(() => {});
       this.bundle = undefined;
       this.deleted.clear();

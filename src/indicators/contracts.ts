@@ -7,7 +7,7 @@ export const indicatorLimits = {
   sourceBytes: 64 * 1024, inputs: 32, numericOutputs: 32, markerOutputs: 32,
   markerEvents: 10_000, drawings: 500, candles: 5000, chartInstances: 10,
   memoryLimitBytes: 128 * 1024 * 1024, timeoutMs: 15_000, maxLoops: 10_000,
-  workers: 4, workersPerAgent: 2, resultBytes: 8 * 1024 * 1024,
+  workers: 8, queuedCalls: 64, resultBytes: 8 * 1024 * 1024,
   inlineBytes: 24 * 1024, count: 1, maxCount: 5000, inlineCount: 500,
   markerLimit: 20, maxMarkerLimit: 100, warnings: 64, listLimit: 20, maxListLimit: 50,
   cacheEntries: 64, cacheBytes: 64 * 1024 * 1024, cacheTtlMs: 30_000,
