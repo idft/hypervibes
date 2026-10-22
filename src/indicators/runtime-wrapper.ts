@@ -1,9 +1,10 @@
 import type * as PineTS from "pinets";
 import type { IndicatorInput, IndicatorInputValue, IndicatorVmRequest, NormalizedIndicator } from "./contracts.js";
 import type { normalizePineContext } from "./normalize.js";
+import type { unknownIndicatorInputsMessage } from "./validation.js";
 
 /** Serialized, trusted VM entry. The parameters are supplied only by the trusted runtime. */
-export async function runHyperVibesIndicator(args: IndicatorVmRequest, lib: typeof PineTS, normalize: typeof normalizePineContext): Promise<NormalizedIndicator> {
+export async function runHyperVibesIndicator(args: IndicatorVmRequest, lib: typeof PineTS, normalize: typeof normalizePineContext, unknownInputsMessage: typeof unknownIndicatorInputsMessage): Promise<NormalizedIndicator> {
   const program = new lib.Indicator(args.source);
   if (program.getDeclarationType() !== "indicator") throw new Error("Only indicator() programs are supported.");
   const metadata = program.getInputsMeta();
@@ -21,6 +22,9 @@ export async function runHyperVibesIndicator(args: IndicatorVmRequest, lib: type
       options: input.options as IndicatorInputValue[] | undefined, group: input.group, tooltip: input.tooltip };
   });
   if (new Set(inputs.map((input) => input.key)).size !== inputs.length) throw new Error("Ambiguous indicator input keys");
+  const validKeys = inputs.map((input) => input.key);
+  const unknownKeys = Object.keys(args.inputs).filter((key) => !validKeys.includes(key));
+  if (unknownKeys.length) throw new Error(unknownInputsMessage(unknownKeys, validKeys));
   for (const [key, value] of Object.entries(args.inputs)) {
     const binding = inputs.find((input) => input.key === key);
     if (!safeKey(key) || !binding || !scalar(value)) throw new Error(`Unknown or invalid input: ${key}`);

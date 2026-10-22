@@ -4,7 +4,7 @@ import { indicatorEngine, indicatorLimits, type IndicatorEngineInfo, type Indica
 import { normalizePineContext } from "./normalize.js";
 import { runHyperVibesIndicator } from "./runtime-wrapper.js";
 import { validateNormalizedIndicatorResult } from "./result-schema.js";
-import { IndicatorError, validateInputs, validateSource } from "./validation.js";
+import { IndicatorError, unknownIndicatorInputsMessage, validateInputs, validateSource } from "./validation.js";
 import { IndicatorWorkerQueue } from "./worker-queue.js";
 
 /** Startup drift message; null when the installed pin matches the validated pin. */
@@ -121,7 +121,7 @@ export class IndicatorRuntime {
     return this.withWorker(agentId, signal, async (sandbox, combined, timeoutMs) => {
       // tsx emits esbuild's __name helper inside function bodies. Bind that trusted
       // compiler helper in the VM too; never capture a Node closure in serialized code.
-      const code = `${this.bundle}\nreturn await ((__name) => (${runHyperVibesIndicator.toString()})(${JSON.stringify(payload)}, PineTSLib, (${normalizePineContext.toString()})))((target, name) => Object.defineProperty(target, "name", { value: name, configurable: true }));`;
+      const code = `${this.bundle}\nreturn await ((__name) => (${runHyperVibesIndicator.toString()})(${JSON.stringify(payload)}, PineTSLib, (${normalizePineContext.toString()}), (${unknownIndicatorInputsMessage.toString()})))((target, name) => Object.defineProperty(target, "name", { value: name, configurable: true }));`;
       const result = await sandbox.execute(code, { signal: combined, timeoutMs });
       if (!result.ok) throw new IndicatorError(`PineTS ${result.error.kind}: ${result.error.message}`, result.error.kind === "aborted" ? 499 : 400, `indicator_${result.error.kind}`);
       if (result.calls.length) throw new IndicatorError("Indicator attempted a host tool call");
@@ -138,7 +138,7 @@ export class IndicatorRuntime {
     if (!this.bundle) throw new IndicatorError("Indicator runtime is not initialized", 503);
     const payloads = requests.map((request) => this.prepare(request));
     return this.withWorker(agentId, signal, async (sandbox, combined, timeoutMs) => {
-      const code = `${this.bundle}\nreturn await ((__name) => (async () => { const results = []; for (const request of ${JSON.stringify(payloads)}) results.push(await (${runHyperVibesIndicator.toString()})(request, PineTSLib, (${normalizePineContext.toString()}))); return results; })())((target, name) => Object.defineProperty(target, "name", { value: name, configurable: true }));`;
+      const code = `${this.bundle}\nreturn await ((__name) => (async () => { const results = []; for (const request of ${JSON.stringify(payloads)}) results.push(await (${runHyperVibesIndicator.toString()})(request, PineTSLib, (${normalizePineContext.toString()}), (${unknownIndicatorInputsMessage.toString()}))); return results; })())((target, name) => Object.defineProperty(target, "name", { value: name, configurable: true }));`;
       const result = await sandbox.execute(code, { signal: combined, timeoutMs });
       if (!result.ok) throw new IndicatorError(`PineTS ${result.error.kind}: ${result.error.message}`, result.error.kind === "aborted" ? 499 : 400, `indicator_${result.error.kind}`);
       if (result.calls.length) throw new IndicatorError("Indicator attempted a host tool call");

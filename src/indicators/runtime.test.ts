@@ -146,11 +146,16 @@ describe("bounded no-capability PineTS runtime", () => {
     const code = `const timer = setInterval(() => {}, 1000);
       import(${JSON.stringify(new URL("./runtime.ts", import.meta.url).href)}).then(async ({ IndicatorRuntime }) => {
         const runtime = new IndicatorRuntime();
-        try { await runtime.initialize(); const result = await runtime.execute("loader-test", ${JSON.stringify(payload)}); console.log(JSON.stringify(result.values)); }
-        finally { await runtime.close(); }
+        try {
+          await runtime.initialize();
+          const result = await runtime.execute("loader-test", ${JSON.stringify(payload)});
+          console.log(JSON.stringify(result.values));
+          await runtime.execute("loader-test", { ...${JSON.stringify(payload)}, inputs: { typo: 1 } }).catch(error => console.error(error.message));
+        } finally { await runtime.close(); }
       }).catch(error => { console.error(error); process.exitCode = 1; }).finally(() => clearInterval(timer));`;
     const result = await promisify(execFile)(process.execPath, ["--import", "tsx", "--eval", code], { timeout: 20_000 });
     expect(JSON.parse(result.stdout)).toHaveLength(2);
+    expect(result.stderr).toContain('Unknown indicator input: "typo". Valid input keys: (none).');
   }, 30_000);
   it("enforces the VM deadline and heap budget, then closes actual workers", async () => {
     for (const budgets of [{ timeoutMs: 1 }, { memoryLimitBytes: 16 * 1024 * 1024 }]) {

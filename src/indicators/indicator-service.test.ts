@@ -8,6 +8,7 @@ import { SharedDatabase } from "../db/shared-database.js";
 import { IndicatorService, projectIndicatorResult } from "./indicator-service.js";
 import { IndicatorRuntime } from "./runtime.js";
 import type { ChartCandle } from "../hyperliquid/chart-contracts.js";
+import type { IndicatorInputs } from "./contracts.js";
 
 const hour = 3600_000, end = 100 * hour;
 let directory: string, database: SharedDatabase, service: IndicatorService;
@@ -38,6 +39,22 @@ describe("unified PineTS catalog and computation service", () => {
     expect(await service.versions("a", "builtin:ema")).toMatchObject({ versions: [{ version: 1 }], nextOffset: null });
     await expect(service.get("a", "builtin:ema", { version: 2 })).rejects.toMatchObject({ status: 404 });
   });
+  it.each<{ indicatorId: string; inputs: IndicatorInputs; message: string }>([
+    { indicatorId: "builtin:bollinger", inputs: { period: 20, mult: 2 }, message: 'Unknown indicator input: "mult". Valid input keys: "period", "deviations", "source".' },
+    { indicatorId: "builtin:macd", inputs: { fast: 12, slow: 26, signal: 9 }, message: 'Unknown indicator inputs: "fast", "slow", "signal". Valid input keys: "fastPeriod", "slowPeriod", "signalPeriod", "source", "average", "signalAverage".' },
+  ])("rejects guessed $indicatorId keys before fetching candles or launching a VM", async ({ indicatorId, inputs, message }) => {
+    const before = execute.mock.calls.length, fetches = market.researchHistory.mock.calls.length;
+    const result = service.run("a", { ...request, indicatorId, inputs });
+    await expect(result).rejects.toMatchObject({ status: 400, code: "indicator_invalid", message: expect.stringContaining(message) });
+    await expect(result).rejects.toThrow("indicator_get");
+    expect(execute.mock.calls.length).toBe(before);
+    expect(market.researchHistory.mock.calls.length).toBe(fetches);
+  });
+  it("reports preview input keys from the Pine source inside the VM", async () => {
+    await expect(service.preview("a", { ...request, source, inputs: { length: 5 } })).rejects.toThrow('Unknown indicator input: "length". Valid input keys: "period".');
+    const noInputs = '//@version=6\nindicator("No inputs")\nplot(close)';
+    await expect(service.preview("a", { ...request, source: noInputs, inputs: { period: 5 } })).rejects.toThrow('Unknown indicator input: "period". Valid input keys: (none).');
+  });
   it("caches only completed calculations by input/window/candles/Agent and projects after full seeding", async () => {
     const before = execute.mock.calls.length;
     const first = await service.run("a", request);
@@ -65,6 +82,7 @@ describe("unified PineTS catalog and computation service", () => {
     const first = await service.save("a", input, "create", { kind: "agent", subagentId: "developer", runId: "test-run" });
     expect(first.version).toBe(1); expect(events).toEqual([first]);
     expect((await service.get("a", first.indicatorId)).descriptor.inputs[0]!.default).toBe(3);
+    await expect(service.run("a", { ...request, indicatorId: first.indicatorId, inputs: { length: 5 } })).rejects.toThrow('Unknown indicator input: "length". Valid input keys: "period".');
     expect((await service.list("a", { kind: "custom" })).total).toBe(1);
     expect((await service.list("b", { kind: "custom" })).total).toBe(0);
     await expect(service.run("b", { ...request, indicatorId: first.indicatorId })).rejects.toMatchObject({ status: 404 });

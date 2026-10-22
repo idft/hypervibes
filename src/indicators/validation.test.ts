@@ -21,6 +21,18 @@ describe("indicator IDs, source and inputs", () => {
     expect(schema[0]!.default).toBe(14);
     for (const input of [{ period: 1 }, { period: 2.5 }, { period: "20" }, { "Same title": 20 }, { source: "high" }] as Record<string, string | number>[]) expect(() => resolveInputs(schema, input)).toThrow();
   });
+  it("lists every unknown key and the exact public keys with discovery guidance", () => {
+    const resolve = () => resolveInputs(schema, { length: 20, window: 30 });
+    expect(resolve).toThrow('Unknown indicator inputs: "length", "window". Valid input keys: "period", "source".');
+    expect(resolve).toThrow("indicator_get");
+    expect(resolve).toThrow("Omit inputs to use defaults");
+    expect(resolve).toThrow(expect.objectContaining({ status: 400, code: "indicator_invalid" }));
+  });
+  it("explains indicators with no inputs and quotes unknown keys safely", () => {
+    expect(() => resolveInputs([], { period: 20 })).toThrow('Unknown indicator input: "period". Valid input keys: (none).');
+    expect(() => resolveInputs(schema, { "bad\nkey": 20 })).toThrow('Unknown indicator input: "bad\\nkey".');
+    expect(resolveInputs([], {})).toEqual({});
+  });
   it("requires native indicator source; ignores forbidden tokens in strings/comments", () => {
     expect(() => validateSource('//@version=6\nindicator("request.security strategy library")\n// request.security("BTC")\nplot(close)')).not.toThrow();
     expect(() => validateSource('//@version=5\nindicator("test")\nfor i = 0 to 2\n    x = i\nplot(barstate.isrealtime ? 1 : 0)')).not.toThrow();

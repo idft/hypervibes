@@ -25,9 +25,16 @@ export function validateInputs(value: unknown): IndicatorInputs {
   }
   return Object.fromEntries(entries) as IndicatorInputs;
 }
+/** Self-contained because the same formatter is serialized into the isolated VM. */
+export function unknownIndicatorInputsMessage(unknownKeys: string[], validKeys: string[]): string {
+  const quoted = (keys: string[]) => keys.map((key) => JSON.stringify(key)).join(", ");
+  return `Unknown indicator input${unknownKeys.length === 1 ? "" : "s"}: ${quoted(unknownKeys)}. Valid input keys: ${validKeys.length ? quoted(validKeys) : "(none)"}. For saved/built-in indicators, use indicator_get for exact keys, types, defaults and constraints. Omit inputs to use defaults.`;
+}
 export function resolveInputs(schema: IndicatorInput[], overrides: IndicatorInputs): IndicatorInputs {
   validateInputs(overrides);
-  for (const key of Object.keys(overrides)) if (!schema.some((input) => input.key === key)) throw new IndicatorError(`Unknown indicator input: ${key}`);
+  const validKeys = schema.map((input) => input.key);
+  const unknownKeys = Object.keys(overrides).filter((key) => !validKeys.includes(key));
+  if (unknownKeys.length) throw new IndicatorError(unknownIndicatorInputsMessage(unknownKeys, validKeys));
   return Object.fromEntries(schema.map((input) => {
     const value = Object.hasOwn(overrides, input.key) ? overrides[input.key]! : input.default;
     const numeric = input.type === "int" || input.type === "float";
