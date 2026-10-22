@@ -59,6 +59,7 @@ const toolGroups = [
   { name: "Indicators — Develop", tools: indicatorDevelopToolNames },
   { name: "Memories & Insights", tools: memoryToolNames },
   { name: "Chart workspace · Orchestrator only", tools: chartToolNames },
+  { name: "HyperVibes · Notifications", tools: ["send_notification"] },
   { name: "HyperVibes · Subagents", tools: ["list_subagents", "delegate_subagent", "list_subagent_runs", "get_subagent_run"] },
 ];
 

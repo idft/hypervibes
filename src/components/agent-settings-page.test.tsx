@@ -28,6 +28,7 @@ describe("Agent settings", () => {
     vi.resetAllMocks();
     queryClient = createTestQueryClient({ staleTime: Infinity });
     queryClient.setQueryData(["risk", initial.agent.id], { tradingEnabled: false, allowedInstruments: null, maxOrderNotional: null, maxTotalNotional: null });
+    queryClient.setQueryData(["notification-settings", initial.agent.id], { enabled: true, submissions: true, fills: true });
     queryClient.setQueryData(["gateway", initial.agent.id], { hasToken: false, connected: false, botUsername: null, chatId: null, chatUsername: null });
     mocks.instruments.mockResolvedValue(["BTC", "ETH", "SOL"]);
     mocks.save.mockImplementation(async ({ data }: { data: { settings: RiskSettings } }) => data.settings);

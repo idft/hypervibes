@@ -1,3 +1,5 @@
+import { sendTelegramNotification } from "./telegram/transport.js";
+import { NotificationDeliveryError, type NotificationTarget } from "../notifications/delivery.js";
 import { randomUUID } from "node:crypto";
 import type { FastifyBaseLogger } from "fastify";
 import { AgentError } from "../agents/agent-input.js";
@@ -78,6 +80,16 @@ export class GatewayBridge {
     const link = existing ?? { token: randomUUID(), agentId, userId, expiresAt: Date.now() + PENDING_LINK_TTL_MS };
     this.pending.set(link.token, link);
     return this.connector.linkUrl(row, link.token);
+  }
+
+  /** A queued notification is bound to its original destination, never a newly linked chat. */
+  async sendNotification(target: NotificationTarget, text: string, signal: AbortSignal): Promise<number> {
+    if (this.stopping) throw new NotificationDeliveryError("Gateway is shutting down");
+    const row = await getGateway(this.db, target.agentId, this.type);
+    if (!row || row.chatId !== target.chatId || row.botTokenHash !== target.botTokenHash) throw new NotificationDeliveryError("Telegram destination changed", true, undefined, true);
+    const token = decryptGatewayToken(this.key, row);
+    if (!token) throw new NotificationDeliveryError("Telegram token cannot be decrypted; reconnect Telegram in settings", true);
+    return sendTelegramNotification(token, target.chatId, text, signal);
   }
 
   /** Render-safe gateway state for the settings page. */

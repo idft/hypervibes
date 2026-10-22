@@ -1,3 +1,5 @@
+import type { NotificationService } from "../notifications/notification-service.js";
+import { createNotificationExtension } from "../notifications/durable-extension.js";
 import type { OrderService } from "../hyperliquid/orders/order-service.js";
 import { createHyperliquidExtension } from "../hyperliquid/durable-extension.js";
 import type { HyperliquidService } from "../hyperliquid/service.js";
@@ -152,7 +154,7 @@ export class AgentService {
   readonly execution: ExecutionContextService;
   readonly risk: RiskSettingsService;
   readonly charts: ChartService;
-  constructor(private readonly db: ApplicationDatabase, private readonly database: SharedDatabase, private readonly providers: ProviderService, private readonly hyperliquid: HyperliquidService, private readonly orders: OrderService, private readonly options: AgentServiceOptions = {}) {
+  constructor(private readonly db: ApplicationDatabase, private readonly database: SharedDatabase, private readonly providers: ProviderService, private readonly hyperliquid: HyperliquidService, private readonly orders: OrderService, private readonly notifications: NotificationService, private readonly options: AgentServiceOptions = {}) {
     this.charts = new ChartService(database);
     this.execution = new ExecutionContextService(database, (error) => options.logger?.error(error, "Orchestrator insights snapshot failed"));
     this.orders.installAdmission(this.execution);
@@ -280,7 +282,7 @@ export class AgentService {
       const registry = createRegistry();
       const hyperliquid = createHyperliquidExtension(this.hyperliquid, agent.userId, agent.id, this.orders);
       registry.install(hyperliquid);
-      const capabilities = [createMemoryExtension(agent.id, this.execution, this.database), ...this.research.extensions(agent.id), createIndicatorExtension(agent.id, this.indicators, this.execution, createResearchResponder(this.research.artifacts, agent.id, true)), createChartExtension(agent.id, this.charts, this.execution)];
+      const capabilities = [createNotificationExtension(agent.id, this.notifications, this.execution), createMemoryExtension(agent.id, this.execution, this.database), ...this.research.extensions(agent.id), createIndicatorExtension(agent.id, this.indicators, this.execution, createResearchResponder(this.research.artifacts, agent.id, true)), createChartExtension(agent.id, this.charts, this.execution)];
       for (const extension of capabilities) registry.install(extension);
       const execution = this.subagents.extension(agent.id, hyperliquid, capabilities);
       registry.install(execution.extension);

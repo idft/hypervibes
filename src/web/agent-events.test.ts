@@ -113,7 +113,7 @@ describe("Agent multiplexed event stream", () => {
 
   it("delivers an initial frame for every requested topic over one response", async () => {
     const agent = await runtime.agents.create("owner", "Research", randomUUID(), `0x${"12".repeat(20)}`);
-    const topics = ["chat", "dashboard", "indicators", "chart-layouts", "subagents"];
+    const topics = ["chat", "dashboard", "indicators", "chart-layouts", "subagents", "notifications"];
     const response = await streams.open(streamRequest(agent.id, topics), agent.id);
     expect(response.status).toBe(200);
     const reader = response.body!.getReader();
@@ -121,6 +121,16 @@ describe("Agent multiplexed event stream", () => {
     const seen = new Set<string>();
     for (let i = 0; i < topics.length; i++) seen.add((await readEvent(reader, buffer)).event!);
     expect([...seen].sort()).toEqual([...topics].sort());
+    await reader.cancel();
+  });
+
+  it("pushes notification revisions without exposing another Agent's content", async () => {
+    const agent = await runtime.agents.create("owner", "Research", randomUUID(), `0x${"12".repeat(20)}`);
+    const response = await streams.open(streamRequest(agent.id, ["notifications"]), agent.id);
+    const reader = response.body!.getReader(), buffer = { text: "" };
+    expect(await readEvent(reader, buffer)).toEqual({ event: "notifications", data: { revision: 0 } });
+    await runtime.notifications.send(agent.id, "test", { title: "Update", body: "Useful content" });
+    expect(await readEvent(reader, buffer)).toEqual({ event: "notifications", data: { revision: 1 } });
     await reader.cancel();
   });
 

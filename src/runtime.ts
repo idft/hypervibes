@@ -1,3 +1,4 @@
+import { NotificationService } from "./notifications/notification-service.js";
 import { migrateApplication } from "./db/migrations.js";
 import { AgentService, type AgentServiceOptions } from "./agents/agent-service.js";
 import { createAuth } from "./auth.js";
@@ -35,6 +36,7 @@ export async function createRuntime(config: AppConfig, options: AgentServiceOpti
   let providers: ProviderService | undefined;
   let orders: OrderService | undefined;
   let gateway: GatewayBridge | undefined;
+  let notifications: NotificationService | undefined;
   let closing: Promise<void> | undefined;
   let failure: Error | undefined;
   const close = (force?: AbortSignal) => closing ??= (async () => {
@@ -44,7 +46,10 @@ export async function createRuntime(config: AppConfig, options: AgentServiceOpti
       finally {
         try {
           try { await orders?.close(); }
-          finally { await hyperliquid?.close(); }
+          finally {
+            try { await hyperliquid?.close(); }
+            finally { await notifications?.close(); }
+          }
         } finally {
           try { await providers?.close(); }
           finally {
@@ -76,20 +81,25 @@ export async function createRuntime(config: AppConfig, options: AgentServiceOpti
     await providerService.initialize();
     const transport = new HttpTransport();
     const feeds = new SharedHyperliquidFeeds();
+    const notificationService = new NotificationService(database, config.authOrigin, logger?.child({ component: "notifications" }));
+    notifications = notificationService;
     const journal = new JournalService(database, options.journalHistoryFetcher ?? exchangeHistory(transport), logger?.child({ component: "journal" }), options.journalFeedFactory ?? feeds.journal);
     const orderService = new OrderService(database, transport, {
       account: (userId, agentId) => hyperliquid!.agentTradingAccount(userId, agentId),
       authority: (userId, agentId, signal, needsBuilder) => hyperliquid!.orderAuthority(userId, agentId, signal, needsBuilder),
     }, logger?.child({ component: "orders" }));
     orders = orderService;
+    orderService.store.notifications = notificationService;
+    journal.notifications = notificationService;
     hyperliquid = new HyperliquidService(db, config.encryptionKey, transport, options.accountFeedFactory, journal, (signer) => orderService.store.nonce(signer), logger?.child({ component: "hyperliquid" }), feeds);
     await orderService.recover();
-    const agentService = new AgentService(db, database, providerService, hyperliquid, orderService, { ...options, logger: logger?.child({ component: "agents" }) });
+    const agentService = new AgentService(db, database, providerService, hyperliquid, orderService, notificationService, { ...options, logger: logger?.child({ component: "agents" }) });
     providerService.onChanged = (userId) => agentService.providersChanged(userId);
     agents = agentService;
     await agentService.recover();
     // One bridge per supported gateway platform; Telegram bridges the persistent main conversation.
     gateway = new GatewayBridge(db, agentService, config.encryptionKey, telegramConnector, { logger: logger?.child({ component: "gateway" }) });
+    notificationService.installSender((target, text, signal) => gateway!.sendNotification(target, text, signal));
     return {
       db,
       database,
@@ -100,10 +110,12 @@ export async function createRuntime(config: AppConfig, options: AgentServiceOpti
       orders: orderService,
       providers: providerService,
       gateway,
+      notifications: notificationService,
       start() {
         if (closing || failure) throw new Error("Runtime is unavailable");
         hyperliquid?.start();
         orderService.start();
+        notificationService.start();
         agentService.start();
         gateway?.start();
       },

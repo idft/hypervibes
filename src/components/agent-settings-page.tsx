@@ -12,6 +12,7 @@ import { gatewayQueryOptions } from "../web/gateway-queries.js";
 import { saveRiskSettings } from "../web/risk.js";
 import { riskQueryOptions } from "../web/risk-queries.js";
 import { configButton } from "./config-dialog.js";
+import { NotificationSettingsSection } from "./notification-settings-section.js";
 import { InstrumentPicker } from "./instrument-picker.js";
 
 const button = "cursor-pointer rounded-full bg-violet-600 px-4 py-2 text-sm text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50";
@@ -104,7 +105,7 @@ function DeleteAgentSection({ agent }: { agent: AgentChat["agent"] }) {
     mutationFn: () => deleteAgent({ data: { id: agent.id, confirmation } }),
     onSuccess: async () => {
       await router.navigate({ to: "/agents" });
-      for (const key of ["agent", "agent-chat", "agent-history", "agent-dashboard", "risk", "journal", "journal-notes", "journal-audit", "subagents", "memories", "insights", "artifacts", "chart-instruments", "chart-layouts", "chart-history", "chart-fills"]) {
+      for (const key of ["agent", "agent-chat", "agent-history", "agent-dashboard", "risk", "journal", "journal-notes", "journal-audit", "subagents", "memories", "insights", "artifacts", "chart-instruments", "chart-layouts", "chart-history", "chart-fills", "notifications", "notification-settings"]) {
         client.removeQueries({ queryKey: [key, agent.id] });
       }
       toast.success("Agent deleted");
@@ -236,6 +237,7 @@ export function AgentSettingsPage({ initial }: { initial: AgentChat }) {
       <dl className="mt-4 grid gap-4 sm:grid-cols-2"><div><dt className="text-xs uppercase tracking-wide text-zinc-500">Trading account</dt><dd className="mt-2 break-all font-mono text-sm text-zinc-300">{initial.agent.tradingAccountAddress ?? "No account linked (chat only)"}</dd></div><div><dt className="text-xs uppercase tracking-wide text-zinc-500">Agent status</dt><dd className="mt-2 text-sm text-zinc-300">{initial.agent.state}</dd></div></dl>
     </section>
     {initial.agent.state !== "stopping" && initial.agent.state !== "stopped" && <RiskManagementSection agentId={initial.agent.id} />}
+    {initial.agent.state !== "stopping" && initial.agent.state !== "stopped" && <NotificationSettingsSection agentId={initial.agent.id} />}
     <TelegramSection agentId={initial.agent.id} />
     <DeleteAgentSection agent={initial.agent} />
   </div>;

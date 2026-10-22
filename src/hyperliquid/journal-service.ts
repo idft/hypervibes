@@ -1,3 +1,4 @@
+import type { NotificationService } from "../notifications/notification-service.js";
 import { enqueueAccountEvent } from "../agents/worker-events.js";
 import { InfoClient, SubscriptionClient, WebSocketTransport, type HttpTransport } from "@nktkas/hyperliquid";
 import type { OrderUpdatesEvent } from "@nktkas/hyperliquid/api/subscription";
@@ -95,6 +96,7 @@ export function exchangeHistory(transport: HttpTransport): HistoryFetcher {
 
 /** Backend-owned, single-flight account ingestion. No exchange I/O in SQLite transactions. */
 export class JournalService {
+  notifications?: Pick<NotificationService, "fillsTx" | "changed">;
   private readonly workers = new Map<string, Worker>();
   private stopped = false;
   private readonly shutdown = new AbortController();
@@ -339,8 +341,10 @@ export class JournalService {
 
   async ingest(account: string, stream: JournalStream, events: JournalEvent[], cursor?: number): Promise<boolean> {
     account = account.toLowerCase();
-    return this.db.transaction(async (tx) => {
+    let notifiedAgents: string[] = [];
+    const changed = await this.db.transaction(async (tx) => {
       await tx.run("INSERT INTO hv_journal_accounts(account) VALUES (?) ON CONFLICT DO NOTHING", account);
+      const newFills: JournalEvent[] = [];
       let changed = false;
       for (const event of events) {
         const data = JSON.stringify(event);
@@ -349,14 +353,20 @@ export class JournalService {
         changed = true;
         await tx.run(`INSERT INTO hv_journal_entries(account,id,kind,time,data) VALUES (?,?,?,?,?)
           ON CONFLICT(account,id) DO UPDATE SET data=excluded.data,time=excluded.time`, account, event.id, event.kind, event.time, data);
-        if (!previous && event.kind === "fill") await enqueueAccountEvent(tx, account, `fill:${event.id}`, "fill", `Exchange fill ${event.id}: ${JSON.stringify({ instrument: event.symbol, time: event.time, fill: event.fill })}. Refresh account and orders, inspect actual position size and TP/SL coverage. A fill is evidence, not a new-entry instruction.`, event.time);
+        if (!previous && event.kind === "fill") {
+          newFills.push(event);
+          await enqueueAccountEvent(tx, account, `fill:${event.id}`, "fill", `Exchange fill ${event.id}: ${JSON.stringify({ instrument: event.symbol, time: event.time, fill: event.fill })}. Refresh account and orders, inspect actual position size and TP/SL coverage. A fill is evidence, not a new-entry instruction.`, event.time);
+        }
       }
+      notifiedAgents = await this.notifications?.fillsTx(tx, account, newFills) ?? [];
       if (changed) await tx.run("UPDATE hv_journal_accounts SET revision=revision+1 WHERE account=?", account);
       // Pushed events never advance cursors; only fetched windows checkpoint progress.
       if (cursor !== undefined) await tx.run(`INSERT INTO hv_journal_sync(account,stream,cursor) VALUES (?,?,?)
         ON CONFLICT(account,stream) DO UPDATE SET cursor=max(cursor,excluded.cursor)`, account, stream, cursor);
       return changed;
     });
+    for (const agentId of notifiedAgents) this.notifications?.changed(agentId);
+    return changed;
   }
 
   async project(account: string) {

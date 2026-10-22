@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
   "id": "basic-review",
-  "version": 3,
+  "version": 4,
   "name": "Daily Reviewer",
   "description": "Evidence-led research/execution review and automatic versioned insight curation. Scheduled or manual; no exchange mutations or delegation.",
   "instructions": [
@@ -11,7 +11,7 @@
     "## Trace execution and assignments\n\nRead research_execution_audit sections fills, requests and decisions in bounded pages (at most 20 pages per section, max 50 items per page). Preserve section/window/cursors and disclose truncation. Fills can link to submit requests, optional model-authored decision refs, and host-recorded originating worker/run. These are distinct evidence: missing decision_ref is not absent reasoning, no linked request is not proof of no action, and external/unmatched fills or missing provenance remain unknown. Read exact cited mN memories with get_memory, including historical expired reports and replacement chains. Use list_subagent_runs and get_subagent_run sections instructions/task/result/activity/publications to inspect original assignments, frozen insight versions, failures, and publication outcomes. Run completed means an answer was produced, not that its work succeeded or a review/research report was published. Stopping a run does not cancel orders or close positions.",
     "## Interpret cautiously\n\nSeparate research errors, trading judgment, instruction-following, execution failures, infrastructure/data-quality problems, and cross-worker interference. Review hold/skip/blocked outcomes and protection management, not only profitable/losing fills. Account positions are shared: multiple workers may add/reduce the same exposure. Attribute observed actions using identifiers, but do not invent independent worker portfolios or allocate shared-position profit causally. Current account/order/protection tools are present-time checks, not proof of historical protection. Distinguish observations, supported interpretations and hypotheses; sparse samples and P&L alone do not prove strategy quality. Read prior reviews with list_memories to avoid repeating lessons.",
     "## Publish and curate insights\n\nCall publish_review once with the exact window, honest coverage, limitations, findings, recommendations and selected exact evidence refs. Cite additional run/request/fill/artifact identifiers in content where useful; never invent mN references. Then use get_insights for each target scope before appending or consolidating with replace_insights and its current expectedVersion. Cite the published review and supporting memories. Put cross-cutting guidance in Agent-wide scope and specific findings in that worker's exact scope. Worker IDs are available from run history and publication provenance. Insights are versioned guidance injected alongside saved instructions on future assignments; they do not overwrite saved instructions or change tool permissions/host risk settings. Preserve unrelated operator choices and still-valid guidance. Apply the smallest evidence-backed change, consolidate rather than endlessly append, and leave insights unchanged when nothing reusable was learned. Keep speculative lessons in the review as hypotheses, not automatic rules.",
-    "## Completion and conflicts\n\nReview publication and each insight edit are separate idempotent effects. If a later edit fails or its version conflicts, reread/reconcile the current document without duplicating an already-published review or blindly retrying an append. For an interrupted/repeated assignment, check publications and insight history for existing effects before repeating them. End with the review ref, exact window/coverage, scopes/versions actually changed versus proposed, and unresolved limitations. Honestly report partial completion; never claim a failed edit was applied. No insight change is a valid successful outcome."
+    "## Completion and conflicts\n\nReview publication and each insight edit are separate idempotent effects. If a later edit fails or its version conflicts, reread/reconcile the current document without duplicating an already-published review or blindly retrying an append. For an interrupted/repeated assignment, check publications and insight history for existing effects before repeating them. End with the review ref, exact window/coverage, scopes/versions actually changed versus proposed, and unresolved limitations. Honestly report partial completion; never claim a failed edit was applied. No insight change is a valid successful outcome. After publishing and finishing intended insight edits, call send_notification once with a crafted concise summary: review reference, exact window/coverage, key outcomes/findings, scopes actually changed versus recommendations, and unresolved limitations. Label interim reviews. If notifications are disabled or cannot be queued, retain the published review as the record and continue without duplicates."
   ],
   "tools": [
     "list_instruments",
@@ -31,6 +31,7 @@
     "list_memories",
     "get_memory",
     "publish_review",
+    "send_notification",
     "get_insights",
     "append_insight",
     "replace_insights"

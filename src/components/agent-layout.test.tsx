@@ -24,9 +24,10 @@ describe("Agent navigation", () => {
   afterEach(async () => { await act(async () => root.unmount()); container.remove(); document.cookie = "hv-agent-nav-expanded=; Max-Age=0"; });
   it("links the requested sections, defaults to dashboard and pins Settings below the main links", () => {
     const links = [...container.querySelectorAll("nav a")];
-    expect(links.map((link) => link.getAttribute("aria-label"))).toEqual(["Dashboard", "Charts", "Transactions", "Chat", "Sub-Agents", "Memories", "Settings"]);
-    expect(links.map((link) => link.getAttribute("href"))).toEqual(["/agents/fixture", "/agents/fixture/chart", "/agents/fixture/transactions", "/agents/fixture/chat", "/agents/fixture/sub-agents", "/agents/fixture/memories", "/agents/fixture/settings"]);
+    expect(links.map((link) => link.getAttribute("aria-label"))).toEqual(["Dashboard", "Charts", "Transactions", "Chat", "Sub-Agents", "Memories", "Notifications", "Settings"]);
+    expect(links.map((link) => link.getAttribute("href"))).toEqual(["/agents/fixture", "/agents/fixture/chart", "/agents/fixture/transactions", "/agents/fixture/chat", "/agents/fixture/sub-agents", "/agents/fixture/memories", "/agents/fixture/notifications", "/agents/fixture/settings"]);
     expect(links[6]?.closest(".mt-auto")).not.toBeNull();
+    expect(links[7]?.closest(".mt-auto")).not.toBeNull();
     const divider = container.querySelector("hr")!;
     expect(divider.previousElementSibling?.getAttribute("aria-label")).toBe("Transactions");
     expect(divider.nextElementSibling?.getAttribute("aria-label")).toBe("Chat");

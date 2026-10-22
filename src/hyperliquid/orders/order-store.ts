@@ -4,6 +4,7 @@ import { hvExchangeNonces, hvOrderActions, hvOrderEvents, hvOrderItems, hvOrderR
 import { applicationDatabase, type SharedDatabase } from "../../db/shared-database.js";
 import { HyperliquidError } from "../errors.js";
 import type { OrderView } from "./order-contracts.js";
+import type { NotificationService } from "../../notifications/notification-service.js";
 import type { ExchangeClient } from "@nktkas/hyperliquid";
 
 export type WireOrder = Parameters<ExchangeClient["order"]>[0]["orders"][number];
@@ -23,6 +24,7 @@ export function active(view: OrderView): boolean {
   return view.commandStatus === "unknown" || ["open", "waitingForFill", "waitingForTrigger", "triggered"].includes(view.orderStatus);
 }
 export class OrderStore {
+  notifications?: Pick<NotificationService, "orderOutcomeTx" | "changed">;
   private readonly db;
   constructor(private readonly database: SharedDatabase) { this.db = applicationDatabase(database); }
   request(agentId: string, key: string) { return this.db.select().from(hvOrderRequests).where(and(eq(hvOrderRequests.agentId, agentId), eq(hvOrderRequests.requestKey, key))).get(); }
@@ -78,7 +80,7 @@ export class OrderStore {
     return Boolean(row);
   }
   async outcome(actionId: string, state: string, views: OrderView[], source: string) {
-    await this.database.appTransaction(async (db) => {
+    const agentId = await this.database.appTransaction(async (db, tx) => {
       await db.update(hvOrderActions).set({ state, updatedAt: Date.now() }).where(eq(hvOrderActions.id, actionId)).run();
       for (const view of views) {
         const previous = await db.select().from(hvOrderItems).where(eq(hvOrderItems.id, view.id)).get();
@@ -89,7 +91,9 @@ export class OrderStore {
         const comparable = (v: OrderView) => ({ ...v, updatedAt: 0, source: "", venueTimestamp: null });
         if (canonical(comparable(old)) !== canonical(comparable(view))) await db.insert(hvOrderEvents).values({ itemId: view.id, source, time: Date.now(), data: JSON.stringify(view) }).run();
       }
+      return this.notifications?.orderOutcomeTx(tx, actionId);
     });
+    if (agentId) this.notifications?.changed(agentId);
   }
   async nonce(signer: string, actionId?: string) {
     return this.database.appTransaction(async (db) => {

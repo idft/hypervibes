@@ -17,12 +17,13 @@ const maxFrameBytes = 2 * 1024 * 1024;
 const frame = (event: string, data: unknown) => encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 export interface ChatEvent { event?: string; data: AgentChat }
 
-export const multiplexTopics = ["chat", "dashboard", "indicators", "chart-layouts", "subagents", "chart"] as const;
+export const multiplexTopics = ["chat", "dashboard", "indicators", "chart-layouts", "subagents", "chart", "notifications"] as const;
 export type MultiplexTopic = (typeof multiplexTopics)[number];
 const topicLimits: Record<MultiplexTopic, number> = {
   chat: maxFrameBytes,
   dashboard: maxFrameBytes,
   indicators: 4096,
+  notifications: 4096,
   "chart-layouts": maxFrameBytes,
   subagents: maxFrameBytes,
   chart: maxFrameBytes,
@@ -95,6 +96,7 @@ export class AgentEventStreams {
     switch (topic) {
       case "chat": return this.runtime.agents.watchChat(ctx.userId, ctx.id, ctx.signal, publish as (snapshot: AgentChat) => void);
       case "dashboard": return this.runtime.hyperliquid.watchDashboard(ctx.userId, ctx.id, ctx.signal, publish as (snapshot: AgentDashboard) => void);
+      case "notifications": return this.runtime.notifications.watch(ctx.id, ctx.signal, publish as (snapshot: { revision: number }) => void);
       case "indicators": return this.runtime.agents.indicators.watch(ctx.id, ctx.signal, publish as (snapshot: { revision: number }) => void);
       case "chart-layouts": return this.runtime.agents.watchChartLayouts(ctx.userId, ctx.id, ctx.signal, publish as (snapshot: ChartLayout[]) => void);
       case "subagents": return this.runtime.agents.subagents.watchDashboard(ctx.userId, ctx.id, ctx.signal, publish as (snapshot: DashboardSubagent[]) => void);

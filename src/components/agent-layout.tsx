@@ -10,6 +10,7 @@ const sections = [
   { label: "Transactions", to: "/agents/$agentId/transactions", icon: "M3 7h17m-4-4 4 4-4 4M21 17H4m4-4-4 4 4 4" },
   { label: "Chat", to: "/agents/$agentId/chat", icon: "M4 4h16v12H9l-5 4z" },
   { label: "Sub-Agents", to: "/agents/$agentId/sub-agents", icon: "M9 3h6v6H9zM3 16h6v6H3zM15 16h6v6h-6zM12 9v4M6 16v-3h12v3" },
+  { label: "Notifications", to: "/agents/$agentId/notifications", icon: "M6 8a6 6 0 0 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9M9 21h6" },
   { label: "Settings", to: "/agents/$agentId/settings", icon: "M4 6h16M4 12h16M4 18h16M8 3v6M16 9v6M10 15v6" },
 ] as const;
 
@@ -53,7 +54,7 @@ export function AgentLayout({ agent, initialExpanded }: { agent: AgentRow; initi
         <div id="agent-chart-sections" hidden={!chartsExpanded} className={expanded ? "ml-4 space-y-1 border-l border-zinc-800 pl-1" : "space-y-1"}>{chartsExpanded && chartSections.map(link)}</div>
         {link(sections[2])}
         <hr className="my-2 border-zinc-800" />
-        {sections.slice(3, -1).map(link)}
+        {sections.slice(3, -2).map(link)}
         <Link to="/agents/$agentId/memories" params={{ agentId: agent.id }} search={{}} onClick={() => setMemoriesExpanded(true)} activeOptions={{ exact: true, includeSearch: true }} activeProps={{ className: "bg-zinc-800 text-white", "aria-current": "page" }} aria-expanded={memoriesExpanded} aria-controls="agent-memory-sections" aria-label="Memories" title="Memories" className="flex h-10 shrink-0 cursor-pointer items-center gap-3 rounded-lg px-3 text-zinc-400 hover:bg-zinc-800 hover:text-white">
           <svg className="h-5 w-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 4h16v16H4zM8 8h8M8 12h8M8 16h5" /></svg>
           {expanded && <><span className="text-sm">Memories</span><span className="ml-auto text-xs" aria-hidden="true">{memoriesExpanded ? "▾" : "▸"}</span></>}
@@ -62,7 +63,7 @@ export function AgentLayout({ agent, initialExpanded }: { agent: AgentRow; initi
       </div>
       <div className="mt-auto space-y-2">
         <button type="button" onClick={toggle} aria-expanded={expanded} aria-label={expanded ? "Collapse agent navigation" : "Expand agent navigation"} title={expanded ? "Collapse agent navigation" : "Expand agent navigation"} className="flex h-10 w-full cursor-pointer items-center gap-3 rounded-lg px-3 text-zinc-400 hover:bg-zinc-800 hover:text-white"><span aria-hidden="true">{expanded ? "«" : "»"}</span>{expanded && <span className="text-sm">Collapse</span>}</button>
-        <div className="border-t border-zinc-800 pt-2">{link(sections[sections.length - 1]!)}</div>
+        <div className="space-y-1 border-t border-zinc-800 pt-2">{sections.slice(-2).map(link)}</div>
       </div>
     </nav>
     <div className="flex min-h-[calc(100dvh-5rem)] w-full min-w-0 flex-col">
