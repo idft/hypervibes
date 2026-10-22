@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import type { AgentChat, ChatEntry } from "../agents/agent-service.js";
 import { useQueryClient } from "@tanstack/react-query";
 import { agentHistoryQueryOptions } from "../web/agent-queries.js";
+import { useAgentEvent, useAgentEventsStatus } from "./agent-events.js";
 
 /** Each mounted chat/settings page owns its stream and closes it on navigation. */
 export function useAgentChat(initial: AgentChat) {
@@ -22,39 +23,34 @@ export function useAgentChat(initial: AgentChat) {
   const lastReset = useRef(initial.messages.find((entry) => entry.marker === "reset")?.id);
   const historyVersion = useRef(0);
   const id = initial.agent.id;
-  useEffect(() => { chatRef.current = chat; }, [chat]);
+  const { interrupted, controlMessage, streamErrors } = useAgentEventsStatus();
+  useAgentEvent("chat", (event) => {
+    const next = JSON.parse(event.data) as AgentChat;
+    // Only a new reset boundary clears history, not every snapshot that
+    // still contains the same marker. Invalidate pending old-context pages.
+    const reset = next.messages.find((entry) => entry.marker === "reset")?.id;
+    if (reset && reset !== lastReset.current) {
+      lastReset.current = reset;
+      historyVersion.current++;
+      before.current = undefined;
+      olderRef.current = [];
+      loadingRef.current = false;
+      doneRef.current = false;
+      setOlder([]);
+      setHistoryDone(false);
+      setHistoryLoading(false);
+    }
+    chatRef.current = next;
+    setChat(next);
+    setConnectionError("");
+  });
   useEffect(() => {
-    const source = new EventSource(`/api/agents/${id}/events`);
-    const interrupted = (event: MessageEvent | undefined, fallback: string) => {
-      setConnectionError(event ? (JSON.parse(event.data) as { message?: string }).message ?? fallback : fallback);
-    };
-    source.addEventListener("chat", (event) => {
-      const next = JSON.parse((event as MessageEvent).data) as AgentChat;
-      // Only a new reset boundary clears history, not every snapshot that
-      // still contains the same marker. Invalidate pending old-context pages.
-      const reset = next.messages.find((entry) => entry.marker === "reset")?.id;
-      if (reset && reset !== lastReset.current) {
-        lastReset.current = reset;
-        historyVersion.current++;
-        before.current = undefined;
-        olderRef.current = [];
-        loadingRef.current = false;
-        doneRef.current = false;
-        setOlder([]);
-        setHistoryDone(false);
-        setHistoryLoading(false);
-      }
-      chatRef.current = next;
-      setChat(next);
-      setConnectionError("");
-    });
-    source.addEventListener("unauthorized", () => { window.location.assign("/login"); });
-    source.addEventListener("shutdown", () => interrupted(undefined, "Server is restarting. Reconnecting…"));
-    source.addEventListener("unavailable", (event) => interrupted(event as MessageEvent, "Chat stream interrupted. Reconnecting…"));
-    source.addEventListener("stream-error", (event) => interrupted(event as MessageEvent, "Conversation is too large to stream. Reload the page."));
-    source.onerror = () => interrupted(undefined, "Connection interrupted. Reconnecting…");
-    return () => { historyVersion.current++; source.close(); };
-  }, [id]);
+    const topicError = streamErrors["chat"];
+    if (topicError) setConnectionError(topicError);
+    else if (interrupted) setConnectionError(controlMessage || "Connection interrupted. Reconnecting…");
+  }, [interrupted, controlMessage, streamErrors]);
+  useEffect(() => { chatRef.current = chat; }, [chat]);
+  useEffect(() => () => { historyVersion.current++; }, [id]);
   /** Prepends one page of transcript older than everything currently shown; returns whether a page was fetched. */
   async function loadOlder(): Promise<boolean> {
     if (loadingRef.current || doneRef.current) return false;

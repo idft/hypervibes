@@ -1,5 +1,6 @@
 import { Link, Outlet } from "@tanstack/react-router";
 import { useState } from "react";
+import { AgentEventsProvider } from "./agent-events.js";
 import { useIndicatorCatalogEvents } from "./use-indicator-catalog-events.js";
 import type { AgentRow } from "../db/agent-schema.js";
 
@@ -20,8 +21,12 @@ const memorySections = [
   { label: "Insights", to: "/agents/$agentId/memories", search: { scope: "" }, icon: "M4 4h16v16H4zM8 8h8M8 12h8M8 16h5" },
 ] as const;
 
+function IndicatorCatalogSubscriber({ agentId }: { agentId: string }) {
+  useIndicatorCatalogEvents(agentId);
+  return null;
+}
+
 export function AgentLayout({ agent, initialExpanded }: { agent: AgentRow; initialExpanded: boolean }) {
-  useIndicatorCatalogEvents(agent.id);
   const [expanded, setExpanded] = useState(initialExpanded);
   const [memoriesExpanded, setMemoriesExpanded] = useState(false);
   const [chartsExpanded, setChartsExpanded] = useState(false);
@@ -61,7 +66,10 @@ export function AgentLayout({ agent, initialExpanded }: { agent: AgentRow; initi
       </div>
     </nav>
     <div className="flex min-h-[calc(100dvh-5rem)] w-full min-w-0 flex-col">
-      <Outlet />
+      <AgentEventsProvider agentId={agent.id}>
+        <IndicatorCatalogSubscriber agentId={agent.id} />
+        <Outlet />
+      </AgentEventsProvider>
     </div>
   </div>;
 }

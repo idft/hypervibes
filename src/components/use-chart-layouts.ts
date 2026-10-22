@@ -3,6 +3,7 @@ import type { ChartEdit, ChartLayout } from "../charts/contracts.js";
 import { changeChartLayout, createChartLayout, deleteChartLayout } from "../web/charts.js";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { chartLayoutsQueryOptions } from "../web/chart-queries.js";
+import { useAgentEvent, useAgentEventsStatus } from "./agent-events.js";
 
 /** SSE snapshots are authoritative, including reconnects, agent edits and other tabs. */
 export function useChartLayouts(id: string, instruments: string[]) {
@@ -19,33 +20,28 @@ export function useChartLayouts(id: string, instruments: string[]) {
   const restorePreference = useEffectEvent(() => {
     try { const saved = localStorage.getItem(key); if (saved && layouts.some((l) => l.id === saved)) setSelected(saved); } catch { /* Optional preference. */ }
   });
+  const { interrupted, controlMessage, streamErrors } = useAgentEventsStatus();
+  useAgentEvent("chart-layouts", (event) => {
+    streamVersion.current++;
+    const snapshot = JSON.parse(event.data) as ChartLayout[];
+    client.setQueryData(chartLayoutsQueryOptions(id).queryKey, (current = []) => {
+      const known = new Map(current.map((layout) => [layout.id, layout]));
+      // SSE owns collection membership, but an older frame must not undo an
+      // already-committed mutation response received on the other connection.
+      return snapshot.map((layout) => { const previous = known.get(layout.id); return previous && previous.revision > layout.revision ? previous : layout; });
+    });
+    setReady(true);
+    setConnectionError("");
+  });
+  useEffect(() => {
+    const topicError = streamErrors["chart-layouts"];
+    if (topicError) setConnectionError(topicError);
+    else if (interrupted) setConnectionError(controlMessage || "Chart layout connection interrupted. Reconnecting…");
+  }, [interrupted, controlMessage, streamErrors]);
   useEffect(() => {
     alive.current = true;
     restorePreference();
-    let active = true;
-    const source = new EventSource(`/api/agents/${id}/chart/layouts/events`);
-    const interrupted = (event: Event | undefined, fallback: string) => {
-      if (active) setConnectionError(event ? (JSON.parse((event as MessageEvent).data) as { message?: string }).message ?? fallback : fallback);
-    };
-    source.addEventListener("chart-layouts", (event) => {
-      if (!active) return;
-      streamVersion.current++;
-      const snapshot = JSON.parse((event as MessageEvent).data) as ChartLayout[];
-      client.setQueryData(chartLayoutsQueryOptions(id).queryKey, (current = []) => {
-        const known = new Map(current.map((layout) => [layout.id, layout]));
-        // SSE owns collection membership, but an older frame must not undo an
-        // already-committed mutation response received on the other connection.
-        return snapshot.map((layout) => { const previous = known.get(layout.id); return previous && previous.revision > layout.revision ? previous : layout; });
-      });
-      setReady(true);
-      setConnectionError("");
-    });
-    source.addEventListener("unauthorized", () => { if (active) { source.close(); window.location.assign("/login"); } });
-    source.addEventListener("shutdown", () => interrupted(undefined, "Server is restarting. Reconnecting…"));
-    source.addEventListener("unavailable", (event) => interrupted(event, "Chart layout stream interrupted. Reconnecting…"));
-    source.addEventListener("stream-error", (event) => { interrupted(event, "Chart layouts are too large to stream. Reload the page."); source.close(); });
-    source.onerror = () => interrupted(undefined, "Chart layout connection interrupted. Reconnecting…");
-    return () => { active = false; alive.current = false; streamVersion.current++; source.close(); };
+    return () => { alive.current = false; streamVersion.current++; };
   }, [client, id]);
   async function run(operation: (before: number) => Promise<ChartLayout | undefined>) {
     if (busy.current) return undefined;

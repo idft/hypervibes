@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { useAgentEvent, useAgentEventsStatus } from "./agent-events.js";
 import type { AgentDashboard } from "../hyperliquid/agent-dashboard.js";
 import { addDecimals, compareDecimals, formatAmountText, formatMoneyText } from "../hyperliquid/decimal.js";
 import { InstrumentLabel } from "./instrument-label.js";
@@ -17,26 +18,27 @@ function Statistic({ label, value, pnl = false }: { label: string; value: string
 }
 const cell = "whitespace-nowrap px-3 py-3 text-left";
 
-export function AgentDashboardPage({ id, initial, subagents = [], subagentsError }: { id: string; initial: AgentDashboard; subagents?: DashboardSubagent[]; subagentsError?: string }) {
+const noSubagents: DashboardSubagent[] = [];
+
+export function AgentDashboardPage({ id, initial, subagents = noSubagents, subagentsError }: { id: string; initial: AgentDashboard; subagents?: DashboardSubagent[]; subagentsError?: string }) {
   const [snapshot, setSnapshot] = useState(initial);
   const [error, setError] = useState("");
+  const { interrupted, controlMessage, streamErrors } = useAgentEventsStatus();
+  const hasAddress = Boolean(initial.address);
+  useAgentEvent("dashboard", (event) => {
+    setSnapshot(JSON.parse(event.data) as AgentDashboard);
+    setError("");
+  }, hasAddress);
   useEffect(() => {
     setSnapshot(initial);
     setError("");
-    if (!initial.address) return;
-    const source = new EventSource(`/api/agents/${id}/dashboard/events`);
-    source.addEventListener("dashboard", (event) => {
-      setSnapshot(JSON.parse((event as MessageEvent).data) as AgentDashboard);
-      setError("");
-    });
-    source.addEventListener("unauthorized", () => { source.close(); window.location.assign("/login"); });
-    const interrupted = () => setError("Live connection interrupted. Reconnecting… Displayed data is from the last snapshot, not current.");
-    source.addEventListener("shutdown", interrupted);
-    source.addEventListener("unavailable", interrupted);
-    source.addEventListener("stream-error", () => { source.close(); setError("Account snapshot is too large to stream. Reload the page."); });
-    source.onerror = interrupted;
-    return () => source.close();
   }, [id, initial]);
+  useEffect(() => {
+    if (!hasAddress) return;
+    const topicError = streamErrors["dashboard"];
+    if (topicError) setError(topicError);
+    else if (interrupted) setError(controlMessage || "Live connection interrupted. Reconnecting… Displayed data is from the last snapshot, not current.");
+  }, [hasAddress, interrupted, controlMessage, streamErrors]);
   const connected = !error && snapshot.live?.status === "connected";
   const current = connected && Object.values(snapshot.live!.sections).every((section) => section.fresh) && snapshot.errors.length === 0;
   const connectionLabel = current ? "Connected" : connected ? "Connected · Data stale" : "Disconnected";

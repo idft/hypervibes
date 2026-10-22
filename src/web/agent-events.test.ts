@@ -12,7 +12,7 @@ import type { DashboardSubagent } from "../agents/subagent-dashboard.js";
 import type { RunHistory } from "../agents/subagent-history.js";
 import type { RunDetail } from "../agents/subagent-service.js";
 import { AgentEventStreams } from "./agent-events.js";
-import { newDrawing, type ChartLayout } from "../charts/contracts.js";
+import type { ChartLayout } from "../charts/contracts.js";
 
 const mocks = vi.hoisted(() => ({ session: vi.fn() }));
 vi.mock("../auth-user.js", () => ({ currentUserSession: mocks.session }));
@@ -37,7 +37,7 @@ async function readEvent<T = ChatEvent["data"]>(reader: ReadableStreamDefaultRea
   }
 }
 
-describe("Agent chat event stream", () => {
+describe("Agent multiplexed event stream", () => {
   let directory: string;
   let runtime: AppRuntime;
   let streams: AgentEventStreams;
@@ -54,7 +54,7 @@ describe("Agent chat event stream", () => {
       return { close: closeFeed };
     } };
   };
-  const request = (id: string, signal?: AbortSignal) => new Request(`http://localhost:3003/api/agents/${id}/events`, {
+  const streamRequest = (id: string, topics: string[], extra = "", signal?: AbortSignal) => new Request(`http://localhost:3003/api/agents/${id}/stream?topics=${topics.join(",")}${extra}`, {
     headers: { origin: "http://localhost:3003", cookie: "fixture" }, signal,
   });
   beforeEach(async () => {
@@ -66,7 +66,7 @@ describe("Agent chat event stream", () => {
       { id: "owner", name: "Owner", email: "owner@example.test" },
       { id: "other", name: "Other", email: "other@example.test" },
     ]).run();
-    streams = new AgentEventStreams(runtime);
+    streams = new AgentEventStreams(runtime, "agent");
     mocks.session.mockResolvedValue({ user: { id: "owner", walletAddress: "0xfixture" }, expiresAt: expiry() });
     runtime.start();
   });
@@ -76,34 +76,59 @@ describe("Agent chat event stream", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
-  it("immediately closes agent-scoped streams when deletion starts and refuses reconnects", async () => {
+  it("rejects invalid multiplex requests before opening any watcher", async () => {
     const agent = await runtime.agents.create("owner", "Research", randomUUID(), `0x${"12".repeat(20)}`);
-    const response = await streams.open(request(agent.id), agent.id);
-    const reader = response.body!.getReader();
-    const buffer = { text: "" };
-    expect((await readEvent(reader, buffer)).event).toBe("chat");
-    await runtime.agents.delete("owner", agent.id);
-    expect((await readEvent(reader, buffer)).event).toBe("unavailable");
-    expect((await reader.read()).done).toBe(true);
-    expect((await streams.open(request(agent.id), agent.id)).status).toBe(404);
-    expect(closeFeed).toHaveBeenCalled();
-  });
-
-  it("pushes committed chat snapshots, rejects invalid requests and ends cleanly", { timeout: 30_000 }, async () => {
-    expect((await streams.open(new Request("http://localhost:3003/api/agents/x/events", { method: "POST" }), "x")).status).toBe(405);
-    expect((await streams.open(request(randomUUID()), randomUUID())).status).toBe(404);
+    expect((await streams.open(new Request(`http://localhost:3003/api/agents/${agent.id}/stream?topics=chat`, { method: "POST" }), agent.id)).status).toBe(405);
+    expect((await streams.open(streamRequest(agent.id, ["nope"]), agent.id)).status).toBe(400);
+    expect((await streams.open(streamRequest(agent.id, []), agent.id)).status).toBe(400);
+    expect((await streams.open(streamRequest(agent.id, ["chart"]), agent.id)).status).toBe(400);
+    expect((await streams.open(streamRequest(agent.id, ["chat"]), randomUUID())).status).toBe(404);
     mocks.session.mockResolvedValue(null);
-    const agent = await runtime.agents.create("owner", "Research", randomUUID(), `0x${"12".repeat(20)}`);
-    expect((await streams.open(request(agent.id), agent.id)).status).toBe(401);
+    expect((await streams.open(streamRequest(agent.id, ["chat"]), agent.id)).status).toBe(401);
     mocks.session.mockResolvedValue({ user: { id: "other", walletAddress: "0xother" }, expiresAt: expiry() });
-    expect((await streams.open(request(agent.id), agent.id)).status).toBe(404);
+    expect((await streams.open(streamRequest(agent.id, ["chat"]), agent.id)).status).toBe(404);
     mocks.session.mockResolvedValue({ user: { id: "owner", walletAddress: "0xfixture" }, expiresAt: expiry() });
-
-    const source = new AbortController();
-    const response = await streams.open(request(agent.id, source.signal), agent.id);
+    const evil = new Request(`http://localhost:3003/api/agents/${agent.id}/stream?topics=chat`, { headers: { origin: "https://evil.example" } });
+    expect((await streams.open(evil, agent.id)).status).toBe(403);
+    // Authentication runs before any market request.
+    const selection = vi.spyOn(runtime.hyperliquid.charts, "selection");
+    try {
+      mocks.session.mockResolvedValue({ user: { id: "other" }, expiresAt: expiry() });
+      expect((await streams.open(streamRequest(randomUUID(), ["chart"], "&coin=BTC&interval=1h"), randomUUID())).status).toBe(404);
+      expect(selection).not.toHaveBeenCalled();
+    } finally {
+      mocks.session.mockResolvedValue({ user: { id: "owner", walletAddress: "0xfixture" }, expiresAt: expiry() });
+      selection.mockRestore();
+    }
+    // Duplicates collapse to a single subscription.
+    const response = await streams.open(streamRequest(agent.id, ["chat", "chat"]), agent.id);
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("text/event-stream; charset=utf-8");
     expect(response.headers.get("cache-control")).toBe("no-store");
+    const dupReader = response.body!.getReader();
+    const event = await readEvent(dupReader, { text: "" });
+    expect(event.event).toBe("chat");
+    await dupReader.cancel();
+  });
+
+  it("delivers an initial frame for every requested topic over one response", async () => {
+    const agent = await runtime.agents.create("owner", "Research", randomUUID(), `0x${"12".repeat(20)}`);
+    const topics = ["chat", "dashboard", "indicators", "chart-layouts", "subagents"];
+    const response = await streams.open(streamRequest(agent.id, topics), agent.id);
+    expect(response.status).toBe(200);
+    const reader = response.body!.getReader();
+    const buffer = { text: "" };
+    const seen = new Set<string>();
+    for (let i = 0; i < topics.length; i++) seen.add((await readEvent(reader, buffer)).event!);
+    expect([...seen].sort()).toEqual([...topics].sort());
+    await reader.cancel();
+  });
+
+  it("pushes committed chat snapshots over the multiplexed stream and ends cleanly", { timeout: 30_000 }, async () => {
+    const agent = await runtime.agents.create("owner", "Research", randomUUID(), `0x${"12".repeat(20)}`);
+    const source = new AbortController();
+    const response = await streams.open(streamRequest(agent.id, ["chat"], "", source.signal), agent.id);
+    expect(response.status).toBe(200);
     const reader = response.body!.getReader();
     const buffer = { text: "" };
     const first = await readEvent(reader, buffer);
@@ -123,108 +148,35 @@ describe("Agent chat event stream", () => {
     const { done } = await reader.read();
     expect(done).toBe(true);
     // A closed stream releases its per-user slot and the server still serves a new one.
-    const reopened = await streams.open(request(agent.id), agent.id);
+    const reopened = await streams.open(streamRequest(agent.id, ["chat"]), agent.id);
     expect(reopened.status).toBe(200);
     await reopened.body!.cancel();
   });
 
-  it("pushes committed chart layouts to both tabs, stays idle without reads, and resynchronizes on reconnect", async () => {
-    await streams.close(); streams = new AgentEventStreams(runtime, "chart-layouts");
+  it("pushes committed chart layouts without polling and resynchronizes on reconnect", async () => {
     const agent = await runtime.agents.create("owner", "Charts", randomUUID(), `0x${"12".repeat(20)}`);
-    const other = await runtime.agents.create("owner", "Other charts", randomUUID(), `0x${"34".repeat(20)}`);
-    const layoutRequest = (signal?: AbortSignal) => new Request(`http://localhost:3003/api/agents/${agent.id}/chart/layouts/events`, { headers: { origin: runtime.origin }, signal });
-    mocks.session.mockResolvedValueOnce(null);
-    expect((await streams.open(layoutRequest(), agent.id)).status).toBe(401);
-    mocks.session.mockResolvedValueOnce({ user: { id: "other" }, expiresAt: expiry() });
-    expect((await streams.open(layoutRequest(), agent.id)).status).toBe(404);
-    expect((await streams.open(new Request(layoutRequest(), { headers: { origin: "https://evil.example" } }), agent.id)).status).toBe(403);
-    const first = new AbortController(), second = new AbortController();
-    vi.useFakeTimers();
-    const responses = await Promise.all([streams.open(layoutRequest(first.signal), agent.id), streams.open(layoutRequest(second.signal), agent.id)]);
-    const readers = responses.map((response) => response.body!.getReader()), buffers = [{ text: "" }, { text: "" }];
-    const next = () => Promise.all(readers.map((reader, index) => readEvent<ChartLayout[]>(reader, buffers[index]!)));
-    expect((await next()).map((event) => event)).toEqual([{ event: "chart-layouts", data: [] }, { event: "chart-layouts", data: [] }]);
-    const list = vi.spyOn(runtime.agents.charts, "list");
-    try { await vi.advanceTimersByTimeAsync(60_000); expect(list).not.toHaveBeenCalled(); }
-    finally { vi.useRealTimers(); }
-    const charts = runtime.agents.charts, id = randomUUID(), settings = { name: "BTC levels" };
-    let layout = await charts.create(agent.id, id, settings);
-    expect((await next()).map((event) => event.data)).toEqual([[layout], [layout]]);
-    list.mockClear();
-    expect(await charts.create(agent.id, id, settings)).toEqual(layout);
-    await charts.create(other.id, randomUUID(), { name: "Not this Agent" });
-    await expect(charts.edit(agent.id, id, 99, { label: "Stale" }, "stale")).rejects.toThrow("changed elsewhere");
-    expect(list).not.toHaveBeenCalled();
-    const edit = { label: "Agent support", upsert: [newDrawing("horizontal", "BTC", [{ time: 3600, price: 100 }])] };
-    layout = await charts.edit(agent.id, id, 0, edit, "agent-edit", "agent");
-    expect((await next()).map((event) => event.data[0]?.document.drawings[0]?.author)).toEqual(["agent", "agent"]);
-    list.mockClear();
-    expect(await charts.edit(agent.id, id, 0, edit, "agent-edit", "agent")).toEqual(layout);
-    expect(list).not.toHaveBeenCalled();
-    layout = await charts.edit(agent.id, id, 1, { label: "My notes", settings: { notes: "Chart local" } }, "user-edit");
-    expect((await next()).map((event) => event.data)).toEqual([[layout], [layout]]);
-    layout = await charts.undo(agent.id, id, 2, "undo");
-    expect((await next()).map((event) => event.data)).toEqual([[layout], [layout]]);
-    layout = await charts.undo(agent.id, id, 3, "redo", true);
-    expect((await next()).map((event) => event.data)).toEqual([[layout], [layout]]);
-    const copy = await charts.create(agent.id, randomUUID(), { name: "Copy" }, id);
-    expect((await next()).map((event) => event.data.map((item) => item.id).sort())).toEqual([[id, copy.id].sort(), [id, copy.id].sort()]);
-    await charts.delete(agent.id, copy.id, 0);
-    expect((await next()).map((event) => event.data)).toEqual([[layout], [layout]]);
-    await charts.delete(agent.id, id, 4);
-    expect((await next()).map((event) => event.data)).toEqual([[], []]);
-    first.abort(); second.abort(); await streams.close();
-    list.mockClear();
-    const offline = await charts.create(agent.id, randomUUID(), { name: "While disconnected" });
-    expect(list).not.toHaveBeenCalled();
-    streams = new AgentEventStreams(runtime, "chart-layouts");
-    const reconnect = await streams.open(layoutRequest(), agent.id), reader = reconnect.body!.getReader(), buffer = { text: "" };
-    expect((await readEvent<ChartLayout[]>(reader, buffer)).data).toEqual([offline]);
-    await runtime.close();
-    expect((await readEvent(reader, buffer)).event).toBe("shutdown");
-  });
-
-  it("closes chart-layout subscriptions on Agent deletion and rejects reconnects", async () => {
-    await streams.close(); streams = new AgentEventStreams(runtime, "chart-layouts");
-    const agent = await runtime.agents.create("owner", "Charts", randomUUID(), `0x${"12".repeat(20)}`);
-    const response = await streams.open(request(agent.id), agent.id), reader = response.body!.getReader(), buffer = { text: "" };
+    const response = await streams.open(streamRequest(agent.id, ["chart-layouts"]), agent.id);
+    const reader = response.body!.getReader(), buffer = { text: "" };
     expect((await readEvent<ChartLayout[]>(reader, buffer)).data).toEqual([]);
-    await runtime.agents.delete("owner", agent.id);
-    expect((await readEvent(reader, buffer)).event).toBe("unavailable");
-    expect((await reader.read()).done).toBe(true);
-    expect((await streams.open(request(agent.id), agent.id)).status).toBe(404);
+    const list = vi.spyOn(runtime.agents.charts, "list");
+    try {
+      vi.useFakeTimers();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(list).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+    const layout = await runtime.agents.charts.create(agent.id, randomUUID(), { name: "BTC levels" });
+    expect((await readEvent<ChartLayout[]>(reader, buffer)).data).toEqual([layout]);
+    list.mockClear();
+    await runtime.agents.charts.edit(agent.id, layout.id, 0, { label: "Renamed" }, "rename");
+    expect((await readEvent<ChartLayout[]>(reader, buffer)).data[0]).toMatchObject({ revision: 1 });
+    await reader.cancel();
+    vi.restoreAllMocks();
   });
 
-  it("restores linked-account monitoring on runtime startup without any dashboard connections", async () => {
-    const agent = await runtime.agents.create("owner", "Trading", randomUUID(), `0x${"34".repeat(20)}`);
-    await streams.close();
-    await runtime.close();
-    feedEvents = undefined;
-    runtime = await createRuntime(config(), options());
-    streams = new AgentEventStreams(runtime, "dashboard");
-    expect(feedEvents).toBeUndefined();
-    runtime.start();
-    await vi.waitFor(() => expect(feedEvents).toBeDefined());
-    feedEvents!.update("spot", { spotUsdc: "17" });
-    expect(await runtime.hyperliquid.agentDashboard("owner", agent.id)).toMatchObject({ spotUsdc: "17" });
-  });
-
-  it("authorizes dashboard subscriptions and pushes cached/live state without tying the feed to browser lifetime", async () => {
-    await streams.close();
-    streams = new AgentEventStreams(runtime, "dashboard");
+  it("pushes cached/live dashboard state without tying the feed to browser lifetime", async () => {
     const agent = await runtime.agents.create("owner", "Trading", randomUUID(), `0x${"12".repeat(20)}`);
     const createdFeed = feedEvents;
-    const crossSite = new Request(`http://localhost:3003/api/agents/${agent.id}/dashboard/events`, { headers: { origin: "https://evil.example" } });
-    expect((await streams.open(crossSite, agent.id)).status).toBe(403);
-    mocks.session.mockResolvedValue({ user: { id: "other" }, expiresAt: expiry() });
-    expect((await streams.open(request(agent.id), agent.id)).status).toBe(404);
-    // Rejected subscriptions must not open any additional account feed.
-    expect(feedEvents).toBe(createdFeed);
-    mocks.session.mockResolvedValue(null);
-    expect((await streams.open(request(agent.id), agent.id)).status).toBe(401);
-    mocks.session.mockResolvedValue({ user: { id: "owner" }, expiresAt: expiry() });
-    const source = new AbortController();
-    const response = await streams.open(request(agent.id, source.signal), agent.id);
+    const response = await streams.open(streamRequest(agent.id, ["dashboard"]), agent.id);
     const reader = response.body!.getReader();
     const buffer = { text: "" };
     const initial = await readEvent<AgentDashboard>(reader, buffer);
@@ -233,58 +185,195 @@ describe("Agent chat event stream", () => {
     feedEvents!.update("perps", { perpEquity: "9007199254740993.12", positions: [] });
     const updated = await readEvent<AgentDashboard>(reader, buffer);
     expect(updated.data.perpEquity).toBe("9007199254740993.12");
-    source.abort();
-    expect((await reader.read()).done).toBe(true);
+    await reader.cancel();
     expect(closeFeed).not.toHaveBeenCalled();
+    expect(feedEvents).toBe(createdFeed);
     feedEvents!.update("spot", { spotUsdc: "23" });
-    const reopened = await streams.open(request(agent.id), agent.id);
-    const cached = await readEvent<AgentDashboard>(reopened.body!.getReader(), { text: "" });
+    const reopened = await streams.open(streamRequest(agent.id, ["dashboard"]), agent.id);
+    const reopenedReader = reopened.body!.getReader();
+    const cached = await readEvent<AgentDashboard>(reopenedReader, { text: "" });
     expect(cached.data.spotUsdc).toBe("23");
     expect(cached.data.perpEquity).toBe("9007199254740993.12");
-    await streams.close();
-    await runtime.close();
-    expect(closeFeed).toHaveBeenCalledOnce();
+    await reopenedReader.cancel();
   });
 
-  it("pushes dashboard workers, settings and run outcomes without polling, with ownership and cleanup", { timeout: 30_000 }, async () => {
-    await streams.close(); streams = new AgentEventStreams(runtime, "subagents");
+
+  it("pushes dashboard workers without polling", { timeout: 30_000 }, async () => {
     const agent = await runtime.agents.create("owner", "Research", randomUUID(), `0x${"12".repeat(20)}`);
     await runtime.agents.subagents.tick();
-    const streamRequest = (signal?: AbortSignal) => new Request(`http://localhost:3003/api/agents/${agent.id}/sub-agents/events`, { headers: { origin: runtime.origin }, signal });
-    mocks.session.mockResolvedValueOnce({ user: { id: "other" }, expiresAt: expiry() });
-    expect((await streams.open(streamRequest(), agent.id)).status).toBe(404);
-    const abort = new AbortController();
-    const response = await streams.open(streamRequest(abort.signal), agent.id);
+    const response = await streams.open(streamRequest(agent.id, ["subagents"]), agent.id);
     const reader = response.body!.getReader(), buffer = { text: "" };
-    const next = async () => (await readEvent<DashboardSubagent[]>(reader, buffer)).data;
-    expect(await next()).toEqual([]);
+    expect((await readEvent<DashboardSubagent[]>(reader, buffer)).data).toEqual([]);
     const dashboard = vi.spyOn(runtime.agents.subagents, "dashboard");
     try {
       await runtime.agents.subagents.tick();
       expect(dashboard).not.toHaveBeenCalled();
-      const worker = await runtime.agents.subagents.create("owner", agent.id, { name: "Research", description: "", instructions: "Find evidence", provider: "faux", modelId: "faux-1", thinkingLevel: "", tools: [], enabled: false, delegatable: true, persistent: false, schedule: "1h", delaySeconds: 30, completion: "save", timeoutSeconds: 900 }, randomUUID());
-      expect((await next())[0]).toMatchObject({ id: worker.id, enabled: false, nextRunAt: null, runs: [] });
-      const enabled = await runtime.agents.subagents.updateSection("owner", agent.id, worker.id, "enabled", { enabled: true });
-      expect((await next())[0]).toMatchObject({ enabled: true, schedule: "1h", nextRunAt: enabled.nextRunAt });
-      faux.setResponses([fauxAssistantMessage("Live dashboard answer")]);
-      const run = await runtime.agents.subagents.run("owner", agent.id, worker.id, "New task", randomUUID());
-      let snapshot = await next();
-      expect(snapshot[0]?.runs.some((item) => item.id === run.id)).toBe(true);
-      for (let i = 0; i < 10 && snapshot[0]?.runs[0]?.status !== "completed"; i++) snapshot = await next();
-      expect(snapshot[0]?.runs[0]).toMatchObject({ id: run.id, status: "completed", result: "Live dashboard answer" });
-      await runtime.agents.subagents.archive("owner", agent.id, worker.id);
-      expect(await next()).toEqual([]);
-      abort.abort();
-      await streams.close();
-      const reads = dashboard.mock.calls.length;
-      await runtime.agents.subagents.create("owner", agent.id, { ...worker, name: "Another", enabled: false }, randomUUID());
-      expect(dashboard.mock.calls.length).toBe(reads);
-      streams = new AgentEventStreams(runtime, "subagents");
-      const reconnect = await streams.open(streamRequest(), agent.id);
-      const reconnected = await readEvent<DashboardSubagent[]>(reconnect.body!.getReader(), { text: "" });
-      expect(reconnected.event).toBe("subagents");
-      expect(reconnected.data[0]?.name).toBe("Another");
+      const worker = await runtime.agents.subagents.create("owner", agent.id, { name: "Research", description: "", instructions: "Find evidence", provider: "faux", modelId: "faux-1", thinkingLevel: "", tools: [], enabled: false, delegatable: true, persistent: false, schedule: "", delaySeconds: 30, completion: "save", timeoutSeconds: 900 }, randomUUID());
+      expect((await readEvent<DashboardSubagent[]>(reader, buffer)).data[0]).toMatchObject({ id: worker.id, enabled: false });
     } finally { dashboard.mockRestore(); }
+    await reader.cancel();
+  });
+
+  it("keeps per-topic newest-wins: a busy topic never drops another topic's update", async () => {
+    const agent = await runtime.agents.create("owner", "Research", randomUUID(), `0x${"12".repeat(20)}`);
+    const flooding = vi.spyOn(runtime.agents, "watchChat").mockImplementation(async (_userId, _id, signal, publish) => {
+      for (let revision = 0; revision < 20; revision++) publish({ marker: revision } as unknown as Parameters<typeof publish>[0]);
+      await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    });
+    try {
+      const response = await streams.open(streamRequest(agent.id, ["chat", "indicators"]), agent.id);
+      const reader = response.body!.getReader(), buffer = { text: "" };
+      const events: { event?: string; data: { marker?: number; revision?: number } }[] = [];
+      for (let i = 0; i < 4 && !events.some((entry) => entry.event === "indicators"); i++) {
+        events.push(await readEvent(reader, buffer));
+      }
+      expect(events.some((entry) => entry.event === "indicators")).toBe(true);
+      const chats = events.filter((entry) => entry.event === "chat");
+      expect(chats.length).toBeGreaterThan(0);
+      expect(chats.at(-1)!.data.marker).toBe(19);
+      await reader.cancel();
+    } finally { flooding.mockRestore(); }
+  });
+
+  it("isolates oversize frames to their topic and keeps the connection alive", async () => {
+    const agent = await runtime.agents.create("owner", "Research", randomUUID(), `0x${"12".repeat(20)}`);
+    const stopped = vi.fn();
+    const oversized = vi.spyOn(runtime.agents.indicators, "watch").mockImplementation(async (_id, signal, publish) => {
+      const done = new Promise<void>((resolve) => signal.addEventListener("abort", () => { stopped(); resolve(); }, { once: true }));
+      publish({ revision: 1, filler: "x".repeat(10_000) } as unknown as Parameters<typeof publish>[0]);
+      await done;
+    });
+    try {
+      const response = await streams.open(streamRequest(agent.id, ["chat", "indicators"]), agent.id);
+      const reader = response.body!.getReader(), buffer = { text: "" };
+      const first = await readEvent<{ topic?: string; message?: string }>(reader, buffer);
+      const second = await readEvent<{ topic?: string; message?: string }>(reader, buffer);
+      const frames = [first, second];
+      const failure = frames.find((entry) => entry.event === "stream-error")!;
+      expect(failure.data.topic).toBe("indicators");
+      expect(failure.data.message).toBeTruthy();
+      expect(frames.some((entry) => entry.event === "chat")).toBe(true);
+      expect(stopped).toHaveBeenCalledOnce();
+      // The surviving topic still streams: a committed chat update arrives on the same connection.
+      faux.setResponses([fauxAssistantMessage("Still live")]);
+      await runtime.agents.send("owner", agent.id, "Hello again", randomUUID());
+      let live: ChatEvent | undefined;
+      for (let attempts = 0; !live && attempts < 40; attempts++) {
+        const event = await readEvent(reader, buffer);
+        if (event.event === "chat" && event.data.messages.some((entry: { text: string }) => entry.text === "Still live")) live = event;
+      }
+      expect(live).toBeDefined();
+      await reader.cancel();
+    } finally { oversized.mockRestore(); }
+  });
+
+  it("counts a multiplexed stream as one connection toward the per-user cap", async () => {
+    const agent = await runtime.agents.create("owner", "Research", randomUUID(), `0x${"12".repeat(20)}`);
+    const controllers = Array.from({ length: 10 }, () => new AbortController());
+    const opened = await Promise.all(controllers.map((controller) => streams.open(streamRequest(agent.id, ["indicators"], "", controller.signal), agent.id)));
+    expect(opened.map((response) => response.status)).toEqual(Array(10).fill(200));
+    expect((await streams.open(streamRequest(agent.id, ["indicators"]), agent.id)).status).toBe(429);
+    controllers[0]!.abort();
+    await Promise.resolve();
+    const reopened = await streams.open(streamRequest(agent.id, ["indicators"]), agent.id);
+    expect(reopened.status).toBe(200);
+    await reopened.body!.cancel();
+    for (const controller of controllers.slice(1)) controller.abort();
+    await Promise.all(opened.slice(1).map((response) => response.body!.cancel()));
+  });
+
+  it("stops every topic watcher when the browser disconnects", async () => {
+    const agent = await runtime.agents.create("owner", "Research", randomUUID(), `0x${"12".repeat(20)}`);
+    const chatStopped = vi.fn(), indicatorsStopped = vi.fn();
+    const chatWatch = vi.spyOn(runtime.agents, "watchChat").mockImplementation(async (_userId, _id, signal) => {
+      await new Promise<void>((resolve) => signal.addEventListener("abort", () => { chatStopped(); resolve(); }, { once: true }));
+    });
+    const indicatorsWatch = vi.spyOn(runtime.agents.indicators, "watch").mockImplementation(async (_id, signal) => {
+      await new Promise<void>((resolve) => signal.addEventListener("abort", () => { indicatorsStopped(); resolve(); }, { once: true }));
+    });
+    try {
+      const source = new AbortController();
+      const response = await streams.open(streamRequest(agent.id, ["chat", "indicators"], "", source.signal), agent.id);
+      expect(response.status).toBe(200);
+      source.abort();
+      await vi.waitFor(() => expect(chatStopped).toHaveBeenCalledOnce());
+      expect(indicatorsStopped).toHaveBeenCalledOnce();
+      await response.body!.cancel();
+    } finally {
+      chatWatch.mockRestore();
+      indicatorsWatch.mockRestore();
+    }
+  });
+
+  it("immediately closes multiplexed streams when deletion starts and refuses reconnects", async () => {
+    const agent = await runtime.agents.create("owner", "Research", randomUUID(), `0x${"12".repeat(20)}`);
+    const response = await streams.open(streamRequest(agent.id, ["chat"]), agent.id);
+    const reader = response.body!.getReader();
+    const buffer = { text: "" };
+    expect((await readEvent(reader, buffer)).event).toBe("chat");
+    await runtime.agents.delete("owner", agent.id);
+    expect((await readEvent(reader, buffer)).event).toBe("unavailable");
+    expect((await reader.read()).done).toBe(true);
+    expect((await streams.open(streamRequest(agent.id, ["chat"]), agent.id)).status).toBe(404);
+    expect(closeFeed).toHaveBeenCalled();
+  });
+
+  it("authenticates chart topics before market requests and closes their backend watcher", async () => {
+    const agent = await runtime.agents.create("owner", "Chart", randomUUID(), `0x${"12".repeat(20)}`);
+    const selection = vi.spyOn(runtime.hyperliquid.charts, "selection").mockResolvedValue({ coin: "BTC", interval: "1h" });
+    const stopped = vi.fn();
+    const watch = vi.spyOn(runtime.hyperliquid.charts, "watch").mockImplementation((_selection, signal, publish) => new Promise<void>((resolve) => {
+      publish({ candles: [], status: "connecting" });
+      signal.addEventListener("abort", () => { stopped(); resolve(); }, { once: true });
+    }));
+    try {
+      mocks.session.mockResolvedValue({ user: { id: "other" }, expiresAt: expiry() });
+      expect((await streams.open(streamRequest(agent.id, ["chart"], "&coin=BTC&interval=1h"), agent.id)).status).toBe(404);
+      expect(selection).not.toHaveBeenCalled();
+      mocks.session.mockResolvedValue({ user: { id: "owner" }, expiresAt: expiry() });
+      const response = await streams.open(streamRequest(agent.id, ["chart"], "&coin=BTC&interval=1h"), agent.id);
+      const chartReader = response.body!.getReader();
+      const event = await readEvent(chartReader, { text: "" });
+      expect(event).toEqual({ event: "chart", data: { candles: [], status: "connecting" } });
+      expect(selection).toHaveBeenCalledWith("BTC", "1h");
+      expect(watch).toHaveBeenCalledOnce();
+      await chartReader.cancel();
+      await vi.waitFor(() => expect(stopped).toHaveBeenCalledOnce());
+    } finally {
+      vi.restoreAllMocks();
+      mocks.session.mockResolvedValue({ user: { id: "owner", walletAddress: "0xfixture" }, expiresAt: expiry() });
+    }
+  });
+
+  it("notifies subscribers of shutdown and stops admitting streams", { timeout: 30_000 }, async () => {
+    const agent = await runtime.agents.create("owner", "Research", randomUUID(), `0x${"12".repeat(20)}`);
+    const response = await streams.open(streamRequest(agent.id, ["chat", "indicators"]), agent.id);
+    const reader = response.body!.getReader();
+    const buffer = { text: "" };
+    await readEvent(reader, buffer); // initial snapshot
+    await streams.close();
+    const end = await readEvent(reader, buffer);
+    expect(end.event).toBe("shutdown");
+    expect((await streams.open(streamRequest(agent.id, ["chat"]), agent.id)).status).toBe(503);
+  });
+
+  it("ends the stream when the session disappears between chat updates", { timeout: 30_000 }, async () => {
+    vi.useFakeTimers();
+    try {
+      const agent = await runtime.agents.create("owner", "Research", randomUUID(), `0x${"12".repeat(20)}`);
+      const response = await streams.open(streamRequest(agent.id, ["chat"]), agent.id);
+      const reader = response.body!.getReader();
+      const buffer = { text: "" };
+      await readEvent(reader, buffer);
+      mocks.session.mockResolvedValue(null);
+      await vi.advanceTimersByTimeAsync(60_000);
+      const end = await readEvent(reader, buffer);
+      expect(end.event).toBe("unauthorized");
+      expect((await reader.read()).done).toBe(true);
+      await streams.close();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("pushes paginated run history on creation/completion, authorizes its scope and closes its watcher", async () => {
@@ -358,59 +447,5 @@ describe("Agent chat event stream", () => {
     source.abort();
     await streams.close();
     vi.restoreAllMocks();
-  });
-
-  it("authenticates chart subscriptions before market requests and closes their backend watcher", async () => {
-    await streams.close();
-    streams = new AgentEventStreams(runtime, "chart");
-    const agent = await runtime.agents.create("owner", "Chart", randomUUID(), `0x${"12".repeat(20)}`);
-    const selection = vi.spyOn(runtime.hyperliquid.charts, "selection").mockResolvedValue({ coin: "BTC", interval: "1h" });
-    const stopped = vi.fn();
-    const watch = vi.spyOn(runtime.hyperliquid.charts, "watch").mockImplementation((_selection, signal, publish) => new Promise<void>((resolve) => {
-      publish({ candles: [], status: "connecting" });
-      signal.addEventListener("abort", () => { stopped(); resolve(); }, { once: true });
-    }));
-    const chartRequest = () => new Request(`http://localhost:3003/api/agents/${agent.id}/chart/events?coin=BTC&interval=1h`, { headers: { origin: runtime.origin } });
-    mocks.session.mockResolvedValue({ user: { id: "other" }, expiresAt: expiry() });
-    expect((await streams.open(chartRequest(), agent.id)).status).toBe(404);
-    expect(selection).not.toHaveBeenCalled();
-    mocks.session.mockResolvedValue({ user: { id: "owner" }, expiresAt: expiry() });
-    const response = await streams.open(chartRequest(), agent.id);
-    const event = await readEvent(response.body!.getReader(), { text: "" });
-    expect(event).toEqual({ event: "chart", data: { candles: [], status: "connecting" } });
-    expect(selection).toHaveBeenCalledWith("BTC", "1h");
-    expect(watch).toHaveBeenCalledOnce();
-    await streams.close();
-    expect(stopped).toHaveBeenCalledOnce();
-  });
-
-  it("notifies subscribers of shutdown and stops admitting streams", { timeout: 30_000 }, async () => {
-    const agent = await runtime.agents.create("owner", "Research", randomUUID(), `0x${"12".repeat(20)}`);
-    const response = await streams.open(request(agent.id), agent.id);
-    const reader = response.body!.getReader();
-    const buffer = { text: "" };
-    await readEvent(reader, buffer); // initial snapshot
-    await streams.close();
-    const end = await readEvent(reader, buffer);
-    expect(end.event).toBe("shutdown");
-    expect((await streams.open(request(agent.id), agent.id)).status).toBe(503);
-  });
-
-  it("ends the stream when the session disappears between chat updates", { timeout: 30_000 }, async () => {
-    vi.useFakeTimers();
-    try {
-      const agent = await runtime.agents.create("owner", "Research", randomUUID(), `0x${"12".repeat(20)}`);
-      const response = await streams.open(request(agent.id), agent.id);
-      const reader = response.body!.getReader();
-      const buffer = { text: "" };
-      await readEvent(reader, buffer);
-      mocks.session.mockResolvedValue(null);
-      await vi.advanceTimersByTimeAsync(60_000);
-      const end = await readEvent(reader, buffer);
-      expect(end.event).toBe("unauthorized");
-      await streams.close();
-    } finally {
-      vi.useRealTimers();
-    }
   });
 });

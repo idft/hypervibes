@@ -6,7 +6,6 @@ import { CurrencyLogoCache } from "../hyperliquid/logo-cache.js";
 import { isPerpetualLogoSymbol } from "../hyperliquid/currency-logo.js";
 import { ProviderLogoCache, isProviderSlug } from "../providers/provider-logo.js";
 import { NodeRequest, sendNodeResponse } from "srvx/node";
-import { StartRequest } from "./start-request.js";
 import type { AppConfig } from "../config.js";
 import { createRuntime } from "../runtime.js";
 import { AgentEventStreams } from "./agent-events.js";
@@ -57,18 +56,13 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
     if (host !== origin.host) return reply.code(400).send({ error: "Invalid request host" });
   });
   const runtime = await createRuntime(config, { logger: app.log });
-  const streams = new AgentEventStreams(runtime);
+  const multiplex = new AgentEventStreams(runtime, "agent");
   const providerLogins = new AgentEventStreams(runtime, "provider-login");
-  const dashboards = new AgentEventStreams(runtime, "dashboard");
-  const charts = new AgentEventStreams(runtime, "chart");
-  const chartLayouts = new AgentEventStreams(runtime, "chart-layouts");
-  const indicators = new AgentEventStreams(runtime, "indicators");
   const runs = new AgentEventStreams(runtime, "runs");
   const runDetails = new AgentEventStreams(runtime, "run");
-  const subagents = new AgentEventStreams(runtime, "subagents");
   let web: StartApplication | undefined;
   // SSE responses must finish before Fastify waits for active HTTP connections.
-  app.addHook("preClose", async () => { await Promise.all([streams.close(), providerLogins.close(), dashboards.close(), charts.close(), chartLayouts.close(), indicators.close(), runs.close(), runDetails.close(), subagents.close(), logos.close(), providerLogos.close()]); });
+  app.addHook("preClose", async () => { await Promise.all([multiplex.close(), providerLogins.close(), runs.close(), runDetails.close(), logos.close(), providerLogos.close()]); });
   app.addHook("onClose", async () => {
     try { await web?.close(); }
     finally { await runtime.close(options.forceShutdown); }
@@ -143,53 +137,15 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
       const response = await providerLogins.open(webRequest, request.params.id);
       await sendNodeResponse(reply.raw, response);
     });
-    // One Server-Sent Events subscription per open chat view: committed Durable
-    // snapshots are pushed, with no conversation polling.
-    app.get("/api/agents/:id/events", async (request, reply) => {
+    // One multiplexed Server-Sent Events subscription per agent page: chat,
+    // dashboard, chart, layouts, indicators and sub-agents share a single
+    // browser connection, with no polling.
+    app.get("/api/agents/:id/stream", async (request, reply) => {
       reply.hijack();
       const webRequest = new NodeRequest({ req: request.raw, res: reply.raw, maxRequestBodySize: 1024 * 1024 });
       webRequest.headers.set("x-hv-client-ip", request.ip);
-      const response = await streams.open(webRequest, (request.params as { id: string }).id);
+      const response = await multiplex.open(webRequest, (request.params as { id: string }).id);
       response.headers.set("Cache-Control", "no-store");
-      await sendNodeResponse(reply.raw, response);
-    });
-
-    app.get("/api/agents/:id/dashboard/events", async (request, reply) => {
-      reply.hijack();
-      const webRequest = new NodeRequest({ req: request.raw, res: reply.raw, maxRequestBodySize: 1024 * 1024 });
-      webRequest.headers.set("x-hv-client-ip", request.ip);
-      const response = await dashboards.open(webRequest, (request.params as { id: string }).id);
-      await sendNodeResponse(reply.raw, response);
-    });
-
-    app.get<{ Params: { id: string } }>("/api/agents/:id/sub-agents/events", async (request, reply) => {
-      reply.hijack();
-      const webRequest = new NodeRequest({ req: request.raw, res: reply.raw, maxRequestBodySize: 1024 * 1024 });
-      webRequest.headers.set("x-hv-client-ip", request.ip);
-      const response = await subagents.open(webRequest, request.params.id);
-      await sendNodeResponse(reply.raw, response);
-    });
-
-    app.get<{ Params: { id: string } }>("/api/agents/:id/indicators/events", async (request, reply) => {
-      reply.hijack();
-      const webRequest = new NodeRequest({ req: request.raw, res: reply.raw, maxRequestBodySize: 1024 * 1024 });
-      const response = await indicators.open(webRequest, request.params.id);
-      await sendNodeResponse(reply.raw, response);
-    });
-
-    app.get<{ Params: { id: string } }>("/api/agents/:id/chart/layouts/events", async (request, reply) => {
-      reply.hijack();
-      const webRequest = new NodeRequest({ req: request.raw, res: reply.raw, maxRequestBodySize: 1024 * 1024 });
-      webRequest.headers.set("x-hv-client-ip", request.ip);
-      const response = await chartLayouts.open(webRequest, request.params.id);
-      await sendNodeResponse(reply.raw, response);
-    });
-
-    app.get("/api/agents/:id/chart/events", async (request, reply) => {
-      reply.hijack();
-      const webRequest = new NodeRequest({ req: request.raw, res: reply.raw, maxRequestBodySize: 1024 * 1024 });
-      webRequest.headers.set("x-hv-client-ip", request.ip);
-      const response = await charts.open(webRequest, (request.params as { id: string }).id);
       await sendNodeResponse(reply.raw, response);
     });
 
@@ -217,7 +173,7 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
       reply.hijack();
       try {
         if (start.middleware && await runMiddleware(start.middleware, request.raw, reply.raw)) return;
-        const webRequest = new StartRequest({ req: request.raw, res: reply.raw, maxRequestBodySize: 1024 * 1024 });
+        const webRequest = new NodeRequest({ req: request.raw, res: reply.raw, maxRequestBodySize: 1024 * 1024 });
         // Set this on the Web Request, whose headers may be reconstructed from
         // Node rawHeaders rather than Fastify's normalized header object.
         webRequest.headers.set("x-hv-client-ip", request.ip);

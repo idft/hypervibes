@@ -8,6 +8,7 @@ import { SubagentEnabledToggle } from "./subagent-enabled-toggle.js";
 import { RunSubagentDialog } from "./run-subagent-dialog.js";
 import type { DashboardSubagent } from "../agents/subagent-dashboard.js";
 import { RelativeTime, RunStatus, runUrl } from "./subagent-run-history.js";
+import { useAgentEvent, useAgentEventsStatus } from "./agent-events.js";
 
 export function DashboardSubagents({ agentId, subagents, error }: { agentId: string; subagents: DashboardSubagent[]; error?: string }) {
   const [runTarget, setRunTarget] = useState<string | null>(null);
@@ -15,21 +16,17 @@ export function DashboardSubagents({ agentId, subagents, error }: { agentId: str
   const [refreshError, setRefreshError] = useState("");
   const [loadError, setLoadError] = useState(error);
   useEffect(() => { setWorkers(subagents); setLoadError(error); }, [subagents, error]);
+  const { interrupted, controlMessage, streamErrors } = useAgentEventsStatus();
+  useAgentEvent("subagents", (event) => {
+    setWorkers(JSON.parse(event.data) as DashboardSubagent[]);
+    setRefreshError(""); setLoadError(undefined);
+  });
   useEffect(() => {
-    setRefreshError("");
-    const source = new EventSource(`/api/agents/${encodeURIComponent(agentId)}/sub-agents/events`);
-    source.addEventListener("subagents", (event) => {
-      setWorkers(JSON.parse((event as MessageEvent).data) as DashboardSubagent[]);
-      setRefreshError(""); setLoadError(undefined);
-    });
-    const interrupted = () => setRefreshError("Live sub-agent updates interrupted. Reconnecting… Activity may be out of date.");
-    source.onerror = interrupted;
-    source.addEventListener("unavailable", interrupted);
-    source.addEventListener("shutdown", interrupted);
-    source.addEventListener("unauthorized", () => { source.close(); window.location.assign("/login"); });
-    source.addEventListener("stream-error", () => { source.close(); setRefreshError("Sub-agent activity is too large to stream. Reload the page."); });
-    return () => source.close();
-  }, [agentId]);
+    const topicError = streamErrors["subagents"];
+    if (topicError) setRefreshError(topicError);
+    else if (interrupted) setRefreshError(controlMessage || "Live sub-agent updates interrupted. Reconnecting… Activity may be out of date.");
+    else setRefreshError("");
+  }, [interrupted, controlMessage, streamErrors]);
   const base = `/agents/${encodeURIComponent(agentId)}/sub-agents`;
   return <section aria-label="Sub-agents" className="flex min-h-0 flex-1 flex-col rounded-2xl border border-zinc-800 bg-[#0d0d10] p-4">
     <header className="mb-3 shrink-0">

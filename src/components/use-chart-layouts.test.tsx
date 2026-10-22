@@ -3,6 +3,7 @@ import { act } from "react";
 import { type QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createTestQueryClient } from "../test/query.js";
 import { chartLayoutsQueryOptions } from "../web/chart-queries.js";
+import { AgentEventsProvider } from "./agent-events.js";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChartLayout } from "../charts/contracts.js";
@@ -17,6 +18,7 @@ class LayoutSource extends EventTarget {
   constructor(readonly url: string) { super(); LayoutSource.instances.push(this); }
   emit(event: string, data: unknown) { this.dispatchEvent(new MessageEvent(event, { data: JSON.stringify(data) })); }
 }
+const streamUrl = (agentId: string, topics: string) => `/api/agents/${agentId}/stream?topics=${topics}`;
 const fixture = (id = "first", revision = 0): ChartLayout => ({ id, revision, document: { name: id, coin: "BTC", interval: "1h", drawings: [], indicators: [], notes: "", hideDrawings: false, magnet: true }, updatedAt: revision, canUndo: revision > 0, canRedo: false, lastChange: "Saved" });
 
 describe("SSE chart layouts", () => {
@@ -24,7 +26,11 @@ describe("SSE chart layouts", () => {
   let client: QueryClient;
   function Fixture() { state = useChartLayouts("agent", ["BTC"]); return null; }
   const source = () => LayoutSource.instances.at(-1)!;
-  async function render() { if (!client.getQueryData(chartLayoutsQueryOptions("agent").queryKey)) client.setQueryData(chartLayoutsQueryOptions("agent").queryKey, initial); await act(async () => root!.render(<QueryClientProvider client={client}><Fixture /></QueryClientProvider>)); }
+  async function render() {
+    if (!client.getQueryData(chartLayoutsQueryOptions("agent").queryKey)) client.setQueryData(chartLayoutsQueryOptions("agent").queryKey, initial);
+    await act(async () => root!.render(<QueryClientProvider client={client}><AgentEventsProvider agentId="agent"><Fixture /></AgentEventsProvider></QueryClientProvider>));
+    await act(async () => {});
+  }
   async function push(layouts: ChartLayout[]) { await act(async () => source().emit("chart-layouts", layouts)); }
   beforeEach(() => {
     vi.resetAllMocks(); client = createTestQueryClient(); localStorage.clear(); LayoutSource.instances = []; vi.stubGlobal("EventSource", LayoutSource);
@@ -38,7 +44,7 @@ describe("SSE chart layouts", () => {
   it("uses one persistent subscription, makes no polling requests, and applies reconnect snapshots", async () => {
     vi.useFakeTimers(); const interval = vi.spyOn(window, "setInterval");
     await render(); await push(initial);
-    expect(source().url).toBe("/api/agents/agent/chart/layouts/events");
+    expect(source().url).toBe(streamUrl("agent", "chart-layouts"));
     await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
     expect(interval).not.toHaveBeenCalled(); expect(mocks.list).not.toHaveBeenCalled();
     await render(); expect(LayoutSource.instances).toHaveLength(1);
@@ -147,7 +153,7 @@ describe("SSE chart layouts", () => {
     vi.spyOn(window, "location", "get").mockReturnValue({ ...location, assign: vi.fn() } as unknown as Location);
     await act(async () => source().emit("unauthorized", {}));
     expect(source().close).toHaveBeenCalled(); expect(window.location.assign).toHaveBeenCalledWith("/login");
-    await act(async () => source().emit("stream-error", { message: "Reload the page" }));
+    await act(async () => source().emit("stream-error", { topic: "chart-layouts", message: "Reload the page" }));
     expect(state!.error).toBe("Reload the page");
     const closed = source();
     await act(async () => root!.unmount()); root = undefined;

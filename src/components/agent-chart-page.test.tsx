@@ -22,6 +22,7 @@ vi.mock("./market-chart.js", async () => {
 });
 vi.mock("./agent-chat-page.js", () => ({ AgentChatPage: (props: Record<string, unknown>) => { mocks.chatProps = props; mocks.chatRender(props); return <div aria-label="Root chat fixture">Main conversation</div>; } }));
 import { AgentChartPage } from "./agent-chart-page.js";
+import { AgentEventsProvider } from "./agent-events.js";
 const instruments = ["BTC", "ETH"];
 const chat = { agent: { id: "fixture" } } as AgentChat;
 class LayoutSource extends EventTarget {
@@ -61,7 +62,8 @@ describe("chart workspace", () => {
   afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
   async function render() {
     client.setQueryData(chartLayoutsQueryOptions("fixture").queryKey, initial);
-    await act(async () => root.render(<QueryClientProvider client={client}><AgentChartPage id="fixture" instruments={instruments} initialChat={chat} choices={[]} /></QueryClientProvider>));
+    await act(async () => root.render(<QueryClientProvider client={client}><AgentEventsProvider agentId="fixture"><AgentChartPage id="fixture" instruments={instruments} initialChat={chat} choices={[]} /></AgentEventsProvider></QueryClientProvider>));
+    await act(async () => {});
     await act(async () => LayoutSource.instances.at(-1)!.emit(initial));
   }
   async function click(label: string) { await act(async () => {
@@ -79,7 +81,7 @@ describe("chart workspace", () => {
   }
   it("renders a neutral server placeholder instead of an open chat before restoring preferences", () => {
     client.setQueryData(chartLayoutsQueryOptions("fixture").queryKey, initial);
-    const html = renderToString(<QueryClientProvider client={client}><AgentChartPage id="fixture" instruments={instruments} initialChat={chat} choices={[]} /></QueryClientProvider>);
+    const html = renderToString(<QueryClientProvider client={client}><AgentEventsProvider agentId="fixture"><AgentChartPage id="fixture" instruments={instruments} initialChat={chat} choices={[]} /></AgentEventsProvider></QueryClientProvider>);
     expect(html).toContain("Loading chart workspace");
     expect(html).not.toContain("Chart chat panel");
     expect(mocks.chatRender).not.toHaveBeenCalled();

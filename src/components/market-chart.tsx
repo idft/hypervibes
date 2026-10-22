@@ -11,6 +11,7 @@ import { createTradingOverlays, type FillHover } from "../charts/trading-overlay
 import { useChartAccount } from "./use-chart-account.js";
 import { useChartIndicators } from "./use-chart-indicators.js";
 import { createIndicatorRenderer } from "../charts/indicator-renderer.js";
+import { useAgentChartEvents, useAgentEventsStatus } from "./agent-events.js";
 import type { ChartIndicatorEvidence, IndicatorResult } from "../indicators/contracts.js";
 
 export interface MarketChartHandle { capture: (layout: ChartLayout, selectedDrawingId: string, image: boolean) => Promise<ChartCapture> }
@@ -29,6 +30,14 @@ export function MarketChart({ id, layout, tool, selected, disabled, statusHost, 
   const [retry, setRetry] = useState(0), [frame, setFrame] = useState(0);
   const [hover, setHover] = useState<FillHover | null>(null);
   const { coin, interval } = layout.document;
+  const { interrupted: socketInterrupted, streamErrors, reconnect } = useAgentEventsStatus();
+  const chartStreamError = streamErrors["chart"];
+  const onSnapshot = useRef<(snapshot: ChartSnapshot) => void>(() => {});
+  useAgentChartEvents(coin, interval, (event) => { onSnapshot.current(JSON.parse(event.data) as ChartSnapshot); });
+  useEffect(() => {
+    if (chartStreamError) { const current = active.current; if (current) current.status = "reconnecting"; setStatus("reconnecting"); }
+    else if (socketInterrupted) { const current = active.current; if (current) current.status = "reconnecting"; setStatus("reconnecting"); }
+  }, [chartStreamError, socketInterrupted]);
   useEffect(() => {
     const element = host.current;
     if (!element) return;
@@ -91,10 +100,8 @@ export function MarketChart({ id, layout, tool, selected, disabled, statusHost, 
     chart.subscribeCrosshairMove(redraw);
     element.addEventListener("pointermove", redraw, { passive: true });
     element.addEventListener("wheel", redraw, { passive: true });
-    const source = new EventSource(`/api/agents/${id}/chart/events?${new URLSearchParams({ coin, interval })}`);
-    source.addEventListener("chart", (event) => {
+    onSnapshot.current = (snapshot) => {
       if (disposed) return;
-      const snapshot = JSON.parse((event as MessageEvent).data) as ChartSnapshot;
       state.status = snapshot.status; setStatus(snapshot.status);
       const previousLength = state.candles.length;
       state.candles = mergeChartCandles(state.candles, snapshot.candles);
@@ -106,15 +113,10 @@ export function MarketChart({ id, layout, tool, selected, disabled, statusHost, 
         }
         redraw();
       }
-    });
-    const interrupted = () => { if (!disposed) { state.status = "reconnecting"; setStatus("reconnecting"); } };
-    source.onerror = interrupted;
-    for (const name of ["shutdown", "unavailable"]) source.addEventListener(name, interrupted);
-    source.addEventListener("stream-error", () => { source.close(); interrupted(); setError("Chart stream unavailable. Retry to reconnect."); });
-    source.addEventListener("unauthorized", () => { source.close(); window.location.assign("/login"); });
+    };
     setError(""); void load();
     return () => {
-      disposed = true; active.current = null; cancelAnimationFrame(raf); source.close();
+      disposed = true; active.current = null; onSnapshot.current = () => {}; cancelAnimationFrame(raf);
       element.removeEventListener("pointermove", redraw); element.removeEventListener("wheel", redraw);
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRange); chart.timeScale().unsubscribeSizeChange(redraw); chart.unsubscribeCrosshairMove(redraw); chart.unsubscribeCrosshairMove(generatedHover); indicators.close(); overlays.close(); chart.remove();
     };
@@ -166,7 +168,7 @@ export function MarketChart({ id, layout, tool, selected, disabled, statusHost, 
   const indicatorMessages = layout.document.indicators.some((i) => !i.hidden)
     ? [indicatorData.status !== "current" ? `Indicators: ${indicatorData.status === "stale" ? "waiting for closed candle" : indicatorData.status}` : "", indicatorData.error, ...(indicatorData.data?.instances.flatMap((i) => i.error ? [i.error] : []) ?? [])].filter((message): message is string => Boolean(message))
     : [];
-  const statusMessages = [status === "reconnecting" ? "Reconnecting… Data may be stale." : "", historyStatus, error, ...indicatorMessages, ...account.messages].filter(Boolean);
+  const statusMessages = [status === "reconnecting" ? "Reconnecting… Data may be stale." : "", historyStatus, error, chartStreamError ?? "", ...indicatorMessages, ...account.messages].filter(Boolean);
   const indicatorFailed = indicatorMessages.length > 0 && Boolean(indicatorData.error || indicatorData.data?.instances.some((i) => i.error));
   const needsAttention = Boolean(error || indicatorFailed || account.canRetry);
   const loading = status !== "live" || needsAttention || indicatorMessages.length > 0 || account.messages.length > 0 || historyStatus === "Loading candles…";
@@ -186,7 +188,7 @@ export function MarketChart({ id, layout, tool, selected, disabled, statusHost, 
         <p>Market stream: {status === "live" ? "Connected" : status === "connecting" ? "Connecting…" : "Disconnected"}</p>
         {statusMessages.length ? <ul className="space-y-2">{statusMessages.map((message, index) => <li key={index}>{message}</li>)}</ul> : <p>All chart data is up to date.</p>}
         <div className="flex flex-wrap gap-3">
-          {(error || status === "reconnecting") && <button type="button" className="cursor-pointer underline" onClick={() => { setStatus("connecting"); setRetry((n) => n + 1); }}>Retry chart</button>}
+          {(error || status === "reconnecting") && <button type="button" className="cursor-pointer underline" onClick={() => { setStatus("connecting"); setRetry((n) => n + 1); reconnect(); }}>Retry chart</button>}
           {indicatorMessages.length > 0 && <button type="button" className="cursor-pointer underline" onClick={indicatorData.retry}>Retry indicators</button>}
           {account.canRetry && <button type="button" className="cursor-pointer underline" onClick={account.retry}>Retry account data</button>}
         </div>

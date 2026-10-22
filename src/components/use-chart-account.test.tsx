@@ -9,6 +9,7 @@ import { defaultChartOverlays, type ChartFillsPage } from "../charts/trading-con
 const mocks = vi.hoisted(() => ({ fills: vi.fn() }));
 vi.mock("../web/charts.js", () => ({ getChartFills: mocks.fills }));
 import { useChartAccount } from "./use-chart-account.js";
+import { AgentEventsProvider } from "./agent-events.js";
 class Source extends EventTarget {
   static instances: Source[] = [];
   close = vi.fn(); onerror: (() => void) | null = null;
@@ -19,6 +20,9 @@ describe("chart account data", () => {
   let root: Root, host: HTMLDivElement, client: QueryClient;
   let current: ReturnType<typeof useChartAccount>;
   function Probe({ id, coin, from = 0 }: { id: string; coin: string; from?: number }) {
+    return <AgentEventsProvider agentId={id}><Inner id={id} coin={coin} from={from} /></AgentEventsProvider>;
+  }
+  function Inner({ id, coin, from = 0 }: { id: string; coin: string; from?: number }) {
     current = useChartAccount(id, coin, from, 100, defaultChartOverlays);
     return <>{current.messages.join(" · ")}</>;
   }
@@ -61,9 +65,10 @@ describe("chart account data", () => {
     await act(async () => complete(page("999")));
     expect(current.fills).toEqual([]);
     expect(Source.instances).toHaveLength(1); // Symbol/timeframe changes reuse the linked account stream.
+    expect(Source.instances[0]!.url).toBe("/api/agents/agent/stream?topics=dashboard");
     await render("other", "ETH", 10);
     expect(current.snapshot).toBeNull(); expect(current.fills).toEqual([]);
     expect(Source.instances[0]!.close).toHaveBeenCalledOnce();
-    expect(Source.instances[1]!.url).toBe("/api/agents/other/dashboard/events");
+    expect(Source.instances[1]!.url).toBe("/api/agents/other/stream?topics=dashboard");
   });
 });

@@ -17,13 +17,32 @@ const maxFrameBytes = 2 * 1024 * 1024;
 const frame = (event: string, data: unknown) => encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 export interface ChatEvent { event?: string; data: AgentChat }
 
+export const multiplexTopics = ["chat", "dashboard", "indicators", "chart-layouts", "subagents", "chart"] as const;
+export type MultiplexTopic = (typeof multiplexTopics)[number];
+const topicLimits: Record<MultiplexTopic, number> = {
+  chat: maxFrameBytes,
+  dashboard: maxFrameBytes,
+  indicators: 4096,
+  "chart-layouts": maxFrameBytes,
+  subagents: maxFrameBytes,
+  chart: maxFrameBytes,
+};
+type TopicSnapshot = AgentChat | AgentDashboard | ChartSnapshot | ChartLayout[] | DashboardSubagent[] | { revision: number };
+interface TopicContext {
+  userId: string;
+  id: string;
+  signal: AbortSignal;
+  selection?: ChartSelection;
+  publish: (topic: MultiplexTopic, snapshot: TopicSnapshot) => void;
+}
+
 /** HTTP subscriptions are app-owned, and closed before Fastify drains requests. */
 export class AgentEventStreams {
   private stopping = false;
   private readonly connections = new Set<() => void>();
   private readonly tasks = new Set<Promise<void>>();
   private readonly users = new Map<string, number>();
-  constructor(private readonly runtime: AppRuntime, private readonly kind: "chat" | "dashboard" | "chart" | "chart-layouts" | "indicators" | "runs" | "run" | "subagents" | "provider-login" = "chat") {}
+  constructor(private readonly runtime: AppRuntime, private readonly kind: "agent" | "runs" | "run" | "provider-login" = "agent") {}
 
   async open(request: Request, id: string, subagentId?: string, runId?: string): Promise<Response> {
     try {
@@ -38,7 +57,22 @@ export class AgentEventStreams {
       if (this.kind === "provider-login") this.runtime.providers.status(session.user.id, id);
       else await this.runtime.agents.owned(session.user.id, id);
       const params = new URL(request.url).searchParams;
-      const selection = this.kind === "chart" ? await this.runtime.hyperliquid.charts.selection(params.get("coin") ?? "", params.get("interval") ?? "") : undefined;
+      if (this.kind === "agent") {
+        const raw = params.get("topics") ?? "";
+        const topics = [...new Set(raw.split(",").map((part) => part.trim()).filter(Boolean))] as MultiplexTopic[];
+        if (!topics.length) throw new AgentError("Select at least one topic", 400);
+        for (const topic of topics) {
+          if (!(multiplexTopics as readonly string[]).includes(topic)) throw new AgentError(`Unknown topic: ${topic}`, 400);
+        }
+        const selection = topics.includes("chart")
+          ? await this.runtime.hyperliquid.charts.selection(params.get("coin") ?? "", params.get("interval") ?? "")
+          : undefined;
+        if (this.stopping || request.signal.aborted) throw new AgentError("Connection closed", 503);
+        const count = this.users.get(session.user.id) ?? 0;
+        if (count >= 10) throw new AgentError("Too many open event connections", 429);
+        this.users.set(session.user.id, count + 1);
+        return this.connectMultiplex(request, id, session.user.id, session.expiresAt, topics, selection);
+      }
       const history = this.kind === "runs" ? { subagentId: subagentId ?? "", page: Number(params.get("page") ?? "1") } : undefined;
       if (history) await this.runtime.agents.subagents.history(session.user.id, id, history.subagentId, history.page);
       const run = this.kind === "run" ? { subagentId: subagentId ?? "", runId: runId ?? "" } : undefined;
@@ -47,7 +81,7 @@ export class AgentEventStreams {
       const count = this.users.get(session.user.id) ?? 0;
       if (count >= 10) throw new AgentError("Too many open event connections", 429);
       this.users.set(session.user.id, count + 1);
-      return this.connect(request, id, session.user.id, session.expiresAt, selection, history, run);
+      return this.connect(request, id, session.user.id, session.expiresAt, history, run);
     } catch (error) {
       const expected = error instanceof AgentError || error instanceof HyperliquidError;
       const status = expected ? error.status : 503;
@@ -56,7 +90,150 @@ export class AgentEventStreams {
     }
   }
 
-  private connect(request: Request, id: string, userId: string, expiresAt: Date, selection?: ChartSelection, history?: { subagentId: string; page: number }, run?: { subagentId: string; runId: string }): Response {
+  private startTopic(topic: MultiplexTopic, ctx: TopicContext): Promise<void> {
+    const publish = (snapshot: TopicSnapshot) => ctx.publish(topic, snapshot);
+    switch (topic) {
+      case "chat": return this.runtime.agents.watchChat(ctx.userId, ctx.id, ctx.signal, publish as (snapshot: AgentChat) => void);
+      case "dashboard": return this.runtime.hyperliquid.watchDashboard(ctx.userId, ctx.id, ctx.signal, publish as (snapshot: AgentDashboard) => void);
+      case "indicators": return this.runtime.agents.indicators.watch(ctx.id, ctx.signal, publish as (snapshot: { revision: number }) => void);
+      case "chart-layouts": return this.runtime.agents.watchChartLayouts(ctx.userId, ctx.id, ctx.signal, publish as (snapshot: ChartLayout[]) => void);
+      case "subagents": return this.runtime.agents.subagents.watchDashboard(ctx.userId, ctx.id, ctx.signal, publish as (snapshot: DashboardSubagent[]) => void);
+      case "chart": return this.runtime.hyperliquid.charts.watch(ctx.selection!, ctx.signal, publish as (snapshot: ChartSnapshot) => void);
+    }
+  }
+
+  private connectMultiplex(request: Request, id: string, userId: string, expiresAt: Date, topics: MultiplexTopic[], selection?: ChartSelection): Response {
+    const abort = new AbortController();
+    let controller: ReadableStreamDefaultController<Uint8Array>;
+    const pending = new Map<MultiplexTopic, Uint8Array>();
+    const topicControllers = new Map<MultiplexTopic, AbortController>();
+    for (const topic of topics) topicControllers.set(topic, new AbortController());
+    abort.signal.addEventListener("abort", () => { for (const topicController of topicControllers.values()) topicController.abort(); });
+    let closed = false;
+    let expiry = expiresAt.getTime();
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    let checking = false;
+    let ticks = 0;
+    const flush = () => {
+      while (!closed && pending.size > 0 && (controller.desiredSize ?? 0) > 0) {
+        const first = pending.entries().next();
+        if (first.done) return;
+        const [, value] = first.value;
+        pending.delete(first.value[0]);
+        controller.enqueue(value);
+      }
+    };
+    const finish = (event?: "unauthorized" | "unavailable" | "shutdown", message?: string, cancelled = false) => {
+      if (closed) return;
+      closed = true;
+      pending.clear();
+      clearInterval(heartbeat);
+      clearTimeout(deadline);
+      request.signal.removeEventListener("abort", disconnect);
+      agentLifetime?.removeEventListener("abort", unavailable);
+      this.connections.delete(shutdown);
+      const remaining = (this.users.get(userId) ?? 1) - 1;
+      if (remaining > 0) this.users.set(userId, remaining);
+      else this.users.delete(userId);
+      abort.abort();
+      try {
+        if (!cancelled && event) controller.enqueue(frame(event, { message }));
+        // Always close: a disconnected consumer still awaits a definite end.
+        controller.close();
+      } catch { /* The consumer already cancelled or the stream already ended. */ }
+    };
+    const agentLifetime = this.runtime.agents.signal(id);
+    const unavailable = () => finish("unavailable", "Agent is being deleted.");
+    const disconnect = () => finish(undefined, undefined, true);
+    const shutdown = () => finish("shutdown", "Server is restarting. Reconnecting…");
+    const scheduleExpiry = () => {
+      clearTimeout(deadline);
+      const remaining = expiry - Date.now();
+      if (remaining <= 0) { finish("unauthorized", "Session expired. Please sign in again."); return; }
+      deadline = setTimeout(scheduleExpiry, Math.min(remaining, 2_147_483_647));
+      deadline.unref();
+    };
+    const revalidate = async () => {
+      if (closed || checking) return;
+      checking = true;
+      try {
+        const session = await currentUserSession(this.runtime, request.headers);
+        if (closed) return;
+        if (!session || session.user.id !== userId) { finish("unauthorized", "Session ended. Please sign in again."); return; }
+        await this.runtime.agents.owned(userId, id);
+        if (closed) return;
+        expiry = session.expiresAt.getTime();
+        scheduleExpiry();
+      } catch { finish("unavailable", "Unable to verify this session. Reconnecting…"); }
+      finally { checking = false; }
+    };
+    const failTopic = (topic: MultiplexTopic, message: string) => {
+      if (closed) return;
+      topicControllers.get(topic)?.abort();
+      try {
+        if ((controller.desiredSize ?? 0) > 0) controller.enqueue(frame("stream-error", { topic, message }));
+        else {
+          // Backpressure: queue behind pending frames is unnecessary; stream-errors
+          // are terminal for their topic and must not be dropped. Enqueue anyway;
+          // the stream buffers until the consumer reads.
+          controller.enqueue(frame("stream-error", { topic, message }));
+        }
+      } catch { /* The consumer already cancelled or the stream already ended. */ }
+    };
+    const publish = (topic: MultiplexTopic, snapshot: TopicSnapshot) => {
+      if (closed || topicControllers.get(topic)?.signal.aborted) return;
+      if (Date.now() >= expiry) { finish("unauthorized", "Session expired. Please sign in again."); return; }
+      const value = frame(topic, snapshot);
+      if (value.byteLength > topicLimits[topic]) {
+        failTopic(topic, topic === "indicators"
+          ? "Indicator updates are too large to stream. Reload the page."
+          : "Snapshot is too large to stream. Reload the page to view it.");
+        return;
+      }
+      // Keep one newest pending snapshot per topic, not an unbounded queue of token events.
+      pending.set(topic, value);
+      flush();
+    };
+    const stream = new ReadableStream<Uint8Array>({
+      start(value) { controller = value; controller.enqueue(encoder.encode("retry: 3000\n\n")); },
+      pull: flush,
+      cancel: disconnect,
+    }, { highWaterMark: 1 });
+    this.connections.add(shutdown);
+    request.signal.addEventListener("abort", disconnect, { once: true });
+    agentLifetime?.addEventListener("abort", unavailable, { once: true });
+    if (agentLifetime?.aborted) unavailable();
+    scheduleExpiry();
+    if (request.signal.aborted) disconnect();
+    if (!closed) {
+      heartbeat = setInterval(() => {
+        if (closed) return;
+        if ((controller.desiredSize ?? 0) > 0 && pending.size === 0) controller.enqueue(encoder.encode(": keepalive\n\n"));
+        // Security checks only: no conversation reads or chat polling. Bound the
+        // lifetime of a revoked session even when no new chat updates arrive.
+        if (++ticks % 4 === 0) void revalidate();
+      }, heartbeatMs);
+      heartbeat.unref();
+      const watchers = topics.map((topic) => {
+        const signal = topicControllers.get(topic)!.signal;
+        return this.startTopic(topic, { userId, id, signal, selection, publish })
+          .catch(() => { failTopic(topic, "Agent event stream interrupted. Reconnecting…"); });
+      });
+      const task = Promise.all(watchers)
+        .then(() => { if (!closed) shutdown(); })
+        .finally(() => { this.tasks.delete(task); });
+      this.tasks.add(task);
+    }
+    return new Response(stream, { headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-Accel-Buffering": "no",
+      "X-Content-Type-Options": "nosniff",
+    } });
+  }
+
+  private connect(request: Request, id: string, userId: string, expiresAt: Date, history?: { subagentId: string; page: number }, run?: { subagentId: string; runId: string }): Response {
     const abort = new AbortController();
     let controller: ReadableStreamDefaultController<Uint8Array>;
     let pending: Uint8Array | undefined;
@@ -122,7 +299,7 @@ export class AgentEventStreams {
       if (closed) return;
       if (Date.now() >= expiry) { finish("unauthorized", "Session expired. Please sign in again."); return; }
       const value = frame(this.kind, snapshot);
-      if (value.byteLength > (this.kind === "indicators" ? 4096 : maxFrameBytes)) { finish("stream-error", "Snapshot is too large to stream. Reload the page to view it."); return; }
+      if (value.byteLength > maxFrameBytes) { finish("stream-error", "Snapshot is too large to stream. Reload the page to view it."); return; }
       // Keep one newest pending snapshot, not an unbounded queue of token events.
       pending = value;
       flush();
@@ -149,14 +326,8 @@ export class AgentEventStreams {
       heartbeat.unref();
       const watching = Promise.resolve().then(() => this.kind === "provider-login"
         ? this.runtime.providers.watchLogin(userId, id, abort.signal, publish)
-        : this.kind === "chat"
-        ? this.runtime.agents.watchChat(userId, id, abort.signal, publish)
-        : this.kind === "indicators" ? this.runtime.agents.indicators.watch(id, abort.signal, publish)
-        : this.kind === "chart-layouts" ? this.runtime.agents.watchChartLayouts(userId, id, abort.signal, publish)
-        : this.kind === "subagents" ? this.runtime.agents.subagents.watchDashboard(userId, id, abort.signal, publish)
         : run ? this.runtime.agents.subagents.watchRun(userId, id, run.subagentId, run.runId, abort.signal, publish)
           : history ? this.runtime.agents.subagents.watchHistory(userId, id, history.subagentId, history.page, abort.signal, publish)
-          : selection ? this.runtime.hyperliquid.charts.watch(selection, abort.signal, publish)
           : this.runtime.hyperliquid.watchDashboard(userId, id, abort.signal, publish));
       const task = watching
         .then(() => { if (!closed) shutdown(); })

@@ -12,9 +12,15 @@ const mocks = vi.hoisted(() => ({ compactAgentChat: vi.fn(), getAgentChatHistory
 vi.mock("../web/agents.js", () => mocks);
 vi.mock("../web/subagents.js", () => ({ saveSubagentSection: mocks.saveSubagentSection }));
 import { AgentChatPage as AgentChatPageComponent } from "./agent-chat-page.js";
+import { AgentEventsProvider } from "./agent-events.js";
 
 let queryClient: QueryClient;
 const AgentChatPage = withTestQueryClient(AgentChatPageComponent, () => queryClient);
+type ChatProps = Parameters<typeof AgentChatPageComponent>[0];
+function ChatPage(props: ChatProps) {
+  return <AgentEventsProvider agentId="agent-fixture"><AgentChatPage {...props} /></AgentEventsProvider>;
+}
+const topicsOf = (url: string) => new URL(url, "http://localhost").searchParams.get("topics");
 
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
@@ -28,6 +34,9 @@ class FakeEventSource {
   }
   addEventListener(type: string, listener: (event: { data: string }) => void) {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+  }
+  removeEventListener(type: string, listener: (event: { data: string }) => void) {
+    this.listeners.set(type, (this.listeners.get(type) ?? []).filter((entry) => entry !== listener));
   }
   emit(type: string, data: unknown) {
     for (const listener of this.listeners.get(type) ?? []) listener({ data: JSON.stringify(data) });
@@ -57,7 +66,7 @@ describe("Agent chat", () => {
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
-    await act(async () => root.render(<AgentChatPage initial={initial} choices={choices} />));
+    await act(async () => root.render(<ChatPage initial={initial} choices={choices} />));
   });
   afterEach(async () => {
     await act(async () => root.unmount());
@@ -75,21 +84,21 @@ describe("Agent chat", () => {
     await act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
   }
   it("subscribes once per agent and closes the stream on unmount", async () => {
-    expect(current().url).toBe("/api/agents/agent-fixture/events");
+    expect(topicsOf(current().url)).toBe("chat");
     expect(current().closed).toBe(false);
     await act(async () => root.unmount());
     expect(current().closed).toBe(true);
     root = createRoot(container);
   });
   it("renders escaped messages, model and an honest no-trading boundary", () => {
-    const html = renderToStaticMarkup(<AgentChatPage initial={{ ...initial, messages: [{ id: "one", role: "assistant", text: "<script>bad()</script>", failed: false }] }} choices={choices} />);
+    const html = renderToStaticMarkup(<ChatPage initial={{ ...initial, messages: [{ id: "one", role: "assistant", text: "<script>bad()</script>", failed: false }] }} choices={choices} />);
     expect(html).toContain("DeepSeek Flash");
     expect(html).not.toContain("Enabled order tools");
     expect(html).toContain("&lt;script&gt;");
     expect(html).not.toContain("<script>");
   });
   it("uses a slim embedded conversation without the model, context, usage or management header", async () => {
-    await act(async () => root.render(<AgentChatPage initial={initial} choices={choices} embedded />));
+    await act(async () => root.render(<ChatPage initial={initial} choices={choices} embedded />));
     expect(container.querySelector("header")).toBeNull();
     expect(container.querySelector("[aria-label='Choose model']")).toBeNull();
     expect(container.textContent).not.toContain("Total usage");
@@ -105,7 +114,7 @@ describe("Agent chat", () => {
     await act(async () => current().emit("chat", { ...initial, busy: true, partial: "Checking the chart" }));
     expect(container.textContent).toContain("Checking the chart"); expect(container.textContent).toContain("Stop response");
     expect(FakeEventSource.instances).toHaveLength(1);
-    await act(async () => root.render(<AgentChatPage initial={initial} choices={choices} />));
+    await act(async () => root.render(<ChatPage initial={initial} choices={choices} />));
     expect(container.querySelector("header")).not.toBeNull();
     expect(container.querySelector("[aria-label='Choose model']")).not.toBeNull();
   });
@@ -231,7 +240,7 @@ describe("Agent chat", () => {
     expect(trigger.title).toContain("Stop or finish queued work");
   });
   it("disables chat when credentials are missing", async () => {
-    await act(async () => root.render(<AgentChatPage initial={{ ...initial, configured: false }} choices={choices} key="unconfigured" />));
+    await act(async () => root.render(<ChatPage initial={{ ...initial, configured: false }} choices={choices} key="unconfigured" />));
     await type("Hello");
     expect(container.textContent).toContain("Reconnect this Agent’s provider");
     expect(container.querySelector("form button")!.hasAttribute("disabled")).toBe(true);
@@ -249,7 +258,7 @@ describe("Agent chat", () => {
     expect(textarea().value).toBe("");
   });
   it("renders the context meter and conversation token totals", () => {
-    const html = renderToStaticMarkup(<AgentChatPage initial={{
+    const html = renderToStaticMarkup(<ChatPage initial={{
       ...initial,
       context: { tokens: 38_000, window: 200_000 },
       usage: { input: 12_400, output: 3_100, cacheRead: 800, cacheWrite: 0, cost: 0.0042 },
@@ -418,7 +427,7 @@ describe("Agent chat", () => {
     const chart = { layoutId: crypto.randomUUID(), revision: 7, capturedAt: Date.now(), status: "live" as const, range: { from: 3600, to: 7200 }, candles: [], image: "png-fixture" };
     const capture = vi.fn().mockResolvedValue(chart);
     const props = { label: "BTC study · BTC · 1h", disabled: false, capture };
-    await act(async () => root.render(<AgentChatPage initial={initial} choices={choices} embedded chartContext={props} />));
+    await act(async () => root.render(<ChatPage initial={initial} choices={choices} embedded chartContext={props} />));
     const checkbox = () => container.querySelector<HTMLInputElement>("input[type=checkbox]")!;
     expect(checkbox().disabled).toBe(true);
     await act(async () => current().emit("chat", { ...initial, supportsImages: true }));
@@ -438,7 +447,7 @@ describe("Agent chat", () => {
   });
   it("reports screenshot capture errors without submitting and preserves text typed during capture", async () => {
     const capture = vi.fn().mockRejectedValueOnce(new Error("Wait for chart candles"));
-    await act(async () => root.render(<AgentChatPage initial={initial} choices={choices} embedded chartContext={{ label: "BTC", disabled: false, capture }} />));
+    await act(async () => root.render(<ChatPage initial={initial} choices={choices} embedded chartContext={{ label: "BTC", disabled: false, capture }} />));
     await type("Explain this"); await submit();
     expect(container.querySelector("[role=alert]")!.textContent).toContain("Wait for chart candles");
     expect(mocks.sendAgentMessage).not.toHaveBeenCalled();

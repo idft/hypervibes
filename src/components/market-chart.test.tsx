@@ -36,6 +36,7 @@ vi.mock("lightweight-charts", () => ({ LineStyle: { Solid: 0, Dotted: 1, Dashed:
 } }));
 vi.mock("../web/charts.js", () => ({ getChartHistory: mocks.history, getChartFills: mocks.fills }));
 import { MarketChart } from "./market-chart.js";
+import { AgentEventsProvider } from "./agent-events.js";
 const candle = (time: number, close = 11): ChartCandle => ({ time, open: 10, high: 15, low: 9, close, volume: 20 });
 class FakeEventSource extends EventTarget {
   static instances: FakeEventSource[] = [];
@@ -44,8 +45,11 @@ class FakeEventSource extends EventTarget {
   send(snapshot: ChartSnapshot) { this.dispatchEvent(new MessageEvent("chart", { data: JSON.stringify(snapshot) })); }
   dashboard(snapshot: AgentDashboard) { this.dispatchEvent(new MessageEvent("dashboard", { data: JSON.stringify(snapshot) })); }
 }
-const chartSources = () => FakeEventSource.instances.filter((source) => source.url.includes("/chart/events"));
-const accountSource = () => FakeEventSource.instances.filter((source) => source.url.endsWith("/dashboard/events")).at(-1)!;
+const chartSources = () => FakeEventSource.instances.filter((source) => source.url.includes("/stream"));
+const stream = () => FakeEventSource.instances.at(-1)!;
+const streamParams = (url: string) => new URL(url, "http://localhost").searchParams;
+const sendChart = (snapshot: ChartSnapshot) => stream().send(snapshot);
+const sendDashboard = (snapshot: AgentDashboard) => stream().dashboard(snapshot);
 const snapshot = (): AgentDashboard => ({ address: "0xaccount", fetchedAt: 0, perpEquity: "100", spotUsdc: "0", errors: [],
   positions: [{ coin: "BTC", size: "1", entryPrice: "11", unrealizedPnl: "2", liquidationPrice: null, leverage: 2 }],
   orders: [{ id: 1, coin: "BTC", side: "Buy", type: "Limit", price: "10", size: "0.5" }, { id: 2, coin: "BTC", side: "Sell", type: "Stop Market", price: "6", triggerPrice: "9", size: "1" }],
@@ -68,7 +72,7 @@ describe("annotated market chart", () => {
     container.append(statusHost, chartMount); document.body.append(container); root = createRoot(chartMount);
   });
   afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
-  const render = async (tool: DrawingKind | "select" = "select", onSave = vi.fn(), visibility: ChartOverlayVisibility = defaultChartOverlays) => { await act(async () => { root.render(<QueryClientProvider client={client}><MarketChart id="fixture" layout={layout} tool={tool} selected="" disabled={false} statusHost={statusHost} overlayVisibility={visibility} onSelect={() => {}} onSave={onSave} onDrawn={() => {}} onEdit={() => {}} ref={(value) => { handle = value; }} /></QueryClientProvider>); await new Promise((resolve) => setTimeout(resolve, 5)); }); };
+  const render = async (tool: DrawingKind | "select" = "select", onSave = vi.fn(), visibility: ChartOverlayVisibility = defaultChartOverlays) => { await act(async () => { root.render(<QueryClientProvider client={client}><AgentEventsProvider agentId="fixture"><MarketChart id="fixture" layout={layout} tool={tool} selected="" disabled={false} statusHost={statusHost} overlayVisibility={visibility} onSelect={() => {}} onSave={onSave} onDrawn={() => {}} onEdit={() => {}} ref={(value) => { handle = value; }} /></AgentEventsProvider></QueryClientProvider>); await new Promise((resolve) => setTimeout(resolve, 5)); }); await act(async () => {}); };
   it("renders connection and history status in the toolbar without an extra row above the chart", async () => {
     await render();
     const indicator = statusHost.querySelector<HTMLElement>("[aria-label='Chart connection']")!;
@@ -82,19 +86,19 @@ describe("annotated market chart", () => {
     expect(details.open).toBe(true);
     expect(chartMount.firstElementChild!.children).toHaveLength(1);
     expect(chartMount.firstElementChild!.firstElementChild!.getAttribute("aria-label")).toBe("BTC 1h candlestick and volume chart");
-    await act(async () => FakeEventSource.instances[0]!.send({ status: "live", candles: [] }));
+    await act(async () => sendChart({ status: "live", candles: [] }));
     expect(indicator.textContent).toContain("Loading");
     expect(indicator.querySelector(".bg-amber-400")).not.toBeNull();
-    await act(async () => accountSource().dashboard(snapshot()));
+    await act(async () => sendDashboard(snapshot()));
     expect(indicator.textContent).toContain("Connected");
     expect(indicator.querySelector(".bg-emerald-400")).not.toBeNull();
     mocks.history.mockResolvedValueOnce({ candles: [candle(0)], hasMore: false });
     await act(async () => mocks.charts[0]!.scroll(0));
     expect(indicator.title).toContain("No older candles available");
-    await act(async () => FakeEventSource.instances[0]!.onerror?.());
+    await act(async () => stream().onerror?.());
     expect(indicator.textContent).toContain("Disconnected"); expect(indicator.title).toContain("Data may be stale");
     expect(indicator.querySelector(".bg-red-400")).not.toBeNull();
-    expect(chartSources()).toHaveLength(1); expect(FakeEventSource.instances).toHaveLength(2); expect(mocks.history).toHaveBeenCalledTimes(2);
+    expect(chartSources()).toHaveLength(1); expect(FakeEventSource.instances).toHaveLength(1); expect(mocks.history).toHaveBeenCalledTimes(2);
   });
   it("keeps history errors and retry actions in the toolbar status panel", async () => {
     mocks.history.mockRejectedValue(new Error("History request failed"));
@@ -157,17 +161,19 @@ describe("annotated market chart", () => {
   });
   it("draws candles/volume, streams updates, and exposes a frozen viewport capture", async () => {
     await render();
-    expect(FakeEventSource.instances[0]!.url).toBe("/api/agents/fixture/chart/events?coin=BTC&interval=1h");
+    const params = streamParams(FakeEventSource.instances[0]!.url);
+    expect(params.get("topics")).toBe("chart,dashboard");
+    expect(params.get("coin")).toBe("BTC"); expect(params.get("interval")).toBe("1h");
     const chart = mocks.charts[0]!;
     expect(chart.price.setData).toHaveBeenLastCalledWith([candle(3600), candle(7200)]);
-    await act(async () => FakeEventSource.instances[0]!.send({ status: "live", candles: [candle(7200, 14)] }));
+    await act(async () => sendChart({ status: "live", candles: [candle(7200, 14)] }));
     expect(chart.price.update).toHaveBeenLastCalledWith(candle(7200, 14), true);
     expect(container.textContent).toContain("Connected");
     const capture = await handle!.capture(layout, "", false);
     expect(capture).toMatchObject({ layoutId: layout.id, revision: 0, status: "live", candles: [candle(3600), candle(7200, 14)] });
-    await act(async () => FakeEventSource.instances[0]!.send({ status: "live", candles: [candle(7200, 12)] }));
+    await act(async () => sendChart({ status: "live", candles: [candle(7200, 12)] }));
     expect(capture.candles.at(-1)!.close).toBe(14);
-    await act(async () => FakeEventSource.instances[0]!.onerror?.());
+    await act(async () => stream().onerror?.());
     expect(container.textContent).toContain("Disconnected");
   });
   it("loads older candles and preserves viewport; ignores obsolete history after selection changes", async () => {
@@ -192,17 +198,17 @@ describe("annotated market chart", () => {
   it("streams position and order lines, marks stale sections and removes closed positions and canceled orders", async () => {
     await render();
     const chart = mocks.charts[0]!, current = snapshot();
-    expect(accountSource().url).toBe("/api/agents/fixture/dashboard/events");
-    await act(async () => accountSource().dashboard(current));
+    expect(streamParams(stream().url).get("topics")).toBe("chart,dashboard");
+    await act(async () => sendDashboard(current));
     expect(chart.price.createPriceLine).toHaveBeenCalledTimes(3);
     expect(chart.price.createPriceLine).toHaveBeenCalledWith(expect.objectContaining({ price: 11, title: "Long · 1 BTC · P&L +2.0000 USDC" }));
     expect(chart.price.createPriceLine).toHaveBeenCalledWith(expect.objectContaining({ price: 9, title: expect.stringContaining("Sell Stop Market trigger") }));
     expect(container.textContent).not.toContain("Connecting account");
     const lines = chart.price.createPriceLine.mock.results.map((r) => r.value);
-    await act(async () => accountSource().onerror?.());
+    await act(async () => stream().onerror?.());
     expect(container.textContent).toContain("Position data stale"); expect(container.textContent).toContain("Order data stale");
     expect(lines[0]!.applyOptions).toHaveBeenLastCalledWith(expect.objectContaining({ title: expect.stringContaining("STALE") }));
-    await act(async () => accountSource().dashboard({ ...current, positions: [], orders: [] }));
+    await act(async () => sendDashboard({ ...current, positions: [], orders: [] }));
     expect(chart.price.removePriceLine).toHaveBeenCalledTimes(3);
     expect(container.textContent).not.toContain("data stale");
     // Reading live account data never edits the layout or annotations.
@@ -220,16 +226,19 @@ describe("annotated market chart", () => {
     await act(async () => mocks.charts[0]!.hover({ hoveredInfo: { type: "marker", objectId: first.id }, point: { x: 5, y: 300 } }));
     expect(container.querySelector("[role=tooltip]")!.textContent).toContain("Buy · 0.10000001 BTC @ 10.12345678");
     expect(container.querySelector("time")!.dateTime).toBe(new Date(first.time).toISOString());
-    await act(async () => accountSource().dashboard(snapshot()));
+    await act(async () => sendDashboard(snapshot()));
     await render("select", vi.fn(), { trades: false, position: false, orders: true });
     expect(mocks.plugins[0]!.setMarkers).toHaveBeenLastCalledWith([]);
     expect(container.querySelector("[role=tooltip]")).toBeNull();
     expect(mocks.charts[0]!.price.removePriceLine).toHaveBeenCalledTimes(1);
-    expect(accountSource().close).not.toHaveBeenCalled();
+    expect(stream().close).not.toHaveBeenCalled();
     await render("select", vi.fn(), { trades: false, position: false, orders: false });
-    expect(accountSource().close).toHaveBeenCalledOnce();
+    expect(FakeEventSource.instances).toHaveLength(2);
+    expect(FakeEventSource.instances[0]!.close).toHaveBeenCalledOnce();
     expect(mocks.charts[0]!.price.removePriceLine).toHaveBeenCalledTimes(3);
-    expect(chartSources()[0]!.close).not.toHaveBeenCalled();
+    // The chart subscription survives the dashboard unsubscribe on the reopened stream.
+    await act(async () => sendChart({ status: "live", candles: [candle(7200, 12)] }));
+    expect(mocks.charts[0]!.price.update).toHaveBeenCalled();
   });
   it("offers retry on history failure and cleans up subscriptions", async () => {
     mocks.history.mockRejectedValueOnce(new Error("History offline")); await render();

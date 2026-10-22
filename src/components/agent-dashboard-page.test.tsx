@@ -10,17 +10,25 @@ vi.mock("../web/agents.js", () => ({ sendAgentMessage: mocks.sendAgentMessage })
 vi.mock("../web/subagents.js", () => ({ runSubagent: mocks.runSubagent, saveSubagentSection: mocks.saveSubagentSection }));
 vi.mock("@tanstack/react-router", () => ({ useRouter: () => ({ navigate: mocks.navigate, invalidate: mocks.invalidate }) }));
 import { AgentDashboardPage as AgentDashboardPageComponent } from "./agent-dashboard-page.js";
+import { AgentEventsProvider } from "./agent-events.js";
 let queryClient: QueryClient;
 const AgentDashboardPage = withTestQueryClient(AgentDashboardPageComponent, () => queryClient);
+type DashboardProps = Parameters<typeof AgentDashboardPageComponent>[0];
+function Page(props: DashboardProps) {
+  return <AgentEventsProvider agentId={props.id}><AgentDashboardPage {...props} /></AgentEventsProvider>;
+}
+const topicsOf = (url: string) => new URL(url, "http://localhost").searchParams.get("topics");
 const initial: AgentDashboard = { address: `0x${"12".repeat(20)}`, fetchedAt: 0, perpEquity: "12.5", spotUsdc: "3", positions: [], orders: [], errors: [] };
-const source = () => FakeEventSource.instances.find((source) => source.url.endsWith("/dashboard/events"))!;
-const workerSource = () => FakeEventSource.instances.find((source) => source.url.endsWith("/sub-agents/events"))!;
+const stream = () => FakeEventSource.instances.find((source) => source.url.includes("/stream"))!;
+const source = () => stream();
+const workerSource = () => stream();
 class FakeEventSource extends EventTarget {
   static instances: FakeEventSource[] = [];
   close = vi.fn();
   onerror: (() => void) | null = null;
   constructor(readonly url: string) { super(); FakeEventSource.instances.push(this); }
   send(snapshot: AgentDashboard) { this.dispatchEvent(new MessageEvent("dashboard", { data: JSON.stringify(snapshot) })); }
+  sendSubagents(runs: unknown) { this.dispatchEvent(new MessageEvent("subagents", { data: JSON.stringify(runs) })); }
 }
 
 describe("Agent dashboard", () => {
@@ -31,7 +39,8 @@ describe("Agent dashboard", () => {
     FakeEventSource.instances = [];
     vi.stubGlobal("EventSource", FakeEventSource);
     container = document.createElement("div"); document.body.append(container); root = createRoot(container);
-    await act(async () => root.render(<AgentDashboardPage id="fixture" initial={initial} />));
+    await act(async () => root.render(<Page id="fixture" initial={initial} />));
+    await act(async () => {});
   });
   afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
   it("sends dashboard chat to the orchestrator, prevents duplicates and navigates only after acceptance", async () => {
@@ -71,7 +80,7 @@ describe("Agent dashboard", () => {
     expect([...container.querySelectorAll("h3")].some((heading) => heading.textContent === "Performance")).toBe(false);
   });
   it("links worker headers and run results to their detail pages with relative timestamps", async () => {
-    await act(async () => root.render(<AgentDashboardPage id="fixture" initial={initial} subagents={[
+    await act(async () => root.render(<Page id="fixture" initial={initial} subagents={[
       { id: "worker:one", name: "Research", enabled: true, schedule: "", nextRunAt: null, runs: [{ id: "run:one", status: "completed", createdAt: Date.now() - 120000, result: "Market conditions look favorable." }, { id: "older", status: "failed", createdAt: 1, result: "Old result hidden" }] },
       { id: "worker:two", name: "Risk", enabled: false, schedule: "", nextRunAt: null, runs: [] },
     ]} />));
@@ -93,7 +102,7 @@ describe("Agent dashboard", () => {
     const worker = { id: "worker", name: "Research", enabled: true, schedule: "", nextRunAt: null };
     for (const status of ["queued", "running", "completed"] as const) {
       const current = { id: "current", status, createdAt: 2, result: status === "completed" ? "New summary" : "" };
-      await act(async () => root.render(<AgentDashboardPage id="fixture" initial={initial} subagents={[{ ...worker, runs: [current, previous] }]} />));
+      await act(async () => root.render(<Page id="fixture" initial={initial} subagents={[{ ...worker, runs: [current, previous] }]} />));
       const section = container.querySelector('[aria-label="Sub-agents"]')!;
       expect(section.querySelector(`[aria-label="${status}"]`)).not.toBeNull();
       expect(section.textContent?.includes("Previous summary")).toBe(status !== "completed");
@@ -102,7 +111,7 @@ describe("Agent dashboard", () => {
     }
   });
   it("opens the manual assignment dialog from an icon-only button and retries with the same request ID", async () => {
-    await act(async () => root.render(<AgentDashboardPage id="fixture" initial={initial} subagents={[{ id: "worker", name: "Research", enabled: false, schedule: "", nextRunAt: null, runs: [] }]} />));
+    await act(async () => root.render(<Page id="fixture" initial={initial} subagents={[{ id: "worker", name: "Research", enabled: false, schedule: "", nextRunAt: null, runs: [] }]} />));
     const button = container.querySelector<HTMLButtonElement>('[aria-label="Run now: Research"]')!;
     expect(button.textContent).toBe("");
     expect(button.querySelector("svg")).not.toBeNull();
@@ -129,7 +138,7 @@ describe("Agent dashboard", () => {
     const now = new Date("2026-01-01T00:00:00Z").getTime();
     vi.setSystemTime(now);
     try {
-      await act(async () => root.render(<AgentDashboardPage id="fixture" initial={initial} subagents={[
+      await act(async () => root.render(<Page id="fixture" initial={initial} subagents={[
         { id: "worker", name: "Research", enabled: true, schedule: "1h", nextRunAt: now + 14 * 60000, runs: [] },
         { id: "manual", name: "Manual", enabled: true, schedule: "", nextRunAt: null, runs: [] },
       ]} />));
@@ -153,10 +162,10 @@ describe("Agent dashboard", () => {
   });
   it("subscribes to live activity for manual workers, recovers after disconnect, and closes on unmount", async () => {
     const connection = workerSource();
-    expect(connection.url).toBe("/api/agents/fixture/sub-agents/events");
-    const send = (runs: unknown[]) => act(async () => connection.dispatchEvent(new MessageEvent("subagents", { data: JSON.stringify([
+    expect(topicsOf(connection.url)).toBe("dashboard,subagents");
+    const send = (runs: unknown[]) => act(async () => connection.sendSubagents([
       { id: "worker", name: "Manual worker", enabled: false, schedule: "", nextRunAt: null, runs },
-    ]) })));
+    ]));
     await send([{ id: "run", status: "running", createdAt: Date.now(), result: "" }]);
     const section = container.querySelector('[aria-label="Sub-agents"]')!;
     expect(section.textContent).toContain("Manual worker");
@@ -167,18 +176,18 @@ describe("Agent dashboard", () => {
     expect(section.querySelector('[role="alert"]')).toBeNull();
     expect(section.textContent).toContain("Research finished");
     expect(section.querySelector('[aria-label="completed"]')).not.toBeNull();
-    expect(FakeEventSource.instances).toHaveLength(2);
+    expect(FakeEventSource.instances).toHaveLength(1);
     await act(async () => root.unmount()); root = createRoot(container);
     expect(connection.close).toHaveBeenCalledOnce();
   });
   it("shows a load failure rather than an incorrect empty state", async () => {
-    await act(async () => root.render(<AgentDashboardPage id="fixture" initial={initial} subagentsError="Please retry." />));
+    await act(async () => root.render(<Page id="fixture" initial={initial} subagentsError="Please retry." />));
     expect(container.querySelector('[aria-label="Sub-agents"] [role="alert"]')?.textContent).toContain("Please retry.");
     expect(container.textContent).not.toContain("No sub-agents yet.");
   });
   it("subscribes to backend snapshots and closes only the browser stream on unmount", async () => {
     const connection = source();
-    expect(connection.url).toBe("/api/agents/fixture/dashboard/events");
+    expect(topicsOf(connection.url)).toBe("dashboard,subagents");
     await act(async () => connection.send({ ...initial, perpEquity: "900" }));
     expect(container.textContent).toContain("903.00");
     await act(async () => root.unmount()); root = createRoot(container);
@@ -272,9 +281,12 @@ describe("Agent dashboard", () => {
     expect(overview.querySelector(".text-red-400")!.textContent).toBe("(0.2000)");
   });
   it("handles an invalid development agent without opening an account feed", async () => {
-    await act(async () => root.render(<AgentDashboardPage id="unlinked" initial={{ ...initial, address: null }} />));
-    expect(FakeEventSource.instances.filter((source) => source.url.endsWith("/dashboard/events"))).toHaveLength(1);
-    expect(source().close).toHaveBeenCalledOnce();
+    await act(async () => root.unmount()); root = createRoot(container);
+    await act(async () => root.render(<Page id="unlinked" initial={{ ...initial, address: null }} />));
+    await act(async () => {});
+    expect(FakeEventSource.instances).toHaveLength(2);
+    expect(FakeEventSource.instances[0]!.close).toHaveBeenCalledOnce();
+    expect(topicsOf(FakeEventSource.instances[1]!.url)).toBe("subagents");
     expect(container.textContent).toContain("missing its required Hyperliquid account");
   });
 });

@@ -4,27 +4,25 @@ import type { AgentDashboard } from "../hyperliquid/agent-dashboard.js";
 import { accountSectionFresh } from "../charts/trading-overlays.js";
 import type { ChartFill, ChartOverlayVisibility } from "../charts/trading-contracts.js";
 import { chartFillsQueryOptions } from "../web/chart-queries.js";
+import { useAgentEvent, useAgentEventsStatus } from "./agent-events.js";
 
 const noFills: ChartFill[] = [];
 export function useChartAccount(id: string, coin: string, from: number, to: number, visibility: ChartOverlayVisibility) {
   const [account, setAccount] = useState<{ id: string; snapshot: AgentDashboard | null; interrupted: boolean }>({ id, snapshot: null, interrupted: false });
   const [retry, setRetry] = useState(0);
   const enabled = visibility.position || visibility.orders;
+  const { interrupted, streamErrors, reconnect } = useAgentEventsStatus();
+  useAgentEvent("dashboard", (event) => {
+    setAccount({ id, snapshot: JSON.parse(event.data) as AgentDashboard, interrupted: false });
+  }, enabled);
   useEffect(() => {
     setAccount({ id, snapshot: null, interrupted: false });
-    if (!enabled) return;
-    let disposed = false;
-    const source = new EventSource(`/api/agents/${id}/dashboard/events`);
-    source.addEventListener("dashboard", (event) => {
-      if (!disposed) setAccount({ id, snapshot: JSON.parse((event as MessageEvent).data) as AgentDashboard, interrupted: false });
-    });
-    const interrupted = () => { if (!disposed) setAccount((current) => ({ ...current, interrupted: true })); };
-    source.onerror = interrupted;
-    for (const name of ["shutdown", "unavailable"]) source.addEventListener(name, interrupted);
-    source.addEventListener("stream-error", () => { source.close(); interrupted(); });
-    source.addEventListener("unauthorized", () => { source.close(); window.location.assign("/login"); });
-    return () => { disposed = true; source.close(); };
   }, [id, enabled, retry]);
+  useEffect(() => {
+    if (!enabled) return;
+    const topicError = streamErrors["dashboard"];
+    if (topicError || interrupted) setAccount((current) => (current.interrupted ? current : { ...current, interrupted: true }));
+  }, [enabled, interrupted, streamErrors]);
   const trades = useInfiniteQuery({
     ...chartFillsQueryOptions(id, coin, from, to),
     enabled: visibility.trades && to > from,
@@ -57,6 +55,6 @@ export function useChartAccount(id: string, coin: string, from: number, to: numb
   }
   return { snapshot, interrupted: account.interrupted, fills, messages,
     canRetry: (enabled && account.interrupted) || (visibility.trades && isError),
-    retry: () => { setRetry((n) => n + 1); if (visibility.trades) void trades.refetch(); },
+    retry: () => { setRetry((n) => n + 1); reconnect(); if (visibility.trades) void trades.refetch(); },
   };
 }
