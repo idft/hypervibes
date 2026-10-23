@@ -2,11 +2,11 @@
 
 HyperVibes is a framework for AI agents to trade crypto on Hyperliquid exchange.
 
-## Current Work: Incremental TypeScript Rewrite
+## Current application: TypeScript
 
-The active application is a TypeScript rewrite built incrementally alongside the
-legacy Rust code. See `pi.md` for design research and history; use the root
-`package.json` for current commands.
+The TypeScript rewrite is mostly complete and is the active application. The
+legacy Rust code remains as a reference. See `pi.md` for design research and
+history; use the root `package.json` for current commands.
 
 * Backend TypeScript files live alongside the existing `.rs` files in `src/`.
   Use descriptive TypeScript filenames (e.g. `database.ts`, `app.ts`), not Rust
@@ -113,13 +113,27 @@ The dev database is a single SQLite file (no PostgreSQL, no containers):
 * Do not create database migrations without permission, unless a plan
   specifically mentions creating it.
 
-## Documentation during the rewrite
+## Documentation
 
-* **Do not create or update documentation for TypeScript rewrite work unless
-  the user explicitly requests it.** This includes `docs/`, README files, and
-  `pi.md`.
-* Keep the existing public documentation for the legacy application unchanged
-  while the rewrite is in progress.
+* Update documentation when a change affects the overall user-facing concept,
+  setup, or essential usage. No separate user request is required. Routine code
+  changes and minor behavior changes do not need documentation edits.
+* Cosmetic UI changes, such as colors, spacing, typography, styling, or layout
+  adjustments, do not require documentation updates.
+* `docs/` is the public user guide shown on the website. Document the current
+  TypeScript app, not the legacy Rust application.
+* Keep user documentation simple, concise, and organized by feature. Explain
+  what a feature is for and its main capabilities, not every detail of how it works.
+* Do not turn feature pages into exhaustive references. Omit field-by-field
+  descriptions, every button or option, internal mechanics, edge-case catalogs,
+  and implementation or test details unless the user explicitly requests them.
+* Include only the steps needed to get started and essential safety warnings.
+  Prefer a short overview or a few bullets over detailed walkthroughs.
+* Make the smallest necessary documentation change. Do not append a paragraph
+  for each fix or expand nearby sections just because you worked on the code.
+* Keep installation instructions accurate. Mark unreleased packages, builds,
+  and installation methods as coming soon rather than inventing commands.
+* Check affected links and website navigation when adding or renaming pages.
 * Maintain `AGENTS.md` when the user requests changes to coding-agent instructions.
 
 ## Code Quality & Linting Standards
@@ -148,5 +162,5 @@ Run the relevant frontend checks when changing frontend code. Do not add Rust
 checks to the rewrite workflow; legacy Rust testing requires an explicit user request.
 
 Definition of Done: Relevant TypeScript checks pass, with no new diagnostics or
-dead code. Documentation updates are not part of the rewrite workflow unless
-explicitly requested.
+dead code. Update documentation only when the overall user-facing concept,
+setup, or essential usage changes. Keep those updates brief.

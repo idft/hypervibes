@@ -4,93 +4,38 @@ slug: /concepts/chat
 
 # Chat
 
-The Chat tab is a persistent OpenCode conversation for one agent. It maps to a
-dedicated OpenCode session and is independent of scheduled sub-agent runs.
-Workspaces register a local stdio HyperVibes MCP server that uses workspace-
-scoped agent credentials and never receives a Hyperliquid private key.
+Chat is the agent's main conversation. Use it to ask about markets, review
+account activity, or request work from sub-agents.
 
-## Start a conversation
+## Conversation controls
 
-Choose a provider, model, and optional thinking mode at creation. Later turns
-retain that selection while OpenCode records per-message attribution. The
-transcript includes messages, tool activity, errors, token/context usage, cost,
-and compaction telemetry through live updates.
+- Send a message or queue one while the agent is busy.
+- Follow replies and tool activity as they arrive.
+- Load earlier messages, including messages from before a context reset.
+- Change the model and supported thinking level when the conversation is idle.
+- Check context usage and total conversation usage.
+- Stop the active response.
 
-Messages can contain up to **100,000 characters**, including pasted handoff
-documents. The composer shows this limit; if you exceed it, the error reports
-your message's character count and keeps the draft so you can edit it. Leading
-and trailing whitespace is trimmed before counting and sending. This is a
-message-size limit; the selected model's context window still applies to the
-conversation, including previous messages and tool results.
+**Stop response** only interrupts the conversation; it does not disable the
+agent or its workers. Use the top-bar [Emergency stop](Agents.md#emergency-stop-and-re-enable)
+to disable all agent execution. While disabled, history stays readable but new
+chat messages, context operations, and worker execution are unavailable until
+you explicitly enable the agent again.
 
-Compaction and deletion are OpenCode session operations available only while the
-session is idle. Deleting an agent removes its idle mapped sessions and
-agent-owned conversation records.
+## Manage context
 
-You can keep typing while the agent responds. Messages sent during a running
-turn are queued, shown as queued in the transcript, and submitted in order once
-the running turn finishes. **Stop** abandons messages still queued behind the
-running turn. Telegram messages also queue, with an acknowledgement in the chat.
-Up to 20 messages can wait in a conversation's queue. The queue lives on the
-server, so it survives closing or reloading your browser, but queued messages
-are lost if the server restarts.
+- Use Compact to summarize the conversation and reduce the context sent to the model.
+- Use Reset context to start fresh without deleting the visible conversation history.
 
-The `agent-conversations` profile has no native shell, filesystem, web, or task
-tools and never reads the workspace `.env`. Its default read tools are:
+Resetting context does not delete saved memories or insights. Stopping a response
+does not undo tool actions or exchange orders that have already completed.
 
-- `hypervibes_get_account`
-- `hypervibes_list_strategy_prompts`
-- `hypervibes_get_strategy_prompt`
-- `hypervibes_get_trading_context`
-- `hypervibes_get_memory_detail`
-- `hypervibes_list_memories`
-- `hypervibes_list_orders`
-- `hypervibes_list_account_transactions`
-- `hypervibes_get_order`
-- `hypervibes_list_analysis_instruments`
-- `hypervibes_list_indicators`
-- `hypervibes_get_indicator`
-- `hypervibes_get_indicator_results`
+## What the agent can do
 
-The header shows each conversation permission's current status. Use **Manage
-permissions** to change Orders, Memory, Notifications, Trade notes, Indicators,
-or Strategy prompts, then **Save** to apply them. **Cancel** discards your edits.
-Permissions can be changed while the conversation is idle.
+The main conversation can only use its enabled tools. Configure it under
+Sub-Agents. Delegation also depends on the worker's permissions and availability.
 
-Each permission supports **Deny**, **Confirm** (one-time approval for each action),
-or **Allow**. Configure an agent's starting permissions in **Settings → Chat
-permission defaults**, select **Manage permissions**, adjust the permissions in
-the modal, then select **Save**. **Cancel** discards your edits. New Web and Telegram
-conversations copy these defaults when they are created. Changing the defaults
-does not change existing conversations; use **Manage permissions** in a
-conversation to change its own permissions.
+If you enable order tools and trading, a chat request can lead to real orders.
+Use [Settings](Settings.md) for enforced trading limits, not chat instructions alone.
 
-New agents initially default to Confirm for Orders, Memory, Trade notes,
-Indicators, and Strategy prompts, and Deny for Notifications. Existing agents
-keep their saved defaults. Read-only tools remain allowed.
-The Strategy prompts permission controls `hypervibes_update_strategy_prompt`.
-
-Chat can also create or update an agent-owned indicator using validated
-PineScript-subset source. Each mutation follows the Indicators permission and
-records the conversation as its provenance. Chat cannot grant
-an indicator access to instruments outside the agent's analysis set.
-It first lists selected analysis instruments and uses those IDs unchanged. If
-none are selected, Chat directs the operator to Settings rather than guessing
-instrument IDs or attempting the mutation.
-
-Notifications initially default to Deny. To let Chat send notifications, set
-**Notifications** to **Allow** for the conversation, or in the agent's defaults
-before creating a new conversation.
-
-## Discuss a prompt
-
-The **Discuss prompt** action on a role page opens Chat with the draft:
-
-1. The user selects a sub-agent prompt target and edits its draft.
-2. HyperVibes creates a conversation using the latest Chat model.
-3. The draft is included in the opening message when it fits the message-size limit.
-4. Chat can load the saved target prompt when the draft is too long.
-5. Any requested MCP update follows the conversation's Strategy prompts permission.
-
-Chat prompt tools only access the current agent's targets. Scheduled sub-agents
-receive their prompt revision as input but cannot modify it.
+You can also use the same conversation through the [Telegram bridge](Telegram.md).

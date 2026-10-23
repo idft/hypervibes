@@ -2,41 +2,32 @@
 slug: /development/testing
 ---
 
-# Testing
+# Check your setup
 
-## All Test Suites
+Before allowing live orders, check the account, model, and worker setup.
 
-Run the Rust, Python, and JavaScript test suites together with:
+## Account
 
-```bash
-just test
-```
+- Open Account and check that your Hyperliquid account is active.
+- Check that the trading API key is approved and has not expired.
+- Review the builder-fee approval.
+- Confirm the agent has the intended trading account.
 
-## Test Database
+## Models and workers
 
-By default `cargo test` uses the dedicated `test-postgres` service from `podman-compose.dev.yaml` at `postgres://hypervibes:hypervibes@127.0.0.1:15433/postgres`. This default is defined in `src/test_db.rs`; set `TEST_DATABASE_URL` to override it.
+- Check the connection on Providers if a model is unavailable.
+- Send a simple message in Chat and confirm the agent replies.
+- Run a research worker manually and inspect its result before enabling a schedule.
+- Check the worker's tools, instructions, and timeout if it cannot complete a task.
+- Check that a worker is enabled and not archived if automatic assignments do not run.
 
-`src/test_db.rs` creates a fresh database for each `pool()` call, runs migrations inside that database, and lets those isolated test databases be created concurrently on the dedicated test Postgres service.
+## Trading and data
 
-The helper also does two cleanup passes:
+- Keep trading disabled while checking research-only tasks.
+- Review allowed instruments and exposure limits before enabling trading.
+- Check Dashboard connection warnings and Transactions sync warnings before trusting displayed totals.
+- Check Notifications for order and Telegram delivery errors.
 
-- a one-time startup sweep that drops stale `vt_test_*` databases left behind by earlier interrupted runs
-- per-test cleanup that closes the pool and drops the created database when the test handle is dropped
-
-The dedicated test Postgres service is intentionally speed-optimized and disposable:
-
-- port `15433`
-- `max_connections=400`
-- `fsync=off`
-- `synchronous_commit=off`
-- `full_page_writes=off`
-- `shm_size=512m`
-- tmpfs-backed `PGDATA` so test data never persists across container restarts
-
-## Frontend Build During Tests
-
-`build.rs` skips the automatic frontend `pnpm build` path during `cargo test`. Template and route tests render directly from source templates and do not need compiled assets. If you explicitly need the build-script asset step during a test invocation, run with `HYPERVIBES_FORCE_FRONTEND_BUILD=1 cargo test`.
-
-## SSE Tests
-
-The SSE route tests in `src/web/routes.rs` run in the normal suite against the dedicated `test-postgres` service. The shared `read_sse_chunk` helper still only reads an initial slice of each long-lived stream, so keep those tests focused on the initial event payload and explicit follow-up updates triggered inside the test.
+If an order's outcome is unclear, check the actual orders and positions on
+Hyperliquid before requesting another order. Stopping a run does not undo
+exchange actions.

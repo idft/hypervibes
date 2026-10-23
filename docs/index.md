@@ -1,53 +1,34 @@
-# Overview
+# HyperVibes user guide
 
-HyperVibes is an open-source, self-hosted application for building and
-supervising crypto trading agents on Hyperliquid. It provides the account
-boundaries, scheduling, memory, execution gateway, and live operational view
-around an agent's LLM and tool runtime.
+HyperVibes is a self-hosted app for running AI trading agents on Hyperliquid.
+Choose your models, give agents instructions, and review their work in one place.
 
-The OpenCode backend connects agents to any model provider supported by OpenCode,
-along with its skills and MCP tools.
-This keeps the model and tool runtime flexible while HyperVibes manages the
-agent's account, schedules, memory, and exchange access.
+Agents can place real orders. AI can make mistakes, and trading can lose money.
+Start with trading disabled while you check your setup.
 
-HyperVibes is currently tested on Linux only. macOS and Windows have not yet
-been tested.
+## Get started
 
-## Start here
+- [Installation](Installation.md) covers the planned NPX and desktop releases, plus server hosting.
+- [Quick start](QuickStart.md) walks through account setup and your first agent.
+- [Hyperliquid account](Hyperliquid.md) covers trading keys, approvals, and accounts.
+- [AI providers](Providers.md) explains how to connect a model provider.
+- [Check your setup](Testing.md) helps you resolve common setup issues.
 
-- [Install HyperVibes](Installation.md) using containers or from source.
-- [Quick start](QuickStart.md) to complete the first setup steps.
-- [Configure Hyperliquid](Hyperliquid.md) to understand wallets, signers,
-  accounts, fees, and referral settings.
-- [Agents](Agents.md) to understand agent setup and controls.
-- [Indicators](Indicators.md) to configure deterministic multi-timeframe Pine
-  research evidence.
-- [Configure AI providers](Providers.md) to connect models through OpenCode.
+## App features
 
-## Technical Overview
+- [Agents](Agents.md): create agents and assign trading accounts.
+- [Dashboard](Dashboard.md): check balances, positions, orders, and worker activity.
+- [Charts](Charts.md): view markets, add drawings, and discuss a chart with your agent.
+- [Indicators](Indicators.md): use built-in indicators or create your own.
+- [Transactions](Transactions.md): review trades, account activity, and notes.
+- [Chat](Chat.md): talk to your agent and manage its conversation.
+- [Sub-agents](SubAgents.md): configure specialist workers and schedules.
+- [Instructions](Prompts.md): tell each agent what to do.
+- [Agent tools](MCPTools.md): choose what each agent can access.
+- [Memories](Memory.md): read saved research, decisions, and reviews.
+- [Insights](Insights.md): review lessons carried forward from earlier work.
+- [Notifications](Notifications.md): follow order activity and agent messages.
+- [Settings](Settings.md): control trading permissions and risk limits.
+- [Telegram bridge](Telegram.md): chat with an agent and receive notifications in Telegram.
 
-- Rust single binary
-- Built-in web UI
-- OpenCode backend
-- Postgres database
-- Deploy with containers
-
-## System Overview
-
-Each agent has its own Hyperliquid account or sub-account. This keeps each
-agent's positions, orders, and account activity separate.
-
-Agent sub-agents run automatically. The available sub-agent types are:
-
-- **Analysis** - Runs on a fixed schedule tied to candle closings, such as 15m,
-  1h, or 1d. It uses approved data tools for research and publishes the results
-  as scoped memory.
-- **Trading** - Runs more frequently, defaulting to every 5 minutes. It reads
-  published Analysis memory, places orders, and manages positions.
-- **Review** - Runs daily to review agent performance and publish accumulated
-  learnings.
-
-Custom indicators run independently on one to eight explicit closed-candle
-timeframes and publish versioned results for Analysis.
-
-Prompts for each sub-agent type can be edited to describe your trading strategy.
+[How agents work](Architecture.md) explains how the main conversation and sub-agents work together.

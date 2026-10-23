@@ -2,63 +2,43 @@
 slug: /quick-start
 ---
 
-# Quick Start
+# Quick start
 
-HyperVibes runs as a local container stack with the HyperVibes application,
-OpenCode runtime, and Postgres. It is intended to be operated by the account
-owner; do not expose the application to a public network without first adding
-your own access control and TLS termination.
+## Run HyperVibes
 
-## Before you begin
+NPX will be the preferred way to run HyperVibes. The package and launch command
+are not available yet. Desktop builds for macOS, Windows, and Linux are also
+coming soon.
 
-You need:
+See [Installation](Installation.md) for release status and hosting options.
+The steps below apply once you can open the app.
 
-- Podman and `podman-compose`
-- `curl` and `openssl`
-- A browser wallet for Hyperliquid login and account approvals
-- An OpenCode provider connection before an agent can run sub-agents
+## Set up your account
 
-## Install
+1. Sign in with your browser wallet. Use the wallet that owns your Hyperliquid account.
+2. Open Account. If Hyperliquid needs account activation, follow the link to complete it first.
+3. Generate or import a Hyperliquid API key and approve it with your wallet. Never import your main wallet's private key.
+4. Review and approve the builder fee shown on the Account page.
+5. Open Providers and connect an AI provider.
 
-Create a new installation directory, then download the current Compose file from
-the `master` branch.
+[Hyperliquid account](Hyperliquid.md) and [AI providers](Providers.md) explain these steps.
 
-```sh
-umask 077 && curl -fsSLo podman-compose.yaml https://raw.githubusercontent.com/idft/hypervibes/master/podman-compose.yaml
-```
+## Create your first agent
 
-Generate unique secrets in a private `.env` file before the first start. This
-command refuses to overwrite an existing `.env`:
+1. Choose Create agent and enter a name.
+2. Select a model and its thinking level, if supported.
+3. Assign your main account or an available sub-account.
+4. Keep Include default sub-agents selected if you want a Technical Analyst, Trader, and Daily Reviewer. They start paused.
+5. Create the agent and open Chat to ask about its setup.
 
-```sh
-(umask 077; set -C; KEY=$(openssl rand -hex 32) && CTRL=$(openssl rand -hex 32) && OC=$(openssl rand -hex 32) && DB=$(openssl rand -hex 32) && printf 'AGENTS_ENCRYPTION_KEY=%s\nWORKSPACE_CONTROL_API_KEY=%s\nOPENCODE_SERVER_PASSWORD=%s\nPOSTGRES_PASSWORD=%s\n' "$KEY" "$CTRL" "$OC" "$DB" > .env)
-```
+## Before enabling trading
 
-From that directory, start the stack:
+- Review each sub-agent's instructions, model, tools, and schedule.
+- Set allowed instruments and exposure limits in Settings.
+- Run an analysis task and inspect its result and saved memories.
+- Enable only the sub-agents you want to run automatically.
+- Turn on Enable Trading only when you are ready for live orders. It starts off.
 
-```sh
-podman-compose up -d
-```
-
-When the services are healthy, open [http://127.0.0.1:3003](http://127.0.0.1:3003).
-
-## Set up an agent
-
-1. Sign in with your browser wallet.
-2. On the Account page, create or import and approve a Hyperliquid trading
-   signer.
-3. Connect an LLM provider in Provider connections.
-4. Create an agent and assign one main or sub-account, a market allowlist,
-   prompts, and sub-agent models.
-5. Review its setup state before enabling scheduled work.
-
-Read [Hyperliquid configuration](Hyperliquid.md) and [Agents](Agents.md) before
-enabling an agent that can place live orders.
-
-## Keep the installation safe
-
-`.env` contains generated secrets. Keep it private and back it up with the
-database. Do not regenerate it after the first start. `podman-compose down`
-preserves data volumes; do not use `podman-compose down -v`
-unless you intend to delete the database, provider credentials, and generated
-workspaces.
+Instructions are guidance, not enforced risk limits. Use [Settings](Settings.md)
+for trading restrictions. Pausing a worker does not close positions or cancel
+orders on Hyperliquid.

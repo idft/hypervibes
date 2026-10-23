@@ -3,21 +3,32 @@ import type {SidebarsConfig} from '@docusaurus/plugin-content-docs';
 const sidebars: SidebarsConfig = {
   documentation: [
     'index',
-    'QuickStart',
     {
       type: 'category',
-      label: 'Operation',
-      items: ['Installation', 'Hyperliquid', 'Providers', 'MCPTools'],
+      label: 'Get started',
+      collapsed: false,
+      items: ['Installation', 'QuickStart', 'Hyperliquid', 'Providers', 'Architecture', 'Testing'],
     },
     {
       type: 'category',
-      label: 'Concepts',
-      items: ['Agents', 'Prompts', 'SubAgents', 'Chat', 'Memory'],
-    },
-    {
-      type: 'category',
-      label: 'Development',
-      items: ['Architecture', 'Testing'],
+      label: 'Features',
+      collapsed: false,
+      items: [
+        'Agents',
+        'Dashboard',
+        'Charts',
+        'Indicators',
+        'Transactions',
+        'Chat',
+        'SubAgents',
+        'Prompts',
+        'MCPTools',
+        'Memory',
+        'Insights',
+        'Notifications',
+        'Settings',
+        'Telegram',
+      ],
     },
   ],
 };

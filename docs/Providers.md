@@ -2,30 +2,29 @@
 slug: /providers
 ---
 
-# AI Providers
+# AI providers
 
-HyperVibes uses one shared OpenCode service as its agent execution backend.
-Every AI provider supported by [OpenCode](https://opencode.ai/) is supported by
-HyperVibes. See [Models.dev](https://models.dev/) for provider and model
-information. OpenCode runs the LLM and tool calls inside each generated agent
-workspace.
+Open Providers to connect the AI accounts your agents will use.
 
-## Connecting a Provider
+- Search the provider list.
+- Connect with an API key or the provider's sign-in flow, where supported.
+- Check connection status and available models.
+- Disconnect a provider you no longer want to use.
 
-Manage API-key and OAuth provider connections from the Provider connections
-page. Provider credentials are stored by OpenCode in its retained data volume,
-not on individual agents and not in the HyperVibes database.
+Provider credentials are encrypted and private to your app user.
+Never paste API keys into agent chat or instructions.
 
-Provider configuration is global to the shared OpenCode service. Once a
-provider is connected, select an available model for each scheduled sub-agent or
-conversation. Some models also provide a selectable thinking mode.
+For OpenAI OAuth, choose **Browser (default)** or **Device code**.
+Browser login opens the provider sign-in page in a new tab automatically.
+If your browser blocks the tab, use **Open provider sign-in** in the dialog.
 
-AI providers may authenticate with API keys, OAuth, or both. Connect and verify
-providers from the Provider connections page.
+## Choose models
 
-After a provider is connected, disconnected, or completes OAuth, HyperVibes
-queues a provider configuration reload. The reload waits until OpenCode
-sessions are idle because it can interrupt in-flight inference. Once idle,
-HyperVibes refreshes the shared OpenCode provider cache from retained auth
-storage; existing sessions remain, but an in-flight inference may be
-interrupted.
+- Choose a model when creating an agent.
+- Change the main conversation's model in Chat when it is idle.
+- Choose a model for each sub-agent in its configuration.
+- Set the thinking level when the selected model supports it.
+
+Model calls use your connected provider account and may incur charges.
+Disconnecting a provider can prevent agents using its models from running.
+Reconnect it or select another available model.
