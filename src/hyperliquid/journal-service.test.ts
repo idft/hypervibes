@@ -11,6 +11,7 @@ import { applicationDatabase, SharedDatabase } from "../db/shared-database.js";
 import { JournalService, type HistoryFetcher, type JournalFeedEvents } from "./journal-service.js";
 import { fillEvent, type JournalEvent } from "./journal-model.js";
 import { HyperliquidService } from "./service.js";
+import type { BalanceHistory } from "./agent-dashboard.js";
 
 const account = `0x${"12".repeat(20)}`;
 const otherAccount = `0x${"34".repeat(20)}`;
@@ -39,6 +40,153 @@ describe("durable account journal", () => {
     journal = new JournalService(db, fetcher);
   });
   afterEach(async () => { await journal.close(); await db.close(); vi.useRealTimers(); vi.restoreAllMocks(); rmSync(directory, { recursive: true, force: true }); });
+
+  const settle = async () => { for (let i = 0; i < 20; i++) await db.get("SELECT 1"); };
+
+  it("shares initial history and event refreshes, without five-second discovery reads", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(40 * 86_400_000 + 123_456);
+    rows = [deposit(Date.now() - 1000, "100")];
+    await journal.syncAccount(account, signal());
+    const transaction = vi.spyOn(db, "transaction");
+    const first = vi.fn<(history: BalanceHistory | null) => void>();
+    const second = vi.fn<(history: BalanceHistory | null) => void>();
+    const stopFirst = journal.watchBalanceHistory(account.toUpperCase(), first);
+    const stopSecond = journal.watchBalanceHistory(account, second);
+    await settle();
+    expect(transaction).toHaveBeenCalledTimes(1);
+    expect(first.mock.lastCall?.[0]?.day.at(-1)?.balance).toBe("100");
+    expect(second.mock.lastCall?.[0]).toEqual(first.mock.lastCall?.[0]);
+    transaction.mockClear(); first.mockClear(); second.mockClear();
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(transaction).not.toHaveBeenCalled();
+    expect(first).not.toHaveBeenCalled();
+    await journal.ingest(otherAccount, "ledger", [deposit(1)]);
+    await journal.project(otherAccount);
+    await settle();
+    expect(first).not.toHaveBeenCalled();
+    const closing = { ...fill(99, "1", "A"), time: Date.now() };
+    await journal.ingest(account, "fill", [closing]);
+    await journal.project(account);
+    await settle();
+    expect(first.mock.lastCall?.[0]?.day.at(-1)?.balance).toBe("109.9");
+    expect(first.mock.lastCall?.[0]?.month.at(-1)?.balance).toBe("109.9");
+    const count = first.mock.calls.length;
+    await journal.ingest(account, "fill", [closing]);
+    await journal.project(account);
+    await settle();
+    expect(first).toHaveBeenCalledTimes(count);
+    await stopFirst(); await stopSecond();
+    transaction.mockClear();
+    await vi.advanceTimersByTimeAsync(2 * 86_400_000);
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
+  it("updates funding, transfers, unknown balances and sync availability without a fill", async () => {
+    rows = [deposit(1, "100")];
+    await journal.syncAccount(account, signal(), 100);
+    const updates = vi.fn<(history: BalanceHistory | null) => void>();
+    const stop = journal.watchBalanceHistory(account, updates);
+    await settle();
+    await journal.ingest(account, "funding", [{ ...deposit(2, "-0.25"), kind: "funding" }]);
+    await journal.project(account); await settle();
+    expect(updates.mock.lastCall?.[0]?.day.at(-1)?.balance).toBe("99.75");
+    await journal.ingest(account, "ledger", [deposit(3, "20")]);
+    await journal.project(account); await settle();
+    expect(updates.mock.lastCall?.[0]?.month.at(-1)?.balance).toBe("119.75");
+    fetcher.mockRejectedValue(new Error("offline"));
+    await journal.syncAccount(account, signal(), 100); await settle();
+    expect(updates.mock.lastCall?.[0]).toBeNull();
+    fetcher.mockResolvedValue([]);
+    await journal.syncAccount(account, signal(), 100); await settle();
+    expect(updates.mock.lastCall?.[0]?.day.at(-1)?.balance).toBe("119.75");
+    await journal.ingest(account, "ledger", [{ ...deposit(4), delta: null }]);
+    await journal.project(account); await settle();
+    expect(updates.mock.lastCall?.[0]).toBeNull();
+    await stop();
+  });
+
+  it("drains commits racing with initial attachment and an in-flight history read", async () => {
+    await journal.syncAccount(account, signal(), 100);
+    const original = db.transaction.bind(db);
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let read: () => void = () => {};
+    const reading = new Promise<void>((resolve) => { read = resolve; });
+    vi.spyOn(db, "transaction").mockImplementationOnce(async (callback) => {
+      const result = await original(callback);
+      read(); await gate;
+      return result;
+    });
+    const updates = vi.fn<(history: BalanceHistory | null) => void>();
+    const stop = journal.watchBalanceHistory(account, updates);
+    await reading;
+    await journal.ingest(account, "ledger", [deposit(1, "100")]);
+    await journal.project(account);
+    await journal.ingest(account, "ledger", [deposit(2, "20")]);
+    await journal.project(account);
+    release(); await settle();
+    expect(updates).toHaveBeenCalledTimes(1);
+    expect(updates.mock.lastCall?.[0]?.day.at(-1)?.balance).toBe("120");
+    await stop();
+  });
+
+  it("refreshes exact rolling sample and baseline crossings, including late timer delivery", async () => {
+    vi.useFakeTimers();
+    const hour = 3_600_000, day = 24 * hour, now = 40 * day;
+    vi.setSystemTime(now);
+    // Neither crossing is on a wall-clock hour/day boundary.
+    rows = [deposit(1, "100"), deposit(now - day + 1234, "10"), deposit(now - 30 * day + 2345, "20")];
+    await journal.syncAccount(account, signal());
+    const updates = vi.fn<(history: BalanceHistory | null) => void>();
+    const stop = journal.watchBalanceHistory(account, updates);
+    await settle();
+    expect(updates.mock.lastCall?.[0]?.day[0]?.balance).toBe("120");
+    expect(updates.mock.lastCall?.[0]?.month[0]?.balance).toBe("100");
+    await vi.advanceTimersByTimeAsync(1234); await settle();
+    expect(updates.mock.lastCall?.[0]?.day[0]?.balance).toBe("130");
+    await vi.advanceTimersByTimeAsync(1111); await settle();
+    expect(updates.mock.lastCall?.[0]?.month[0]?.balance).toBe("120");
+    vi.setSystemTime(now + 3 * day);
+    await vi.advanceTimersToNextTimerAsync(); await settle();
+    expect(updates.mock.lastCall?.[0]).toEqual(await journal.balanceHistory(account));
+    await stop();
+  });
+
+  it("announces initial sync completion and recovers from refresh failure only on a later change", async () => {
+    const updates = vi.fn<(history: BalanceHistory | null) => void>();
+    const stop = journal.watchBalanceHistory(account, updates);
+    await settle();
+    expect(updates.mock.lastCall?.[0]).toBeNull();
+    await journal.syncAccount(account, signal(), 100); await settle();
+    expect(updates.mock.lastCall?.[0]?.day.at(-1)?.balance).toBe("0");
+    await stop();
+    vi.spyOn(db, "transaction").mockRejectedValueOnce(new Error("read failed"));
+    const recover = journal.watchBalanceHistory(account, updates);
+    await settle();
+    expect(updates.mock.lastCall?.[0]).toBeNull();
+    const calls = updates.mock.calls.length;
+    vi.useFakeTimers();
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(updates).toHaveBeenCalledTimes(calls);
+    await journal.ingest(account, "ledger", [deposit(1, "10")]);
+    await journal.project(account); await settle();
+    expect(updates.mock.lastCall?.[0]?.day.at(-1)?.balance).toBe("10");
+    await recover();
+  });
+
+  it("settles an aborted initial read and service shutdown without late publications", async () => {
+    await journal.syncAccount(account, signal(), 100);
+    const updates = vi.fn<(history: BalanceHistory | null) => void>();
+    const stop = journal.watchBalanceHistory(account, updates);
+    await stop();
+    expect(updates).not.toHaveBeenCalled();
+    const next = journal.watchBalanceHistory(account, updates);
+    await journal.close();
+    await next.ready;
+    expect(updates).not.toHaveBeenCalled();
+    await next();
+  });
 
   it("paginates chart fills by stable time/identity, scoped to account, instrument and candle range", async () => {
     const fills = Array.from({ length: 505 }, (_, index) => ({ ...fill(index + 1), time: 100 }));
@@ -219,14 +367,23 @@ describe("durable account journal", () => {
     expect(page.activity[0]?.balance).toBeNull();
   });
   it("does not publish an old projection over a concurrent source revision", async () => {
+    await journal.syncAccount(account, signal(), 100);
+    const updates = vi.fn<(history: BalanceHistory | null) => void>();
+    const stop = journal.watchBalanceHistory(account, updates);
+    await settle(); updates.mockClear();
     await journal.ingest(account, "fill", [fill(1)], 1);
     const projection = journal.project(account);
     await journal.ingest(account, "fill", [fill(2, "1", "A")], 2);
     await projection;
     expect((await journal.page(account, "trades", 1)).pending).toBe(true);
+    await settle();
+    expect(updates.mock.calls.every(([history]) => history === null)).toBe(true);
     await journal.project(account);
     expect((await journal.page(account, "trades", 1))).toMatchObject({ pending: false, total: 1 });
     expect((await journal.page(account, "trades", 1)).trades[0]?.status).toBe("closed");
+    await settle();
+    expect(updates.mock.lastCall?.[0]?.day.at(-1)?.balance).toBe("9.8");
+    await stop();
   });
   it("pages the timeline through an ordered account index rather than sorting full history", async () => {
     const plan = await db.all<{ detail: string }>("EXPLAIN QUERY PLAN SELECT id,data FROM hv_journal_entries WHERE account=? AND kind<>'trade' ORDER BY time DESC,id DESC LIMIT 25 OFFSET 25", account);

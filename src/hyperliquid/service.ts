@@ -240,29 +240,42 @@ export class HyperliquidService {
 
   async watchDashboard(userId: string, id: string, signal: AbortSignal, publish: (snapshot: AgentDashboard) => void) {
     const address = await this.dashboardAccount(userId, id);
-    if (!this.started || !address) { publish(await loadAgentDashboard(this.transport, null)); return; }
-    let balanceHistory = this.journal ? await this.journal.balanceHistory(address) : null;
+    if (signal.aborted || this.stopped) return;
+    if (!this.started || !address) {
+      const snapshot = await loadAgentDashboard(this.transport, null);
+      if (!signal.aborted && !this.stopped) publish(snapshot);
+      return;
+    }
+    let balanceHistory: AgentDashboard["balanceHistory"] = null;
     let latest = this.live.snapshot(address);
-    let refreshing = false;
-    // Journal projections can change without an account-feed message. Refresh
-    // rolling windows independently, with at most one database read in flight.
-    const timer = setInterval(() => {
-      if (refreshing || signal.aborted) return;
-      refreshing = true;
-      void (async () => {
-        try { balanceHistory = this.journal ? await this.journal.balanceHistory(address) : null; }
-        catch { balanceHistory = null; }
-        finally { refreshing = false; }
-        if (!signal.aborted) publish({ ...latest, balanceHistory });
-      })();
-    }, 5_000);
-    timer.unref();
+    let active = true;
+    let initialized = false;
+    let ready: () => void = () => {};
+    const initial = new Promise<void>((resolve) => { ready = resolve; });
+    const unsubscribe = this.journal?.watchBalanceHistory(address, (history) => {
+      balanceHistory = history;
+      ready();
+      if (initialized && active && !signal.aborted && !this.stopped) publish({ ...latest, balanceHistory });
+    });
+    // Also settle initialization if journal shutdown suppresses the first callback.
+    if (unsubscribe) void unsubscribe.ready.then(ready, ready);
+    else ready();
+    // Detach immediately on abort, rather than waiting for the live feed to settle.
+    const detach = () => { active = false; ready(); void unsubscribe?.(); };
+    signal.addEventListener("abort", detach, { once: true });
     try {
+      await initial;
+      if (!active || signal.aborted || this.stopped) return;
+      initialized = true;
       await this.live.watch(address, signal, (snapshot) => {
         latest = snapshot;
-        publish({ ...snapshot, balanceHistory });
+        if (active && !signal.aborted && !this.stopped) publish({ ...latest, balanceHistory });
       });
-    } finally { clearInterval(timer); }
+    } finally {
+      active = false;
+      signal.removeEventListener("abort", detach);
+      await unsubscribe?.();
+    }
   }
 
   async agentJournal(userId: string, id: string, view: "trades" | "activity", page: number) {

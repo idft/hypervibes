@@ -81,6 +81,13 @@ export interface JournalPage {
   pending: boolean; historyLimited: boolean;
 }
 interface EntryRow { id: string; kind: string; time: number; data: string; balance: string | null; noteCount: number }
+interface BalanceWatch {
+  listeners: Set<(history: BalanceHistory | null) => void>;
+  pending: boolean;
+  task?: Promise<void>;
+  timer?: ReturnType<typeof setTimeout>;
+  value?: BalanceHistory | null;
+}
 interface AccountRow { revision: number; projected_revision: number; history_limited: number }
 
 export function exchangeHistory(transport: HttpTransport): HistoryFetcher {
@@ -99,6 +106,67 @@ export class JournalService {
   notifications?: Pick<NotificationService, "fillsTx" | "changed">;
   private readonly workers = new Map<string, Worker>();
   private stopped = false;
+  private readonly balanceWatches = new Map<string, BalanceWatch>();
+
+  /** Shared per-account refresh work. Attach before reading so commits cannot be lost. */
+  watchBalanceHistory(account: string, publish: (history: BalanceHistory | null) => void) {
+    account = account.toLowerCase();
+    if (this.stopped) throw new Error("Journal is closed");
+    let watch = this.balanceWatches.get(account);
+    if (!watch) {
+      watch = { listeners: new Set(), pending: false };
+      this.balanceWatches.set(account, watch);
+    }
+    watch.listeners.add(publish);
+    if (watch.value !== undefined) {
+      try { publish(watch.value); }
+      catch (error) { this.log?.error({ err: error, account }, "Balance history subscriber failed"); }
+    } else if (!watch.task) this.balanceChanged(account);
+    const current = watch;
+    return Object.assign(async () => {
+      current.listeners.delete(publish);
+      if (current.listeners.size === 0) {
+        clearTimeout(current.timer);
+        if (this.balanceWatches.get(account) === current) this.balanceWatches.delete(account);
+        await current.task;
+      }
+    }, { ready: current.task ?? Promise.resolve() });
+  }
+
+  private balanceChanged(account: string) {
+    const watch = this.balanceWatches.get(account);
+    if (!watch || this.stopped) return;
+    watch.pending = true;
+    clearTimeout(watch.timer);
+    if (watch.task) return;
+    watch.task = (async () => {
+      while (watch.pending && !this.stopped && this.balanceWatches.get(account) === watch) {
+        watch.pending = false;
+        let result: { history: BalanceHistory | null; nextChange: number | null };
+        try { result = await this.readBalanceHistory(account, Date.now()); }
+        catch (error) {
+          this.log?.error({ err: error, account }, "Unable to refresh balance history");
+          result = { history: null, nextChange: null };
+        }
+        if (this.stopped || this.balanceWatches.get(account) !== watch) return;
+        // A commit during the read invalidates its result; drain the newer state first.
+        if (watch.pending) continue;
+        const unchangedUnavailable = watch.value === null && result.history === null;
+        watch.value = result.history;
+        if (!unchangedUnavailable) for (const listener of watch.listeners) {
+          try { listener(result.history); }
+          catch (error) { this.log?.error({ err: error, account }, "Balance history subscriber failed"); }
+        }
+        if (result.nextChange !== null && !watch.pending) {
+          watch.timer = setTimeout(() => this.balanceChanged(account), Math.max(1, result.nextChange - Date.now()));
+          watch.timer.unref();
+        }
+      }
+    })().finally(() => {
+      watch.task = undefined;
+      if (watch.pending && this.balanceWatches.get(account) === watch) this.balanceChanged(account);
+    });
+  }
   private readonly shutdown = new AbortController();
   private readonly syncs = new Map<string, Promise<void>>();
   private readonly catchups = new Map<string, Promise<void>>();
@@ -221,6 +289,13 @@ export class JournalService {
   async close() {
     this.stopped = true;
     this.shutdown.abort();
+    const balanceTasks = [...this.balanceWatches.values()].map((watch) => {
+      clearTimeout(watch.timer);
+      watch.listeners.clear();
+      return watch.task;
+    });
+    this.balanceWatches.clear();
+    await Promise.all(balanceTasks);
     const workers = [...this.workers.values()];
     for (const worker of workers) {
       worker.controller.abort();
@@ -304,13 +379,19 @@ export class JournalService {
           const count = await this.db.get<{ total: number }>("SELECT count(*) AS total FROM hv_journal_entries WHERE account=? AND kind='fill'", account);
           // The API exposes only the latest 10,000 fills. Conservatively flag an
           // initial import reaching that boundary; do not assert a full balance.
-          if ((count?.total ?? 0) >= 10_000) await this.db.run("UPDATE hv_journal_accounts SET history_limited=1 WHERE account=?", account);
+          if ((count?.total ?? 0) >= 10_000) {
+            const result = await this.db.get<{ account: string }>("UPDATE hv_journal_accounts SET history_limited=1 WHERE account=? AND history_limited=0 RETURNING account", account);
+            if (result) this.balanceChanged(account);
+          }
         }
+        const availability = state?.updated_at === null || (await this.db.get<{ error: string | null }>("SELECT error FROM hv_journal_sync WHERE account=? AND stream=?", account, stream))?.error;
         await this.db.run("UPDATE hv_journal_sync SET updated_at=?,error=NULL WHERE account=? AND stream=?", now, account, stream);
+        if (availability) this.balanceChanged(account);
       } catch (error) {
         if (signal.aborted) return;
         const message = error instanceof HistoryCoverageError ? error.message : "History sync failed; retrying. Previously imported data is retained.";
-        await this.db.run("UPDATE hv_journal_sync SET error=? WHERE account=? AND stream=?", message, account, stream);
+        const result = await this.db.get<{ account: string }>("UPDATE hv_journal_sync SET error=? WHERE account=? AND stream=? AND error IS NOT ? RETURNING account", message, account, stream, message);
+        if (result) this.balanceChanged(account);
       }
     }
     if (!signal.aborted) {
@@ -365,11 +446,13 @@ export class JournalService {
         ON CONFLICT(account,stream) DO UPDATE SET cursor=max(cursor,excluded.cursor)`, account, stream, cursor);
       return changed;
     });
+    if (changed) this.balanceChanged(account);
     for (const agentId of notifiedAgents) this.notifications?.changed(agentId);
     return changed;
   }
 
   async project(account: string) {
+    account = account.toLowerCase();
     const snapshot = await this.db.transaction(async (tx) => {
       const state = await tx.get<AccountRow>("SELECT revision,projected_revision FROM hv_journal_accounts WHERE account=?", account);
       if (!state || state.revision === state.projected_revision) return null;
@@ -383,29 +466,34 @@ export class JournalService {
       balance = balance === null || event.delta === null ? null : balance.add(amount(event.delta));
       return { id: event.id, balance: balance?.toString() ?? null };
     });
-    await this.db.transaction(async (tx) => {
+    const committed = await this.db.transaction(async (tx) => {
       const current = await tx.get<AccountRow>("SELECT revision,projected_revision FROM hv_journal_accounts WHERE account=?", account);
-      if (current?.revision !== snapshot.revision) return; // Leave durable dirty revision for retry.
+      if (current?.revision !== snapshot.revision || current.projected_revision === snapshot.revision) return false; // Leave durable dirty revision for retry.
       await tx.run("UPDATE hv_journal_entries SET active=0 WHERE account=? AND kind='trade'", account);
       for (const trade of trades) await tx.run(`INSERT INTO hv_journal_entries(account,id,kind,time,data) VALUES (?,?,'trade',?,?)
         ON CONFLICT(account,id) DO UPDATE SET time=excluded.time,data=excluded.data,active=1`, account, trade.id, trade.lastActivityAt, JSON.stringify(trade));
       for (const row of balances) await tx.run("UPDATE hv_journal_entries SET balance=? WHERE account=? AND id=?", row.balance, account, row.id);
       await tx.run("UPDATE hv_journal_accounts SET projected_revision=? WHERE account=?", snapshot.revision, account);
+      return true;
     });
+    if (committed) this.balanceChanged(account);
   }
 
   /** Realized USDC balance, including transfers, fees and funding; not equity.
    * Carry the preceding balance into each window and sample hourly/daily closes. */
   async balanceHistory(account: string, now = Date.now()): Promise<BalanceHistory | null> {
-    account = account.toLowerCase();
+    return (await this.readBalanceHistory(account.toLowerCase(), now)).history;
+  }
+
+  private async readBalanceHistory(account: string, now: number): Promise<{ history: BalanceHistory | null; nextChange: number | null }> {
     return this.db.transaction(async (tx) => {
       const state = await tx.get<AccountRow>("SELECT revision,projected_revision,history_limited FROM hv_journal_accounts WHERE account=?", account);
       const sync = await tx.all<{ updated_at: number | null; error: string | null }>("SELECT updated_at,error FROM hv_journal_sync WHERE account=?", account);
-      if (!state || state.revision !== state.projected_revision || state.history_limited || sync.length !== 3 || sync.some((s) => s.updated_at === null || s.error)) return null;
+      if (!state || state.revision !== state.projected_revision || state.history_limited || sync.length !== 3 || sync.some((s) => s.updated_at === null || s.error)) return { history: null, nextChange: null };
       const start = now - 30 * 86_400_000;
       const previous = await tx.get<{ balance: string | null }>("SELECT balance FROM hv_journal_entries WHERE account=? AND kind<>'trade' AND time<=? ORDER BY time DESC,id DESC LIMIT 1", account, start);
       const rows = await tx.all<{ time: number; balance: string | null }>("SELECT time,balance FROM hv_journal_entries WHERE account=? AND kind<>'trade' AND time>? AND time<=? ORDER BY time,id", account, start, now);
-      if (previous?.balance === null || rows.some((row) => row.balance === null)) return null;
+      if (previous?.balance === null || rows.some((row) => row.balance === null)) return { history: null, nextChange: null };
       const sample = (duration: number, bucket: number): BalancePoint[] => {
         let balance = previous?.balance ?? "0";
         let index = 0;
@@ -416,7 +504,19 @@ export class JournalService {
         }
         return points;
       };
-      return { day: sample(86_400_000, 3_600_000), month: sample(30 * 86_400_000, 86_400_000) };
+      // A moving sample changes when it crosses an event timestamp. Include
+      // every sample (including both baselines), not just hour/day boundaries.
+      let nextChange: number | null = null;
+      for (const row of rows) {
+        for (const [bucket, count] of [[3_600_000, 24], [86_400_000, 30]] as const) {
+          const step = Math.floor((now - row.time) / bucket) + 1;
+          if (step <= count) {
+            const next = row.time + step * bucket;
+            if (nextChange === null || next < nextChange) nextChange = next;
+          }
+        }
+      }
+      return { history: { day: sample(86_400_000, 3_600_000), month: sample(30 * 86_400_000, 86_400_000) }, nextChange };
     });
   }
 

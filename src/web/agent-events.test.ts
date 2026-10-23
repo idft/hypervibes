@@ -19,6 +19,9 @@ vi.mock("../auth-user.js", () => ({ currentUserSession: mocks.session }));
 import type { ChatEvent } from "./agent-events.js";
 import type { AgentDashboard } from "../hyperliquid/agent-dashboard.js";
 import type { AccountFeedEvents } from "../hyperliquid/live-dashboard.js";
+import { JournalService, type JournalFeedEvents } from "../hyperliquid/journal-service.js";
+import { LiveDashboards } from "../hyperliquid/live-dashboard.js";
+import { fillEvent } from "../hyperliquid/journal-model.js";
 const expiry = () => new Date(Date.now() + 3_600_000);
 async function readEvent<T = ChatEvent["data"]>(reader: ReadableStreamDefaultReader<Uint8Array>, buffer: { text: string }): Promise<{ event?: string; data: T }> {
   for (;;) {
@@ -43,13 +46,17 @@ describe("Agent multiplexed event stream", () => {
   let streams: AgentEventStreams;
   let faux: ReturnType<typeof fauxProvider>;
   let feedEvents: AccountFeedEvents | undefined;
+  let journalEvents: JournalFeedEvents | undefined;
   const closeFeed = vi.fn(async () => {});
   const config = () => testConfig({ APP_SQLITE_PATH: join(directory, "app.sqlite") });
   const options = () => {
     const models = createModels();
     faux = fauxProvider();
     models.setProvider(faux.provider);
-    return { models, model: { provider: "faux", modelId: "faux-1" }, journalHistoryFetcher: async () => [], journalFeedFactory: () => ({ close: async () => {} }), accountFeedFactory: (_address: string, events: AccountFeedEvents) => {
+    return { models, model: { provider: "faux", modelId: "faux-1" }, journalHistoryFetcher: async () => [], journalFeedFactory: (_address: string, events: JournalFeedEvents) => {
+      journalEvents = events;
+      return { close: async () => {} };
+    }, accountFeedFactory: (_address: string, events: AccountFeedEvents) => {
       feedEvents = events;
       return { close: closeFeed };
     } };
@@ -59,6 +66,7 @@ describe("Agent multiplexed event stream", () => {
   });
   beforeEach(async () => {
     feedEvents = undefined;
+    journalEvents = undefined;
     closeFeed.mockClear();
     directory = mkdtempSync(join(tmpdir(), "hv-agent-events-"));
     runtime = await createRuntime(config(), options());
@@ -134,7 +142,8 @@ describe("Agent multiplexed event stream", () => {
     const reader = response.body!.getReader();
     const buffer = { text: "" };
     const seen = new Set<string>();
-    for (let i = 0; i < topics.length; i++) seen.add((await readEvent(reader, buffer)).event!);
+    // Topics may legitimately update while other initial snapshots are loading.
+    while (seen.size < topics.length) seen.add((await readEvent(reader, buffer)).event!);
     expect([...seen].sort()).toEqual([...topics].sort());
     await reader.cancel();
   });
@@ -196,6 +205,47 @@ describe("Agent multiplexed event stream", () => {
     expect((await readEvent<ChartLayout[]>(reader, buffer)).data[0]).toMatchObject({ revision: 1 });
     await reader.cancel();
     vi.restoreAllMocks();
+  });
+
+  it("detaches balance history if the live dashboard fails during initialization", async () => {
+    const agent = await runtime.agents.create("owner", "Trading", randomUUID(), `0x${"12".repeat(20)}`);
+    const original = JournalService.prototype.watchBalanceHistory;
+    const cleanup = vi.fn();
+    const balanceWatch = vi.spyOn(JournalService.prototype, "watchBalanceHistory").mockImplementation(function (this: JournalService, account, publish) {
+      const stop = original.call(this, account, publish);
+      return Object.assign(async () => { cleanup(); await stop(); }, { ready: stop.ready });
+    });
+    const liveWatch = vi.spyOn(LiveDashboards.prototype, "watch").mockRejectedValueOnce(new Error("feed failed"));
+    try {
+      await expect(runtime.hyperliquid.watchDashboard("owner", agent.id, new AbortController().signal, () => {})).rejects.toThrow("feed failed");
+      expect(cleanup).toHaveBeenCalledTimes(1);
+      // Reconnection still gets a fresh subscription and can abort cleanly.
+      const abort = new AbortController();
+      const publish = vi.fn(() => abort.abort());
+      await runtime.hyperliquid.watchDashboard("owner", agent.id, abort.signal, publish);
+      expect(publish).toHaveBeenCalledTimes(1);
+      expect(cleanup).toHaveBeenCalled();
+    } finally { balanceWatch.mockRestore(); liveWatch.mockRestore(); }
+  });
+
+  it("delivers a pushed closing fill to both balance charts over existing SSE for a disabled Agent", async () => {
+    const agent = await runtime.agents.create("owner", "Trading", randomUUID(), `0x${"12".repeat(20)}`);
+    await runtime.agents.setEnabled("owner", agent.id, false);
+    await vi.waitFor(() => expect(journalEvents).toBeDefined());
+    const response = await streams.open(streamRequest(agent.id, ["dashboard"]), agent.id);
+    const reader = response.body!.getReader(), buffer = { text: "" };
+    const initial = await readEvent<AgentDashboard>(reader, buffer);
+    expect(initial.data.balanceHistory?.day.at(-1)?.balance).toBe("0");
+    // No account-feed message accompanies this closing fill.
+    journalEvents!.push("fill", [fillEvent({ coin: "BTC", hash: "0xclose", tid: 123, oid: 456,
+      time: Date.now(), side: "A", sz: "1", px: "100", startPosition: "1", fee: "0.1",
+      feeToken: "USDC", closedPnl: "10", dir: "Close Long", crossed: false, twapId: null })]);
+    let updated = await readEvent<AgentDashboard>(reader, buffer);
+    while (updated.data.balanceHistory === null) updated = await readEvent<AgentDashboard>(reader, buffer);
+    expect(updated.data.balanceHistory?.day.at(-1)?.balance).toBe("9.9");
+    expect(updated.data.balanceHistory?.month.at(-1)?.balance).toBe("9.9");
+    expect(updated.data.perpEquity).toBeNull();
+    await reader.cancel();
   });
 
   it("pushes cached/live dashboard state without tying the feed to browser lifetime", async () => {
