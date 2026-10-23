@@ -119,6 +119,58 @@ describe("Telegram message routing", () => {
 });
 
 describe("generic turn forwarding", () => {
+  it("cancels the submission waiter and typing request on endpoint shutdown without forwarding a late reply", async () => {
+    const lifetime = new AbortController();
+    let waiterSignal: AbortSignal | undefined;
+    let finish!: (value: unknown) => void;
+    const submission = { wait: (invocation: { abortSignal: AbortSignal }) => {
+      waiterSignal = invocation.abortSignal;
+      return new Promise((resolve) => { finish = resolve; });
+    } } as unknown as Submission;
+    let typingAborted = false;
+    const send = vi.fn();
+    const replyText = vi.fn(async () => ["Too late"]);
+    const forwarding = forwardReply(workspace({ signal: lifetime.signal }), {
+      sendText: send,
+      sendTyping: async (_chatId, signal) => new Promise<void>((resolve) => {
+        signal!.addEventListener("abort", () => { typingAborted = true; resolve(); }, { once: true });
+      }),
+    }, 42, { replyText } as unknown as AgentBridge, submission);
+    expect(waiterSignal?.aborted).toBe(false);
+    lifetime.abort();
+    await forwarding;
+    expect(waiterSignal?.aborted).toBe(true);
+    expect(typingAborted).toBe(true);
+    finish({ status: "done", entry: 1, answer: 2 });
+    await Promise.resolve();
+    expect(replyText).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("joins typing cancellation and leaves no timer when the reply finishes during a typing request", async () => {
+    vi.useFakeTimers();
+    try {
+      let typingAborted = false;
+      const submission = { wait: async () => ({ status: "done", entry: 1, answer: 2 }) } as unknown as Submission;
+      await forwardReply(workspace(), {
+        sendText: async () => {},
+        sendTyping: async (_chatId, signal) => new Promise<void>((resolve) => {
+          signal!.addEventListener("abort", () => { typingAborted = true; resolve(); }, { once: true });
+        }),
+      }, 42, { replyText: async () => ["Done"] } as unknown as AgentBridge, submission);
+      expect(typingAborted).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("does not submit or start typing for an already closed endpoint", async () => {
+    const recording: Recorded = { sent: [], typed: 0 };
+    const bridge = vi.fn();
+    await submitChat("agent", 42, "hello", workspace({ bridge, signal: AbortSignal.abort() }), sender(recording));
+    expect(bridge).not.toHaveBeenCalled();
+    expect(recording).toEqual({ sent: [], typed: 0 });
+  });
+
   it("forwards one chunk per reply and stops the typing indicator", async () => {
     const recording: Recorded = { sent: [], typed: 0 };
     const submission = { status: async () => ({ status: "placed" }), wait: async () => ({ status: "done", entry: 1 as EntryId, answer: 3 as EntryId }) } as unknown as Submission;

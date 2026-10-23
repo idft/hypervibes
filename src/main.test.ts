@@ -1,3 +1,4 @@
+import { registerSessionResourceCleanup } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -22,6 +23,22 @@ describe("server entry point", () => {
   const signals = ["SIGINT", "SIGTERM"] as const;
   let originalListeners: Map<string, NodeJS.SignalsListener[]>;
   let originalExitCode: typeof process.exitCode;
+  let unregisterCleanup: (() => void) | undefined;
+  let originalBeforeExit: ((code: number) => void)[];
+
+  async function finishExit() {
+    await vi.waitFor(() => expect(process.listeners("beforeExit").some((listener) => !originalBeforeExit.includes(listener))).toBe(true));
+    expect(mocks.app.log.info).not.toHaveBeenCalledWith("Shutdown complete");
+    // Invoke only this test's once wrapper, not Vitest's process lifecycle hooks.
+    const listener = process.rawListeners("beforeExit").find((entry) => {
+      const original: unknown = Reflect.get(entry, "listener");
+      return typeof original === "function" && !originalBeforeExit.includes(original as (code: number) => void);
+    });
+    expect(listener).toBeDefined();
+    listener!.call(process, 0);
+    expect(process.listeners("beforeExit")).toEqual(originalBeforeExit);
+    expect(mocks.app.log.info).toHaveBeenLastCalledWith("Shutdown complete");
+  }
 
   beforeEach(() => {
     vi.resetAllMocks();
@@ -30,6 +47,7 @@ describe("server entry point", () => {
     mocks.app.shutdown.mockImplementation(() => mocks.app.close());
     mocks.createApp.mockResolvedValue(mocks.app);
     originalExitCode = process.exitCode;
+    originalBeforeExit = process.listeners("beforeExit");
     originalListeners = new Map(signals.map((signal) => [signal, process.listeners(signal)]));
   });
   afterEach(() => {
@@ -38,6 +56,11 @@ describe("server entry point", () => {
         if (!originalListeners.get(signal)?.includes(listener)) process.off(signal, listener);
       }
     }
+    for (const listener of process.listeners("beforeExit")) {
+      if (!originalBeforeExit.includes(listener)) process.off("beforeExit", listener);
+    }
+    unregisterCleanup?.();
+    unregisterCleanup = undefined;
     process.exitCode = originalExitCode;
   });
 
@@ -53,10 +76,11 @@ describe("server entry point", () => {
     await vi.waitFor(() => {
       expect(mocks.app.shutdown).toHaveBeenCalledTimes(1);
       expect(mocks.app.close).toHaveBeenCalledTimes(1);
-      expect(mocks.app.log.info).toHaveBeenLastCalledWith("Shutdown complete");
+      expect(mocks.app.log.info).not.toHaveBeenCalledWith("Shutdown complete");
       expect(process.listeners("SIGTERM")).toEqual(originalListeners.get("SIGTERM"));
       expect(process.listeners("SIGINT")).toEqual(originalListeners.get("SIGINT"));
     });
+    await finishExit();
   });
 
   it("logs the graceful wait and forces shutdown on a second signal", async () => {
@@ -76,24 +100,75 @@ describe("server entry point", () => {
     expect(mocks.app.close).toHaveBeenCalledTimes(1);
     expect(mocks.app.log.info).not.toHaveBeenCalledWith("Shutdown complete");
     finishClose();
-    await vi.waitFor(() => expect(mocks.app.log.info).toHaveBeenLastCalledWith("Shutdown complete"));
+    await finishExit();
+  });
+
+  it("clears process-wide provider idle resources after draining and before logging completion", async () => {
+    // Mirrors the provider's 5-minute, referenced idle-expiry timer without a model call.
+    const idleTimer = setTimeout(() => {}, 300_000);
+    let finishShutdown!: () => void;
+    const cleanup = vi.fn(() => {
+      clearTimeout(idleTimer);
+      expect(mocks.app.log.info).not.toHaveBeenCalledWith("Shutdown complete");
+    });
+    unregisterCleanup = registerSessionResourceCleanup(cleanup);
+    try {
+      mocks.app.shutdown.mockReturnValue(new Promise<void>((resolve) => { finishShutdown = resolve; }));
+      await main();
+      const stop = process.listeners("SIGTERM").find((listener) => !originalListeners.get("SIGTERM")?.includes(listener));
+      stop?.("SIGTERM");
+      expect(cleanup).not.toHaveBeenCalled();
+      finishShutdown();
+      await finishExit();
+      expect(cleanup).toHaveBeenCalledExactlyOnceWith(undefined);
+    } finally { clearTimeout(idleTimer); }
+  });
+
+  it("cleans provider resources even when application shutdown fails", async () => {
+    const cleanup = vi.fn();
+    unregisterCleanup = registerSessionResourceCleanup(cleanup);
+    mocks.app.shutdown.mockRejectedValue(new Error("shutdown failed"));
+    await main();
+    const stop = process.listeners("SIGINT").find((listener) => !originalListeners.get("SIGINT")?.includes(listener));
+    stop?.("SIGINT");
+    await vi.waitFor(() => expect(mocks.app.log.error).toHaveBeenCalled());
+    expect(cleanup).toHaveBeenCalledExactlyOnceWith(undefined);
+    expect(mocks.app.log.info).not.toHaveBeenCalledWith("Shutdown complete");
+    expect(process.listeners("beforeExit")).toEqual(originalBeforeExit);
+  });
+
+  it("reports provider cleanup failure instead of claiming shutdown completed", async () => {
+    unregisterCleanup = registerSessionResourceCleanup(() => { throw new Error("provider close failed"); });
+    await main();
+    const stop = process.listeners("SIGINT").find((listener) => !originalListeners.get("SIGINT")?.includes(listener));
+    stop?.("SIGINT");
+    await vi.waitFor(() => expect(process.exitCode).toBe(1));
+    expect(mocks.app.log.error).toHaveBeenCalledWith(expect.any(AggregateError), "Shutdown failed");
+    expect(mocks.app.log.info).not.toHaveBeenCalledWith("Shutdown complete");
+    expect(process.listeners("beforeExit")).toEqual(originalBeforeExit);
   });
 
   it("closes resources and removes signal handlers when listening fails", async () => {
+    const cleanup = vi.fn();
+    unregisterCleanup = registerSessionResourceCleanup(cleanup);
     const failure = new Error("address already in use");
     mocks.app.listen.mockRejectedValue(failure);
     await expect(main()).rejects.toBe(failure);
     expect(mocks.app.close).toHaveBeenCalledTimes(1);
+    expect(cleanup).toHaveBeenCalledExactlyOnceWith(undefined);
     for (const signal of signals) {
       expect(process.listeners(signal)).toEqual(originalListeners.get(signal));
     }
   });
 
   it("propagates initialization failure without installing signal handlers", async () => {
+    const cleanup = vi.fn();
+    unregisterCleanup = registerSessionResourceCleanup(cleanup);
     const failure = new Error("cannot open database");
     mocks.createApp.mockRejectedValue(failure);
     await expect(main()).rejects.toBe(failure);
     expect(mocks.app.listen).not.toHaveBeenCalled();
+    expect(cleanup).toHaveBeenCalledExactlyOnceWith(undefined);
     for (const signal of signals) {
       expect(process.listeners(signal)).toEqual(originalListeners.get(signal));
     }

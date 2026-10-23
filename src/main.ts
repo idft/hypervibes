@@ -1,3 +1,4 @@
+import { cleanupSessionResources } from "@earendil-works/pi-ai";
 import { pathToFileURL } from "node:url";
 import { loadConfig } from "./config.js";
 import { createApp } from "./web/app.js";
@@ -5,7 +6,10 @@ import { createApp } from "./web/app.js";
 export async function main(args: string[] = process.argv.slice(2)): Promise<void> {
   const config = loadConfig();
   const force = new AbortController();
-  const app = await createApp(config, { logger: true, development: args.includes("--dev"), forceShutdown: force.signal });
+  const app = await createApp(config, { logger: true, development: args.includes("--dev"), forceShutdown: force.signal }).catch((error: unknown) => {
+    cleanupSessionResources();
+    throw error;
+  });
   let closing = false;
   const shutdown = () => {
     if (closing) {
@@ -16,8 +20,12 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
     }
     closing = true;
     app.log.info("Shutdown signal received; waiting for in-flight agent jobs to complete");
-    void app.shutdown().then(() => {
-      app.log.info("Shutdown complete");
+    // The executable owns process-wide provider caches, not an individual runtime.
+    // Release cached sockets and their idle timers only after agent work has stopped.
+    void app.shutdown().finally(() => cleanupSessionResources()).then(() => {
+      // Log only when the event loop is idle, not while sockets or workers still settle.
+      // Run before the logger's own beforeExit flush; never force process.exit().
+      process.prependOnceListener("beforeExit", () => { app.log.info("Shutdown complete"); });
     }).catch((error: unknown) => {
       app.log.error(error, "Shutdown failed");
       process.exitCode = 1;
@@ -34,7 +42,8 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
     await app.listen({ host: config.host, port: config.port });
   } catch (error) {
     removeSignals();
-    await app.close();
+    try { await app.close(); }
+    finally { cleanupSessionResources(); }
     throw error;
   }
 }

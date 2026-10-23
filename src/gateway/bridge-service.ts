@@ -14,6 +14,13 @@ export interface GatewayBridgeOptions {
   logger?: FastifyBaseLogger;
 }
 
+interface EndpointState {
+  endpoint: GatewayEndpoint;
+  lifetime: AbortController;
+  tasks: Set<Promise<void>>;
+  closing?: Promise<void>;
+}
+
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -24,7 +31,9 @@ function describe(error: unknown): string {
  * and `removed()` from the settings mutations.
  */
 export class GatewayBridge {
-  private readonly endpoints = new Map<string, GatewayEndpoint>();
+  private readonly endpoints = new Map<string, EndpointState>();
+  private startup?: Promise<void>;
+  private readonly stoppingEndpoints = new Set<Promise<void>>();
   private readonly pending = new Map<string, PendingLink>();
   private readonly errors = new Map<string, string>();
   private started = false;
@@ -45,7 +54,7 @@ export class GatewayBridge {
   start() {
     if (this.started || this.stopping) return;
     this.started = true;
-    void listGateways(this.db, this.type).then((rows) => Promise.all(rows.map((row) => this.startEndpoint(row))))
+    this.startup = listGateways(this.db, this.type).then(async (rows) => { await Promise.all(rows.map((row) => this.startEndpoint(row))); })
       .catch((error) => { if (!this.stopping) this.options.logger?.error(`Unable to start ${this.connector.label} bridge: ${describe(error)}`); });
   }
 
@@ -63,8 +72,7 @@ export class GatewayBridge {
     const endpoint = this.endpoints.get(agentId);
     if (!endpoint) return;
     this.endpoints.delete(agentId);
-    try { await endpoint.stop(); }
-    catch (error) { this.options.logger?.warn(`${this.connector.label} endpoint stop failed: ${describe(error)}`); }
+    await this.stopEndpoint(endpoint);
   }
 
   /** Creates or returns the owner's pending link token and its deep-link URL. */
@@ -102,10 +110,13 @@ export class GatewayBridge {
   close(): Promise<void> {
     return this.closing ??= (async () => {
       this.stopping = true;
+      // An initial gateway query must finish before the runtime closes its database.
+      await this.startup;
       const endpoints = [...this.endpoints.values()];
       this.endpoints.clear();
       this.pending.clear();
-      await Promise.allSettled(endpoints.map((endpoint) => endpoint.stop()));
+      await Promise.all(endpoints.map((endpoint) => this.stopEndpoint(endpoint)));
+      while (this.stoppingEndpoints.size) await Promise.all([...this.stoppingEndpoints]);
     })();
   }
 
@@ -117,27 +128,46 @@ export class GatewayBridge {
       this.options.logger?.warn(`Bot token for agent ${row.agentId} cannot be decrypted; endpoint not started`);
       return;
     }
-    const endpoint = this.connector.createEndpoint(token, (message) => { void this.receive(row.agentId, message); }, this.options.logger);
-    this.endpoints.set(row.agentId, endpoint);
+    const state: EndpointState = {
+      endpoint: this.connector.createEndpoint(token, (message) => {
+        if (!this.stopping && this.endpoints.get(row.agentId) === state && !state.lifetime.signal.aborted) {
+          this.track(state, this.receive(row.agentId, message, state));
+        }
+      }, this.options.logger),
+      lifetime: new AbortController(), tasks: new Set(),
+    };
+    this.endpoints.set(row.agentId, state);
     this.errors.delete(row.agentId);
-    void endpoint.start().then(
+    void state.endpoint.start().then(
       () => {
-        if (this.endpoints.get(row.agentId) === endpoint) this.endpoints.delete(row.agentId);
+        void this.stopEndpoint(state);
+        if (this.endpoints.get(row.agentId) === state) this.endpoints.delete(row.agentId);
       },
       (error: unknown) => {
-        if (this.endpoints.get(row.agentId) === endpoint) this.endpoints.delete(row.agentId);
+        const expected = this.stopping || state.lifetime.signal.aborted;
+        void this.stopEndpoint(state);
+        if (this.endpoints.get(row.agentId) !== state) return;
+        this.endpoints.delete(row.agentId);
+        if (expected) return;
         this.errors.set(row.agentId, describe(error));
         this.options.logger?.warn(`${this.connector.label} endpoint for agent ${row.agentId} stopped: ${describe(error)}`);
       },
     );
   }
 
-  private workspace(): BridgeWorkspace {
+  private workspace(state: EndpointState): BridgeWorkspace {
     return {
+      signal: state.lifetime.signal,
+      track: (task) => this.track(state, task),
       loadGateway: (agentId) => getGateway(this.db, agentId, this.type),
       bindChat: (agentId, chatId, chatUsername) => bindGatewayChat(this.db, agentId, this.type, chatId, chatUsername),
       consumeLink: (token) => this.consumeLink(token),
-      bridge: (agentId) => this.agents.bridge(agentId),
+      bridge: async (agentId) => {
+        state.lifetime.signal.throwIfAborted();
+        const handle = await this.agents.bridge(agentId);
+        state.lifetime.signal.throwIfAborted();
+        return handle;
+      },
       logger: this.options.logger,
     };
   }
@@ -151,10 +181,40 @@ export class GatewayBridge {
     return { status: "ok", agentId: link.agentId };
   }
 
-  private async receive(agentId: string, message: BridgeMessage) {
-    const sender = this.endpoints.get(agentId);
-    if (!sender) return; // The endpoint stopped; a restarted one will pick up future updates.
-    try { await this.connector.handle(agentId, message, this.workspace(), sender); }
-    catch (error) { this.options.logger?.warn(`${this.connector.label} message handling for agent ${agentId} failed: ${describe(error)}`); }
+  private track(state: EndpointState, task: Promise<void>) {
+    state.tasks.add(task);
+    void task.then(() => state.tasks.delete(task), () => state.tasks.delete(task));
+  }
+
+  private stopEndpoint(state: EndpointState): Promise<void> {
+    if (state.closing) return state.closing;
+    const closing = state.closing = (async () => {
+      state.lifetime.abort();
+      const stopped = state.endpoint.stop().catch((error: unknown) => {
+        this.options.logger?.warn(`${this.connector.label} endpoint stop failed: ${describe(error)}`);
+      });
+      // A message handler can register a reply forwarder while it finishes.
+      while (state.tasks.size) await Promise.allSettled([...state.tasks]);
+      await stopped;
+    })();
+    this.stoppingEndpoints.add(closing);
+    void closing.then(() => this.stoppingEndpoints.delete(closing), () => this.stoppingEndpoints.delete(closing));
+    return closing;
+  }
+
+  private async receive(agentId: string, message: BridgeMessage, state: EndpointState) {
+    const lifetime = state.lifetime.signal;
+    const sender = {
+      sendText: async (chatId: number, text: string, signal?: AbortSignal) => {
+        lifetime.throwIfAborted();
+        return state.endpoint.sendText(chatId, text, signal ? AbortSignal.any([signal, lifetime]) : lifetime);
+      },
+      sendTyping: async (chatId: number, signal?: AbortSignal) => {
+        lifetime.throwIfAborted();
+        return state.endpoint.sendTyping(chatId, signal ? AbortSignal.any([signal, lifetime]) : lifetime);
+      },
+    };
+    try { await this.connector.handle(agentId, message, this.workspace(state), sender); }
+    catch (error) { if (!lifetime.aborted) this.options.logger?.warn(`${this.connector.label} message handling for agent ${agentId} failed: ${describe(error)}`); }
   }
 }

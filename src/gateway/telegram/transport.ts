@@ -31,7 +31,18 @@ export async function sendTelegramNotification(token: string, chatId: number, te
 
 /** One grammY long-polling bot: routes messages and sends on behalf of the bridge. */
 export function grammyEndpoint(token: string, onMessage: (message: BridgeMessage) => void, logger?: BridgeLogger): GatewayEndpoint {
-  const bot = new Bot(token);
+  // Leave room for grammY's default 30-second long poll, but bound its
+  // final, unsignalled offset acknowledgement during stop.
+  const bot = new Bot(token, { client: { timeoutSeconds: 45 } });
+  const lifetime = new AbortController();
+  let polling: Promise<void> | undefined;
+  let stopping: Promise<void> | undefined;
+  const cancellation = (signal?: AbortSignal) => {
+    const combined = signal ? AbortSignal.any([lifetime.signal, signal]) : lifetime.signal;
+    combined.throwIfAborted();
+    // grammY uses abort-controller's older declarations, but accepts native signals.
+    return combined as unknown as NonNullable<Parameters<typeof bot.api.sendMessage>[3]>;
+  };
   bot.on("message", (ctx) => {
     const text = ctx.msg.text?.trim();
     const chatId = ctx.chat?.id;
@@ -40,11 +51,42 @@ export function grammyEndpoint(token: string, onMessage: (message: BridgeMessage
   // One failing update must not stop polling for the whole bot.
   bot.catch((error) => logger?.warn("Telegram update handling failed", error.error));
   return {
-    async start(onStarted) { await bot.start({ allowed_updates: ["message"], ...(onStarted ? { onStart: onStarted } : {}) }); },
-    async stop() { await bot.stop(); },
-    async sendText(chatId: number, text: string) {
-      for (const chunk of chunkText(text, TELEGRAM_MESSAGE_MAX_CHARS)) await bot.api.sendMessage(chatId, chunk);
+    start(onStarted) {
+      if (lifetime.signal.aborted) return Promise.resolve();
+      polling ??= (async () => {
+        try {
+          // bot.start creates its polling controller only after starting init.
+          // Initialize explicitly so stop can cancel that first request and retries.
+          await bot.init(cancellation());
+          if (lifetime.signal.aborted) return;
+          await bot.start({ allowed_updates: ["message"], ...(onStarted ? { onStart: onStarted } : {}) });
+        } catch (error) {
+          if (!lifetime.signal.aborted) throw error;
+        }
+      })();
+      return polling;
     },
-    async sendTyping(chatId: number) { await bot.api.sendChatAction(chatId, "typing"); },
+    stop() {
+      stopping ??= (async () => {
+        lifetime.abort();
+        try {
+          // Keep grammY's final offset acknowledgement: skipping it can replay
+          // the last delivered update when the next endpoint starts.
+          await bot.stop();
+        } finally {
+          // stop does not join start, including its middleware and retry delay.
+          // grammY's polling-error sleep is not cancellable; this join can wait
+          // for retry_after even though its HTTP requests have been cancelled.
+          await polling?.catch(() => undefined);
+        }
+      })();
+      return stopping;
+    },
+    async sendText(chatId: number, text: string, signal?: AbortSignal) {
+      for (const chunk of chunkText(text, TELEGRAM_MESSAGE_MAX_CHARS)) {
+        await bot.api.sendMessage(chatId, chunk, {}, cancellation(signal));
+      }
+    },
+    async sendTyping(chatId: number, signal?: AbortSignal) { await bot.api.sendChatAction(chatId, "typing", {}, cancellation(signal)); },
   };
 }

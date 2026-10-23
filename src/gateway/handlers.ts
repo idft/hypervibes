@@ -1,7 +1,8 @@
-import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import { awaitWithContext, BACKGROUND_CONTEXT as context, withAbortSignal } from "@earendil-works/chord/context";
 import type { JsonValue } from "@earendil-works/chord";
 import type { Submission } from "@earendil-works/pi-durable";
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { isAgentError } from "../agents/agent-input.js";
 import type { AgentBridge } from "../agents/agent-service.js";
 import type { GatewayRow, GatewayType } from "../db/gateway-schema.js";
@@ -21,8 +22,8 @@ export interface BridgeLogger {
 
 /** Sends on behalf of the bridge. */
 export interface GatewaySender {
-  sendText(chatId: number, text: string): Promise<void>;
-  sendTyping(chatId: number): Promise<void>;
+  sendText(chatId: number, text: string, signal?: AbortSignal): Promise<void>;
+  sendTyping(chatId: number, signal?: AbortSignal): Promise<void>;
 }
 
 /** One running gateway endpoint: message intake plus sending. */
@@ -61,6 +62,10 @@ export interface BridgeWorkspace {
   logger?: BridgeLogger;
   /** Test seam: overrides the reply forwarding timeout. */
   replyTimeoutMs?: number;
+  /** Endpoint lifetime; cancellation stops forwarding, not the Agent's turn. */
+  signal?: AbortSignal;
+  /** Registers detached reply work with the endpoint's shutdown drain. */
+  track?(task: Promise<void>): void;
 }
 
 /** One gateway platform: transport, message routing, and deep links. */
@@ -99,45 +104,52 @@ export function submissionErrorText(settled: { readonly reason: string; readonly
   return detail || settled.reason;
 }
 
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
-  });
-}
-
-/** Refreshes the typing action while the wrapped operation runs; never rejects on its own. */
-function withTyping(sender: GatewaySender, chatId: number, operation: () => Promise<void>): Promise<void> {
+/** Refreshes typing only while forwarding owns it; joins any in-flight typing request. */
+async function withTyping(sender: GatewaySender, chatId: number, operation: () => Promise<void>, lifetime?: AbortSignal): Promise<void> {
   const stop = new AbortController();
-  void (async () => {
-    while (!stop.signal.aborted) {
-      await sender.sendTyping(chatId).catch(() => undefined);
-      await sleep(TYPING_REFRESH_MS, stop.signal);
+  const signal = lifetime ? AbortSignal.any([stop.signal, lifetime]) : stop.signal;
+  const typing = (async () => {
+    while (!signal.aborted) {
+      await sender.sendTyping(chatId, signal).catch(() => undefined);
+      if (!signal.aborted) await delay(TYPING_REFRESH_MS, undefined, { signal }).catch(() => undefined);
     }
   })();
-  return operation().finally(() => { stop.abort(); });
+  try { await operation(); }
+  finally { stop.abort(); await typing; }
 }
 
 /** Forwards the assistant reply once the submitted turn settles. */
 export async function forwardReply(workspace: BridgeWorkspace, sender: GatewaySender, chatId: number, handle: AgentBridge, submission: Submission): Promise<void> {
   const timeout = workspace.replyTimeoutMs ?? REPLY_TIMEOUT_MS;
-  const expired = new Promise<undefined>((resolve) => AbortSignal.timeout(timeout).addEventListener("abort", () => resolve(undefined), { once: true }));
-  await withTyping(sender, chatId, async () => {
-    const waiting = submission.wait(context);
-    // The race may already be decided by the timeout when this rejects later.
-    waiting.catch(() => undefined);
-    const settled = await Promise.race([waiting, expired]);
-    if (settled === undefined) {
-      await sender.sendText(chatId, "This response is taking longer than expected. The turn is still running; continue in the web dashboard.");
-      return;
-    }
-    if (settled.status === "unanswered" || settled.entry === undefined || settled.answer === undefined) {
-      await sender.sendText(chatId, bridgeErrorText(settled.status === "unanswered" ? submissionErrorText(settled) : "The turn produced no reply"));
-      return;
-    }
-    const replies = await handle.replyText(settled.entry, settled.answer);
-    for (const reply of replies) await sender.sendText(chatId, reply);
-  });
+  const expired = new AbortController();
+  const timer = setTimeout(() => expired.abort(), timeout);
+  const signal = workspace.signal ? AbortSignal.any([workspace.signal, expired.signal]) : expired.signal;
+  try {
+    await withTyping(sender, chatId, async () => {
+      let settled: Awaited<ReturnType<Submission["wait"]>>;
+      try {
+        signal.throwIfAborted();
+        const invocation = withAbortSignal(signal, context);
+        settled = await awaitWithContext(submission.wait(invocation), invocation);
+      } catch (error) {
+        if (workspace.signal?.aborted) return;
+        if (!expired.signal.aborted) throw error;
+        await sender.sendText(chatId, "This response is taking longer than expected. The turn is still running; continue in the web dashboard.", workspace.signal);
+        return;
+      }
+      workspace.signal?.throwIfAborted();
+      if (settled.status === "unanswered" || settled.entry === undefined || settled.answer === undefined) {
+        await sender.sendText(chatId, bridgeErrorText(settled.status === "unanswered" ? submissionErrorText(settled) : "The turn produced no reply"), workspace.signal);
+        return;
+      }
+      const replies = await handle.replyText(settled.entry, settled.answer);
+      for (const reply of replies) {
+        workspace.signal?.throwIfAborted();
+        await sender.sendText(chatId, reply, workspace.signal);
+      }
+    }, workspace.signal);
+  } catch (error) { if (!workspace.signal?.aborted) throw error; }
+  finally { clearTimeout(timer); }
 }
 
 /** Submits plain chat text to the Agent's main conversation and forwards the reply in the background. */
@@ -145,17 +157,22 @@ export async function submitChat(agentId: string, chatId: number, text: string, 
   let handle: AgentBridge;
   let submission: Submission;
   try {
+    workspace.signal?.throwIfAborted();
     handle = await workspace.bridge(agentId);
+    workspace.signal?.throwIfAborted();
     submission = await handle.submit(text, randomUUID());
   } catch (error) {
-    await sender.sendText(chatId, bridgeErrorText(error));
+    if (!workspace.signal?.aborted) await sender.sendText(chatId, bridgeErrorText(error), workspace.signal);
     return;
   }
+  if (workspace.signal?.aborted) return;
   const status = await submission.status(context).catch(() => undefined);
-  if (status?.status === "queued") await sender.sendText(chatId, "Message queued. It will send when the current turn finishes.");
+  if (workspace.signal?.aborted) return;
+  if (status?.status === "queued") await sender.sendText(chatId, "Message queued. It will send when the current turn finishes.", workspace.signal);
   // The turn runs in the background so the next message is picked up immediately,
   // matching the legacy gateway's fire-and-forget reply forwarder.
-  void forwardReply(workspace, sender, chatId, handle, submission).catch((error) => {
-    workspace.logger?.warn("Gateway reply forwarding failed", error);
+  const forwarding = forwardReply(workspace, sender, chatId, handle, submission).catch((error) => {
+    if (!workspace.signal?.aborted) workspace.logger?.warn("Gateway reply forwarding failed", error);
   });
+  workspace.track?.(forwarding);
 }

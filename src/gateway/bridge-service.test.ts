@@ -8,7 +8,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hvUsers } from "../db/auth-schema.js";
 import { createRuntime, type AppRuntime } from "../runtime.js";
 import { testConfig } from "../test-config.js";
-import { saveGatewayToken } from "./gateway-store.js";
+import { bindGatewayChat, saveGatewayToken } from "./gateway-store.js";
+import type { AgentBridge } from "../agents/agent-service.js";
+import type { Submission } from "@earendil-works/pi-durable";
 import { GatewayBridge } from "./bridge-service.js";
 import type { BridgeMessage, GatewayConnector, GatewayEndpoint, GatewaySender } from "./handlers.js";
 import { telegramConnector } from "./telegram/connector.js";
@@ -92,6 +94,7 @@ describe("gateway bridge lifecycle", () => {
     await runtime.db.insert(hvUsers).values({ id: "owner", name: "Owner", email: "owner@example.test" }).run();
   });
   afterEach(async () => {
+    vi.restoreAllMocks();
     await runtime.close();
     rmSync(directory, { recursive: true, force: true });
   });
@@ -198,6 +201,81 @@ describe("gateway bridge lifecycle", () => {
     // The faux model replies; the bridge forwards the reply text to the chat.
     await vi.waitFor(() => expect(log.last().sent.some((entry) => entry.chatId === 7 && entry.text.length > 0)).toBe(true));
     await bridge.close();
+  });
+
+  it("cancels and joins detached replies and typing on close without stopping the Agent turn", async () => {
+    const agent = await seedAgent();
+    await saveGatewayToken(runtime.db, key(), agent.id, "telegram", "tok-a", "my_bot");
+    await bindGatewayChat(runtime.db, agent.id, "telegram", 7, "operator");
+    const submission = { status: async () => ({ status: "placed" }), wait: () => new Promise(() => {}) } as unknown as Submission;
+    const handle = { submit: vi.fn(async () => submission), replyText: vi.fn(), stop: vi.fn() } as unknown as AgentBridge;
+    vi.spyOn(runtime.agents, "bridge").mockResolvedValue(handle);
+    const bridge = new GatewayBridge(runtime.db, runtime.agents, key(), fakeConnector(log));
+    await bridge.ensure(agent.id);
+    const endpoint = log.last();
+    let typingAborted = false;
+    vi.spyOn(endpoint, "sendTyping").mockImplementation(async (_chatId, signal?: AbortSignal) => new Promise<void>((resolve) => {
+      signal!.addEventListener("abort", () => { typingAborted = true; resolve(); }, { once: true });
+    }));
+    endpoint.receive("hello", 7);
+    await vi.waitFor(() => expect(endpoint.sendTyping).toHaveBeenCalledOnce());
+    const closing = bridge.close();
+    expect(bridge.close()).toBe(closing);
+    await closing;
+    expect(typingAborted).toBe(true);
+    expect(endpoint.stopped).toBe(true);
+    expect(endpoint.sent).toEqual([]);
+    expect(handle.stop).not.toHaveBeenCalled();
+    endpoint.receive("too late", 7);
+    expect(handle.submit).toHaveBeenCalledOnce();
+  });
+
+  it("waits for active handlers and their late registered cleanup tasks before close returns", async () => {
+    const agent = await seedAgent();
+    await saveGatewayToken(runtime.db, key(), agent.id, "telegram", "tok-a", "my_bot");
+    let finishHandler!: () => void;
+    let finishCleanup!: () => void;
+    let lifetime: AbortSignal | undefined;
+    const connector: GatewayConnector = { ...fakeConnector(log), handle: async (_agentId, _message, workspace) => {
+      lifetime = workspace.signal;
+      await new Promise<void>((resolve) => { finishHandler = resolve; });
+      workspace.track!(new Promise<void>((resolve) => { finishCleanup = resolve; }));
+    } };
+    const bridge = new GatewayBridge(runtime.db, runtime.agents, key(), connector);
+    await bridge.ensure(agent.id);
+    log.last().receive("hello");
+    let closed = false;
+    const closing = bridge.close().then(() => { closed = true; });
+    await vi.waitFor(() => expect(lifetime?.aborted).toBe(true));
+    expect(closed).toBe(false);
+    finishHandler();
+    await vi.waitFor(() => expect(finishCleanup).toBeDefined());
+    expect(closed).toBe(false);
+    finishCleanup();
+    await closing;
+  });
+
+  it("cancels only the removed endpoint and rejects stale intake after reconnect", async () => {
+    const agent = await seedAgent();
+    await saveGatewayToken(runtime.db, key(), agent.id, "telegram", "tok-a", "my_bot");
+    const lifetimes: AbortSignal[] = [];
+    const connector: GatewayConnector = { ...fakeConnector(log), handle: async (_agentId, _message, workspace) => {
+      lifetimes.push(workspace.signal!);
+      workspace.track!(new Promise<void>((resolve) => workspace.signal!.addEventListener("abort", () => resolve(), { once: true })));
+    } };
+    const bridge = new GatewayBridge(runtime.db, runtime.agents, key(), connector);
+    await bridge.ensure(agent.id);
+    const old = log.last();
+    old.receive("old");
+    await bridge.removed(agent.id);
+    expect(lifetimes[0]?.aborted).toBe(true);
+    await bridge.ensure(agent.id);
+    old.receive("stale callback");
+    log.last().receive("new");
+    expect(lifetimes).toHaveLength(2);
+    expect(lifetimes[1]?.aborted).toBe(false);
+    await bridge.close();
+    expect(lifetimes[1]?.aborted).toBe(true);
   });
 
   it("records endpoint start failures for the settings page", async () => {
