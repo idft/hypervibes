@@ -32,6 +32,16 @@ export interface SubagentHost { owned(userId: string, id: string): Promise<Agent
 export interface RunDetail { definition: SubagentRow; run: SubagentRun; entries: EntryRecord[]; prior: EntryRecord[]; tools?: ToolActivity[]; context?: RunContext; warnings?: ExecutionWarning[]; publications?: { ref: string; kind: string; summary: string }[] }
 const active = ["queued", "running"] as const;
 
+/** Drizzle and Durable can wrap native SQLite errors in a cause. */
+function sqliteFailure(error: unknown, seen = new Set<unknown>()): boolean {
+  if (!error || typeof error !== "object" || seen.has(error)) return false;
+  seen.add(error);
+  const code: unknown = Reflect.get(error, "code");
+  return (typeof code === "string" && code.startsWith("ERR_SQLITE_"))
+    || sqliteFailure(Reflect.get(error, "cause"), seen)
+    || (error instanceof AggregateError && error.errors.some((item: unknown) => sqliteFailure(item, seen)));
+}
+
 // Public Durable document: an idempotent, schema-free upgrade marker. Once
 // applied, an explicit later tool deselection survives subsequent restarts.
 export const MarketSnapshotUpgradeDoc = defineDoc<{ applied: boolean }>({
@@ -670,13 +680,19 @@ export class SubagentService {
   }
   private async dispatch(binding: Binding, run: SubagentRun, reportOnly = false) {
     await assertAgentExecutable(this.database, run.agentId);
-    const taskId = await binding.main.commit(async (tx) => {
-      const receipt = await tx.doc(RunReceipt, binding.main.id, reportOnly ? `${run.id}:report` : run.id, null);
-      if (receipt.taskId === null) receipt.taskId = await tx.createTask(binding.runner, { runId: run.id, reportOnly }, { ownership: { kind: "conversation" }, background: true });
-      return receipt.taskId;
-    }, context);
-    await this.db.update(hvSubagentRuns).set({ taskId }).where(eq(hvSubagentRuns.id, run.id)).run();
-    binding.harness.resume();
+    try {
+      const taskId = await binding.main.commit(async (tx) => {
+        const receipt = await tx.doc(RunReceipt, binding.main.id, reportOnly ? `${run.id}:report` : run.id, null);
+        if (receipt.taskId === null) receipt.taskId = await tx.createTask(binding.runner, { runId: run.id, reportOnly }, { ownership: { kind: "conversation" }, background: true });
+        return receipt.taskId;
+      }, context);
+      await this.db.update(hvSubagentRuns).set({ taskId }).where(eq(hvSubagentRuns.id, run.id)).run();
+      binding.harness.resume();
+    } catch (error) {
+      // Inbox/schedule admission creates the run inside the item action.
+      this.log?.warn({ err: error, agentId: run.agentId, subagentId: run.subagentId, runId: run.id, reportOnly }, "Sub-agent run dispatch deferred");
+      throw error;
+    }
   }
   async started(run: SubagentRun, conversationId: number) {
     await this.database.appTransaction(async (db) => {
@@ -731,7 +747,7 @@ export class SubagentService {
       for (const run of pending) {
         if (this.stopping || this.draining) return;
         const binding = this.bindings.get(run.agentId); if (!binding || this.host.signal(run.agentId).aborted || !await agentExecutable(this.database, run.agentId)) continue;
-        await this.serial(run.agentId, async () => {
+        await this.schedulerItem(run.agentId, run.subagentId, run.id, () => this.serial(run.agentId, async () => {
           const current = await this.internalRun(run.agentId, run.id);
           if (current.taskId === null && active.includes(current.status as typeof active[number])) await this.dispatch(binding, current);
           else if (current.taskId !== null) {
@@ -748,20 +764,19 @@ export class SubagentService {
               await this.reported(current.id);
             }
           }
-        });
+        }));
       }
       const inboxes = await this.db.selectDistinct({ agentId: hvWorkerRequests.agentId, id: hvWorkerRequests.subagentId }).from(hvWorkerRequests).where(and(isNull(hvWorkerRequests.runId), isNull(hvWorkerRequests.discardedReason))).all();
       for (const inbox of inboxes) {
         if (this.stopping || this.draining) return;
         if (this.host.signal(inbox.agentId).aborted || !await agentExecutable(this.database, inbox.agentId)) continue;
-        try { await this.serial(inbox.agentId, () => this.drainInbox(inbox.agentId, inbox.id, now)); }
-        catch (error) { if (!(error instanceof AgentError)) throw error; this.log?.warn({ err: error, ...inbox }, "Worker dispatch deferred"); }
+        await this.schedulerItem(inbox.agentId, inbox.id, undefined, () => this.serial(inbox.agentId, () => this.drainInbox(inbox.agentId, inbox.id, now)));
       }
       const due = await this.db.select().from(hvSubagents).where(and(eq(hvSubagents.enabled, true), eq(hvSubagents.archived, false), lte(hvSubagents.nextRunAt, now))).all();
       for (const row of due) {
         if (this.stopping || this.draining) return;
         if (this.host.signal(row.agentId).aborted || !await agentExecutable(this.database, row.agentId)) continue;
-        await this.schedule(row, now);
+        await this.schedulerItem(row.agentId, row.id, undefined, () => this.schedule(row, now));
       }
       this.schedulerError = null;
     }).catch((error: unknown) => {
@@ -769,6 +784,18 @@ export class SubagentService {
       this.log?.error(error, "Subagent scheduler encountered an error");
     }).finally(() => { this.tickActive = false; });
     return this.ticking;
+  }
+  /** Item failures can retry independently; storage and lifecycle failures stop the pass. */
+  private async schedulerItem(agentId: string, subagentId: string, runId: string | undefined, action: () => Promise<void>) {
+    try { await action(); }
+    catch (error) {
+      this.log?.warn({ err: error, agentId, subagentId, runId }, "Sub-agent scheduler item deferred");
+      this.admit();
+      this.admitAgent(agentId);
+      if (!this.database.available || sqliteFailure(error) || (error instanceof Error && error.name === "AbortError")) throw error;
+      // Recheck after asynchronous work: deletion/disablement can race admission.
+      if (!await agentExecutable(this.database, agentId)) throw error;
+    }
   }
   private schedule(candidate: SubagentRow, now: number) {
     return this.execute(candidate.agentId, async () => {

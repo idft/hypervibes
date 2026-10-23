@@ -3,7 +3,7 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { Harness, type ConversationId } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +16,7 @@ import { testConfig } from "../test-config.js";
 import { nextCandleRun, subagentInput, type SubagentInput } from "./subagent-input.js";
 import { subagentTemplates, templateDraft } from "./subagent-templates.js";
 import { MarketSnapshotUpgradeDoc, ChartToolsUpgradeDoc } from "./subagent-service.js";
+import { defaultWorkerTriggers } from "./worker-triggers.js";
 
 const settings = (patch: Partial<SubagentInput> = {}): SubagentInput => ({ name: "Research", description: "Focused evidence", instructions: "Research the assignment using only available evidence.", provider: "faux", modelId: "faux-1", thinkingLevel: "", tools: [], enabled: true, delegatable: true, persistent: false, schedule: "", delaySeconds: 30, completion: "save", timeoutSeconds: 900, ...patch });
 describe("subagent definitions, execution and scheduling", () => {
@@ -577,6 +578,90 @@ describe("subagent definitions, execution and scheduling", () => {
     await runtime.close(); runtime = await createRuntime(config(), options()); runtime.start(); await runtime.agents.subagents.tick();
     expect((await detail(agent.id, worker.id)).definition.nextRunAt).toBeGreaterThan(due);
     expect((await detail(agent.id, worker.id)).runs).toHaveLength(1);
+  });
+
+  it("continues pending recovery and due work after a repeatedly failing run", async () => {
+    const agent = await createAgent();
+    const broken = await createWorker(agent.id), healthy = await createWorker(agent.id);
+    const due = await createWorker(agent.id, { schedule: "1h" });
+    const now = Date.now();
+    await runtime.db.update(hvSubagents).set({ nextRunAt: now - 120000 }).where(eq(hvSubagents.id, due.id)).run();
+    await runtime.db.insert(hvSubagentRuns).values([broken, healthy].map((worker, index) => ({
+      id: `recovery-${index}`, agentId: agent.id, subagentId: worker.id, requestId: `recovery-${index}`,
+      source: "manual" as const, task: "Recover", config: worker, createdAt: now,
+    }))).run();
+    const service = runtime.agents.subagents;
+    const internalRun = service.internalRun.bind(service);
+    const read = vi.spyOn(service, "internalRun").mockImplementation((agentId, id) => {
+      if (id === "recovery-0") return Promise.reject(new Error("Run reconciliation unavailable"));
+      return internalRun(agentId, id);
+    });
+    faux.setResponses([fauxAssistantMessage("Healthy recovery")]);
+    await service.tick(now);
+    expect(read).toHaveBeenCalledWith(agent.id, "recovery-1");
+    expect((await completed(agent.id, healthy.id)).result).toBe("Healthy recovery");
+    expect((await detail(agent.id, due.id)).runs[0]?.status).toBe("skipped");
+    expect(service.schedulerError).toBeNull();
+    await service.tick(now);
+    expect(read.mock.calls.filter(([, id]) => id === "recovery-0").length).toBeGreaterThanOrEqual(2);
+    expect((await detail(agent.id, healthy.id)).runs).toHaveLength(1);
+    expect((await internalRun(agent.id, "recovery-0")).taskId).toBeNull();
+  });
+
+  it.each(["inbox", "schedule"] as const)("continues %s workers after an unexpected admission failure", async (source) => {
+    const agent = await createAgent();
+    const patch = source === "inbox" ? { triggers: { ...defaultWorkerTriggers, inboxEnabled: true } } : { schedule: "1h" };
+    const broken = await createWorker(agent.id, patch), healthy = await createWorker(agent.id, patch);
+    const now = Date.now();
+    if (source === "inbox") {
+      await runtime.agents.subagents.delegate(agent.id, broken.id, "Broken inbox", randomUUID());
+      await runtime.agents.subagents.delegate(agent.id, healthy.id, "Healthy inbox", randomUUID());
+    } else {
+      for (const worker of [broken, healthy]) await runtime.db.update(hvSubagents).set({ nextRunAt: now }).where(eq(hvSubagents.id, worker.id)).run();
+    }
+    const snapshot = runtime.agents.execution.snapshotRunTx.bind(runtime.agents.execution);
+    vi.spyOn(runtime.agents.execution, "snapshotRunTx").mockImplementation((tx, run) => {
+      if (run.subagentId === broken.id) throw new Error("Worker context unavailable");
+      return snapshot(tx, run);
+    });
+    faux.setResponses([fauxAssistantMessage("Healthy worker")]);
+    await runtime.agents.subagents.tick(now);
+    expect((await completed(agent.id, healthy.id)).result).toBe("Healthy worker");
+    expect((await detail(agent.id, broken.id)).runs).toEqual([]);
+    if (source === "schedule") expect((await detail(agent.id, broken.id)).definition.nextRunAt).toBe(now);
+    else expect((await detail(agent.id, broken.id)).inbox).toHaveLength(1);
+    expect(runtime.agents.subagents.schedulerError).toBeNull();
+  });
+
+  it("fails the pass for a wrapped SQLite error instead of treating it as an item failure", async () => {
+    const agent = await createAgent(), worker = await createWorker(agent.id);
+    await runtime.db.insert(hvSubagentRuns).values({ id: "sql-failure", agentId: agent.id, subagentId: worker.id, requestId: "sql-failure", source: "manual", task: "Recover", config: worker, createdAt: Date.now() }).run();
+    const failure: unknown = await runtime.db.run(sql`SELECT * FROM missing_scheduler_test_table`).catch((error: unknown) => error);
+    vi.spyOn(runtime.agents.subagents, "internalRun").mockRejectedValue(new Error("Wrapped storage error", { cause: failure }));
+    const healthy = await createWorker(agent.id, { schedule: "1h" });
+    const now = Date.now();
+    await runtime.db.update(hvSubagents).set({ nextRunAt: now - 120000 }).where(eq(hvSubagents.id, healthy.id)).run();
+    await runtime.agents.subagents.tick(now);
+    expect(runtime.agents.subagents.schedulerError).not.toBeNull();
+    expect((await detail(agent.id, healthy.id)).runs).toEqual([]);
+  });
+
+  it.each(["shutdown", "deletion", "abort"] as const)("does not isolate %s as a recoverable item failure", async (lifecycle) => {
+    const agent = await createAgent(), worker = await createWorker(agent.id);
+    await runtime.db.insert(hvSubagentRuns).values({ id: "lifecycle-failure", agentId: agent.id, subagentId: worker.id, requestId: "lifecycle-failure", source: "manual", task: "Recover", config: worker, createdAt: Date.now() }).run();
+    const healthy = await createWorker(agent.id, { schedule: "1h" });
+    const now = Date.now();
+    await runtime.db.update(hvSubagents).set({ nextRunAt: now - 120000 }).where(eq(hvSubagents.id, healthy.id)).run();
+    vi.spyOn(runtime.agents.subagents, "internalRun").mockImplementation(async () => {
+      if (lifecycle === "shutdown") void runtime.agents.subagents.drain();
+      if (lifecycle === "deletion") vi.spyOn(runtime.agents, "signal").mockReturnValue(AbortSignal.abort());
+      if (lifecycle === "abort") throw new DOMException("Cancelled", "AbortError");
+      throw new Error("Lifecycle interrupted recovery");
+    });
+    await runtime.agents.subagents.tick(now);
+    expect(runtime.agents.subagents.schedulerError).not.toBeNull();
+    vi.restoreAllMocks();
+    expect((await detail(agent.id, healthy.id)).runs).toEqual([]);
   });
 
   it("records scheduled overlap skips and bounds concurrent workers", async () => {
