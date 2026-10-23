@@ -2,51 +2,50 @@
 
 [![Website](https://img.shields.io/badge/Website-hypervibes.ai-0f766e?logo=googlechrome&logoColor=white)](https://hypervibes.ai) [![Documentation](https://img.shields.io/badge/Documentation-2563eb?logo=readthedocs&logoColor=white)](https://hypervibes.ai/docs/) [![Discord](https://img.shields.io/badge/Discord-5865f2?logo=discord&logoColor=white)](https://discord.gg/Up39Qvqmkh) [![X](https://img.shields.io/badge/X-000000?logo=x&logoColor=white)](https://x.com/HyperVibesAI)
 
-HyperVibes is an agent framework for trading on Hyperliquid.
+HyperVibes is a self-hosted app for running AI trading agents on Hyperliquid.
+Choose your models, give agents instructions, and review their work in one place.
 
-## Quickstart
-
-The production stack runs HyperVibes, its OpenCode runtime, and Postgres in
-containers. It publishes HyperVibes only on `127.0.0.1:3003`; it is not
-reachable from the network without a separately configured reverse proxy.
-
-Install Podman, `podman-compose`, `curl`, and `openssl`, then run
-these commands in a new installation directory.
-
-1. Download the Compose file from `master`.
-
-   ```sh
-   umask 077 && curl -fsSLo podman-compose.yaml https://raw.githubusercontent.com/idft/hypervibes/master/podman-compose.yaml
-   ```
-
-2. Generate unique local secrets in a private `.env` file. Run this once,
-   before the first start; it will refuse to overwrite an existing `.env`.
-
-   ```sh
-   (umask 077; set -C; KEY=$(openssl rand -hex 32) && CTRL=$(openssl rand -hex 32) && OC=$(openssl rand -hex 32) && DB=$(openssl rand -hex 32) && printf 'AGENTS_ENCRYPTION_KEY=%s\nWORKSPACE_CONTROL_API_KEY=%s\nOPENCODE_SERVER_PASSWORD=%s\nPOSTGRES_PASSWORD=%s\n' "$KEY" "$CTRL" "$OC" "$DB" > .env)
-   ```
-
-3. Start the stack.
-
-   ```sh
-   podman-compose up -d
-   ```
-
-Open <http://127.0.0.1:3003> after the services become healthy.
-Keep `.env` private and back it up with the database; do not regenerate it after
-the first start.
+Agents can place real orders. AI can make mistakes, and trading can lose money.
+Start with trading disabled while you check your setup.
 
 ## Development
 
-Development services, including the disposable test database, are in
-`podman-compose.dev.yaml`:
+HyperVibes requires Node.js 22.23.3 or newer and pnpm.
+
+1. Install dependencies.
+
+   ```sh
+   pnpm install
+   ```
+
+2. Create local configuration and set a random auth secret.
+
+   ```sh
+   cp .env.example .env
+   openssl rand -hex 32
+   ```
+
+   Paste the generated value into `BETTER_AUTH_SECRET` in `.env`.
+
+3. Start the development server.
+
+   ```sh
+   pnpm dev:server
+   ```
+
+Open <http://localhost:3003>. The SQLite development database is created
+automatically on first start.
+
+See `docs/` for the user guide and `AGENTS.md` for architecture and project
+conventions.
+
+## Checks
 
 ```sh
-podman-compose -f podman-compose.dev.yaml up -d
+pnpm typecheck:server
+pnpm lint:server
+pnpm test:server
 ```
-
-Run the application on the host with `cargo run`. See `.env.example` for its
-local configuration and `docs/Testing.md` for test database details.
 
 ## License
 

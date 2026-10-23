@@ -1,12 +1,4 @@
 {
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "strict": true,
-    "noEmit": true,
-    "allowImportingTsExtensions": false,
-    "skipLibCheck": true
-  },
-  "include": ["assets/**/*.ts", "vite.app.config.ts", "vitest.server.config.ts"]
+  "extends": "./tsconfig.server.json",
+  "include": ["src/**/*.ts", "src/**/*.tsx", "vite.app.config.ts", "vitest.server.config.ts", "drizzle.config.ts"]
 }

@@ -2,19 +2,15 @@
 
 HyperVibes is a framework for AI agents to trade crypto on Hyperliquid exchange.
 
-## Current application: TypeScript
+## Current application
 
-The TypeScript rewrite is mostly complete and is the active application. The
-legacy Rust code remains as a reference. See `pi.md` for design research and
-history; use the root `package.json` for current commands.
+HyperVibes is a TypeScript application built with TanStack Start, Fastify, and
+Pi Durable. See `pi.md` for design research and history; use the root
+`package.json` for current commands.
 
-* Backend TypeScript files live alongside the existing `.rs` files in `src/`.
-  Use descriptive TypeScript filenames (e.g. `database.ts`, `app.ts`), not Rust
-  module names like `mod.ts`; filenames do not need to match the Rust files.
+* Source files live in `src/`. Use descriptive filenames (e.g. `database.ts`,
+  `app.ts`) rather than generic module names.
 * Use the existing root `package.json` and pnpm; do not create a separate backend package.
-* Keep the Rust/PostgreSQL application intact as a reference. Do not port its
-  entire schema or import its existing data.
-* Do not run or modify the legacy Rust application as part of rewrite work.
 
 ## Application architecture (current)
 
@@ -40,15 +36,15 @@ history; use the root `package.json` for current commands.
   diagnostic debugging of development runs, scoped to the relevant agent/run.
   This diagnostic exception does not permit writes or application dependencies
   on Pi's internal schema.
-* **Domain features implemented so far:** per-user provider connections and model
-  catalog (`src/providers/`, `src/model_catalog/`), agent dashboard/chat with
-  history and compaction, configurable sub-agents with schedules and delegation
+* **Domain features implemented so far:** per-user provider connections
+  (`src/providers/`), agent dashboard/chat with history and compaction,
+  configurable sub-agents with schedules and delegation
   (`src/db/subagent-schema.ts`), Hyperliquid account streaming and order/account
   tools (`src/hyperliquid/`), and the trade journal with account-history sync.
 
 ## Development database
 
-The dev database is a single SQLite file (no PostgreSQL, no containers):
+The dev database is a single SQLite file (no containers):
 
 * **Location:** `APP_SQLITE_PATH` overrides the OS-dependent default. Consult
   `defaultDatabasePath` in `src/config.ts` for the authoritative resolution:
@@ -79,13 +75,6 @@ The dev database is a single SQLite file (no PostgreSQL, no containers):
   mean the app is running or did not shut down cleanly; never remove it as part
   of inspection.
 
-## Legacy Rust application (reference only)
-
-* Rust, axum, sqlx, PostgreSQL, HTMX/SSE, podman-compose.
-* Do not run `cargo` commands, Rust tests, or `just test` for TypeScript work;
-  they can hang waiting for PostgreSQL. Only on explicit user request.
-* Never stop the running podman-compose stack.
-
 ## Running and building
 
 * Backend dev server: `pnpm dev:server` (port 3003, loads `.env`).
@@ -99,9 +88,9 @@ The dev database is a single SQLite file (no PostgreSQL, no containers):
 * Run backend checks from the repo root: `pnpm typecheck:server`,
   `pnpm lint:server`, and `pnpm test:server`.
 * Backend tests use disposable SQLite files and injected HTTP requests, without
-  opening a listening port or depending on PostgreSQL, containers, or model calls.
-* For frontend changes, use `pnpm typecheck`, `pnpm lint`, and `pnpm test:js` as
-  appropriate.
+  opening a listening port or depending on containers or model calls.
+* For frontend changes, run the same checks; they cover `src/**/*.tsx` and
+  browser-behavior tests.
 * Never point tests at the running application's database or use real exchange
   credentials.
 * Use a 240 second timeout for tests.
@@ -121,7 +110,7 @@ The dev database is a single SQLite file (no PostgreSQL, no containers):
 * Cosmetic UI changes, such as colors, spacing, typography, styling, or layout
   adjustments, do not require documentation updates.
 * `docs/` is the public user guide shown on the website. Document the current
-  TypeScript app, not the legacy Rust application.
+  application.
 * Keep user documentation simple, concise, and organized by feature. Explain
   what a feature is for and its main capabilities, not every detail of how it works.
 * Do not turn feature pages into exhaustive references. Omit field-by-field
@@ -158,8 +147,8 @@ pnpm lint:server
 pnpm test:server
 ```
 
-Run the relevant frontend checks when changing frontend code. Do not add Rust
-checks to the rewrite workflow; legacy Rust testing requires an explicit user request.
+Run the relevant frontend checks when changing frontend code. The TypeScript
+checks cover both the server and frontend sources.
 
 Definition of Done: Relevant TypeScript checks pass, with no new diagnostics or
 dead code. Update documentation only when the overall user-facing concept,

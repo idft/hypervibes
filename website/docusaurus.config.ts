@@ -3,7 +3,7 @@ import type * as Preset from '@docusaurus/preset-classic';
 
 const config: Config = {
   title: 'HyperVibes',
-  tagline: 'OpenCode-backed trading agents for Hyperliquid',
+  tagline: 'AI trading agents for Hyperliquid',
   favicon: 'img/favicon.png',
   url: 'https://hypervibes.ai',
   baseUrl: '/',
@@ -12,10 +12,6 @@ const config: Config = {
   onBrokenLinks: 'throw',
   clientModules: ['./src/clientModules/goatcounter.ts'],
   headTags: [
-    {
-      tagName: 'link',
-      attributes: {rel: 'describedby', href: '/llms.txt'},
-    },
     {
       tagName: 'link',
       attributes: {rel: 'preconnect', href: 'https://fonts.googleapis.com'},

@@ -15,14 +15,7 @@
     "start:server": "node --env-file-if-exists=.env --import tsx src/main.ts",
     "typecheck:server": "tsr generate && tsc --project tsconfig.server.json",
     "lint:server": "eslint src vite.app.config.ts vitest.server.config.ts drizzle.config.ts",
-    "test:server": "vitest run --config vitest.server.config.ts",
-    "build:js": "./node_modules/esbuild/bin/esbuild assets/app.ts assets/login.ts --bundle --outdir=static/dist --minify",
-    "build:css": "tailwindcss -i assets/app.css -o static/dist/app.css --minify",
-    "build": "pnpm build:js && pnpm build:css",
-    "lint": "eslint assets",
-    "lint:fix": "eslint assets --fix",
-    "typecheck": "tsc --noEmit",
-    "test:js": "vitest run assets --environment jsdom"
+    "test:server": "vitest run --config vitest.server.config.ts"
   },
   "dependencies": {
     "@better-auth/drizzle-adapter": "1.7.10",
@@ -41,8 +34,6 @@
     "fancy-canvas": "2.1.0",
     "fastify": "5.12.7",
     "grammy": "^1.46.0",
-    "htmx-ext-sse": "2.2.4",
-    "htmx.org": "2.0.10",
     "lightweight-charts": "5.2.1",
     "pinets": "0.12.1",
     "pino-pretty": "^13.2.0",
@@ -56,7 +47,6 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@tailwindcss/cli": "^4.3.3",
     "@tailwindcss/vite": "4.3.1",
     "@tanstack/router-cli": "1.167.44",
     "@types/node": "22.20.5",
@@ -66,7 +56,6 @@
     "@vitejs/plugin-react": "5.2.0",
     "auth": "1.7.10",
     "drizzle-kit": "1.0.0-rc.4",
-    "esbuild": "^0.25.12",
     "eslint": "^10.13.0",
     "globals": "^17.13.0",
     "jsdom": "^29.1.1",

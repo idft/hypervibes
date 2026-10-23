@@ -1,14 +1,9 @@
 .env
 .envsitter/
-target/
-.opencode/plans/*.md
 node_modules
 website/.docusaurus/
 website/build/
-static/dist
 HANDOFF.md
-__pycache__/
-*.py[cod]
 TODO
 /cache/
 /.build/

@@ -4,8 +4,8 @@ slug: /installation
 
 # Installation
 
-The rewrite's release packages are not available yet. This page lists the
-planned ways to run it. The old container instructions do not install the rewrite.
+HyperVibes release packages are not available yet. This page lists the
+planned ways to run it.
 
 ## NPX
 
@@ -27,8 +27,8 @@ Coming soon. Downloads and installation steps are not available yet.
 ## Server hosting
 
 A Raspberry Pi or a virtual private server may be useful if you want agents
-to run while your personal computer is off. Rewrite-specific server installation
-steps and Raspberry Pi compatibility checks are still to do.
+to run while your personal computer is off. Server installation steps and
+Raspberry Pi compatibility checks are still to do.
 
 For any always-on installation:
 

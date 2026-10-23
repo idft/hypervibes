@@ -57,7 +57,7 @@ export function ledgerEvent(account: string, row: UserNonFundingLedgerUpdatesRes
     symbol: "token" in d ? d.token : "usdc" in d ? "USDC" : null, type: d.type, fee, pnl: null, delta, fill: null, raw: row };
 }
 
-/** Port of trade_cycles.rs: exchange P&L, position-chain ordering, flat-to-flat perps. */
+/** Exchange P&L, position-chain ordering, and flat-to-flat perps. */
 export function buildTrades(account: string, events: JournalEvent[]): JournalTrade[] {
   const result: JournalTrade[] = [];
   const instruments = new Map<string, JournalEvent[]>();

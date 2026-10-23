@@ -13,7 +13,7 @@ export default function Home() {
   return (
     <Layout
       title="AI trading agents for Hyperliquid"
-      description="Build and supervise OpenCode-backed trading agents for Hyperliquid."
+      description="Build and supervise AI trading agents for Hyperliquid."
     >
       <main className="homepage">
         <section className="hero">
@@ -64,8 +64,8 @@ export default function Home() {
             <p className="eyebrow">QUICK START</p>
               <h2>Self-host on your own server.</h2>
             <p>
-              HyperVibes is designed to run locally in a container stack. Pull
-              the image, configure your environment, then connect your wallet
+              HyperVibes runs locally from source while packaged installs are
+              in progress. Install Node.js and pnpm, then connect your wallet
               and provider from the operator interface.
             </p>
               <Link className="quick-start-link" to="/docs/quick-start">
@@ -75,12 +75,12 @@ export default function Home() {
                 </svg>
               </Link>
           </div>
-          <div className="terminal" aria-label="Example HyperVibes container setup command">
+          <div className="terminal" aria-label="Example HyperVibes development setup command">
             <div className="terminal-bar">
               <span><i /><i /><i /></span>
               <small>terminal</small>
             </div>
-            <pre><code><span className="terminal-comment"># Download the latest Compose file</span>{'\n'}<span className="terminal-prompt">$</span> umask 077 &amp;&amp; curl -fsSLo podman-compose.yaml https://raw.githubusercontent.com/idft/hypervibes/master/podman-compose.yaml{'\n\n'}<span className="terminal-comment"># Generate a private .env once, then start the stack</span>{'\n'}<span className="terminal-prompt">$</span> (umask 077; set -C; KEY=$(openssl rand -hex 32) &amp;&amp; CTRL=$(openssl rand -hex 32) &amp;&amp; OC=$(openssl rand -hex 32) &amp;&amp; DB=$(openssl rand -hex 32) &amp;&amp; printf 'AGENTS_ENCRYPTION_KEY=%s\nWORKSPACE_CONTROL_API_KEY=%s\nOPENCODE_SERVER_PASSWORD=%s\nPOSTGRES_PASSWORD=%s\n' "$KEY" "$CTRL" "$OC" "$DB" &gt; .env){'\n'}<span className="terminal-prompt">$</span> podman-compose up -d</code></pre>
+            <pre><code><span className="terminal-comment"># Clone the repository and install dependencies</span>{'\n'}<span className="terminal-prompt">$</span> git clone https://github.com/idft/hypervibes.git{'\n'}<span className="terminal-prompt">$</span> cd hypervibes &amp;&amp; pnpm install{'\n\n'}<span className="terminal-comment"># Set BETTER_AUTH_SECRET in .env, then start HyperVibes</span>{'\n'}<span className="terminal-prompt">$</span> pnpm dev:server</code></pre>
           </div>
         </section>
 

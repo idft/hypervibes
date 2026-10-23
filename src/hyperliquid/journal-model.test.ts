@@ -9,7 +9,7 @@ export function fill(id: number, side: string, size: string, start: string | nul
     fill: { hash: String(id), tid: String(id), side, size, price: "100", start, rawFee: fee, feeToken: "USDC" } };
 }
 
-describe("journal exact accounting and legacy trade-cycle fixtures", () => {
+describe("journal exact accounting and trade-cycle fixtures", () => {
   it("derives identical identities for HTTP and websocket funding events", () => {
     const http = fundingEvent({ time: 1234, hash: `0x${"ab".repeat(32)}`,
       delta: { type: "funding", coin: "BTC", usdc: "-0.25", szi: "1", fundingRate: "0.01", nSamples: 1 } } as UserFundingResponse[number]);
@@ -28,7 +28,7 @@ describe("journal exact accounting and legacy trade-cycle fixtures", () => {
     for (const value of ["NaN", "1e-8", "Infinity", "", "+1", " 1"]) expect(() => amount(value)).toThrow();
   });
 
-  it("ports the Rust flip fixture, preserving fees, P&L and stable IDs", () => {
+  it("accounts for the flip fixture, preserving fees, P&L and stable IDs", () => {
     const events = [fill(1, "B", "2", "0", "2"), fill(2, "A", "3", "2", "3", "10")];
     const trades = buildTrades("account", events);
     expect(trades).toHaveLength(2);
@@ -38,13 +38,13 @@ describe("journal exact accounting and legacy trade-cycle fixtures", () => {
     const thirds = buildTrades("account", [fill(1, "B", "1", "0", "0"), fill(2, "A", "3", "1", "1")]);
     expect(amount(thirds[0]!.fees).add(amount(thirds[1]!.fees)).toString()).toBe("1");
   });
-  it("groups scale-ins and partial exits but separates reentries (Rust fixture)", () => {
+  it("groups scale-ins and partial exits but separates reentries", () => {
     const trades = buildTrades("a", [fill(1, "buy", "1", "0"), fill(2, "B", "1", "1"), fill(3, "sell", "0.5", "2", "0.05", "2"), fill(4, "A", "1.5", "1.5", "0.15", "5"), fill(5, "sell", "1", "0"), fill(6, "buy", "1", "-1", "0.1", "3")]);
     expect(trades).toHaveLength(2);
     expect(trades[0]).toMatchObject({ status: "closed", entrySize: "2", exitSize: "2", grossPnl: "7" });
     expect(trades[1]).toMatchObject({ status: "closed", direction: "short", grossPnl: "3" });
   });
-  it("orders timestamp ties by position chain rather than exchange IDs (Rust fixture)", () => {
+  it("orders timestamp ties by position chain rather than exchange IDs", () => {
     const trades = buildTrades("a", [fill(1, "A", "0.0002", "0", "0.01", "0", 1), fill(2, "A", "0.0002", "-0.0002", "0.01", "0", 2), fill(3, "B", "0.0002", "-0.0002", "0.01", "-0.0644", 3), fill(4, "B", "0.0002", "-0.0004", "0.01", "-0.0644", 3)]);
     expect(trades).toHaveLength(1);
     expect(trades[0]).toMatchObject({ status: "closed", grossPnl: "-0.1288", fees: "0.04", remainingSize: "0", coverageReason: null });
