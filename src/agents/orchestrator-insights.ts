@@ -7,7 +7,7 @@ export const orchestratorInsightsSection = "agent_insights";
  * retries and recovery. Steering may add inputs, but does not replace the first. */
 export const OrchestratorInsightsDoc = defineDoc<{ input: number | null; instructions: string }>({
   kind: "hv.orchestrator-insights", version: 1, scope: "conversation", history: "latest", fork: "initial",
-  initial: () => ({ input: null, instructions: "" }),
+  initial: () => ({ input: null, instructions: "" }), checkpointWhen: () => false,
 });
 
 /** Selected only by the root, regardless of its configured tools. */

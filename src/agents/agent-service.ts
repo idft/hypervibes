@@ -1,13 +1,14 @@
+import { cancelTaskScope } from "./cancel-task-scope.js";
 import type { NotificationService } from "../notifications/notification-service.js";
 import { createNotificationExtension } from "../notifications/durable-extension.js";
 import type { OrderService } from "../hyperliquid/orders/order-service.js";
 import { createHyperliquidExtension } from "../hyperliquid/durable-extension.js";
 import type { HyperliquidService } from "../hyperliquid/service.js";
-import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import { BACKGROUND_CONTEXT as context, withAbortSignal } from "@earendil-works/chord/context";
 import type { JsonRepresentation } from "@earendil-works/chord";
 import { getSupportedThinkingLevels, type Models } from "@earendil-works/pi-ai/models";
 import { estimateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
-import { createRegistry, Harness, InboxDoc, LiveDoc, UsageDoc, type EntryId, type Submission, type TaskId, type UsageState, type UserInput, type InputEntry } from "@earendil-works/pi-durable";
+import { createRegistry, defineDoc, Harness, InboxDoc, LiveDoc, UsageDoc, type EntryId, type Submission, type TaskId, type UsageState, type UserInput, type InputEntry } from "@earendil-works/pi-durable";
 import type { Conversation, ConversationView, EntryRecord, InboxState, LiveState, ModelRef } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { and, desc, eq, inArray } from "drizzle-orm";
@@ -77,6 +78,12 @@ export interface AgentServiceOptions {
   logger?: FastifyBaseLogger;
 }
 interface RunningAgent { harness: Harness; main: Conversation }
+
+// Public application document: cancellation must resume even after the abort mark removes parking.
+const MainRecoveryDoc = defineDoc<{ tasks: number[] }>({
+  kind: "hv.main-recovery", version: 1, scope: "conversation", history: "latest", fork: "initial",
+  initial: () => ({ tasks: [] }), checkpointWhen: () => false,
+});
 export interface ChatEntry { id: string; role: "user" | "assistant" | "system" | "tool"; text: string; failed: boolean; tool?: ToolActivity; marker?: "reset" | "compaction"; chart?: ChartAttachment }
 /** A submitted message waiting for the running turn's boundary, not yet a transcript entry. */
 export interface ChatQueueItem { id: string; text: string; chart?: ChartAttachment }
@@ -139,6 +146,7 @@ export class AgentService {
   // Includes partially initialized harnesses whose cleanup may need a retry.
   private readonly harnesses = new Map<string, Harness>();
   private readonly opening = new Map<string, Promise<RunningAgent>>();
+  private readonly mainRecoveries = new Map<string, Promise<void>>();
   private readonly deleting = new Map<string, Promise<void>>();
   private readonly enablement = new Map<string, Promise<unknown>>();
   private readonly lifetimes = new Map<string, AbortController>();
@@ -165,6 +173,7 @@ export class AgentService {
     this.indicators = new IndicatorService(database, hyperliquid.charts, new IndicatorRuntime({}, (message) => options.logger?.warn(message)), (error) => options.logger?.error(error, "Indicator catalog listener failed"));
     this.subagents = new SubagentService(db, database, providers, {
       owned: (userId, id) => this.owned(userId, id), models: (userId) => this.models(userId), changed: (id) => this.notify(id), signal: (id) => this.signal(id),
+      recoverParkedMain: (id) => this.recoverParkedMain(id),
     }, this.execution, Boolean(options.models), options.logger?.child({ component: "scheduler" }));
   }
   /** Ends every agent-scoped UI subscription when deletion begins. */
@@ -295,6 +304,7 @@ export class AgentService {
         harness = await Harness.open(storage, {
           models: await this.models(agent.userId), registry,
           settings: { retry: { maxRetries: 2 }, stream: { timeoutMs: 120_000 } },
+          onReport: (error, info) => this.options.logger?.warn({ err: error, agentId: agent.id, report: info }, "Agent harness report"),
         }, context);
       } catch (error) { await storage.close(context); throw error; }
       this.harnesses.set(agent.id, harness);
@@ -324,7 +334,10 @@ export class AgentService {
         }
       }).catch(() => { /* A shared-storage failure is also reported by runtime health. */ });
       if (!await agentExecutable(this.database, agent.id)) await this.disableWork(agent.id, current);
-      else if (this.scheduling && await this.configured(agent, current) && !this.signal(agent.id).aborted) harness.resume();
+      else if (this.scheduling && await this.configured(agent, current) && !this.signal(agent.id).aborted) {
+        await this.recoverParkedMain(agent.id);
+        harness.resume();
+      }
       return current;
     } catch (error) {
       this.subagents.unbind(agent.id);
@@ -350,7 +363,10 @@ export class AgentService {
     for (const agent of agents) {
       if (this.stopping || this.draining) return;
       const current = this.running.get(agent.id);
-      if (current && await agentExecutable(this.database, agent.id) && await this.configured(agent, current) && !this.stopping && !this.draining && !this.signal(agent.id).aborted) current.harness.resume();
+      if (current && await agentExecutable(this.database, agent.id) && await this.configured(agent, current) && !this.stopping && !this.draining && !this.signal(agent.id).aborted) {
+        await this.recoverParkedMain(agent.id);
+        current.harness.resume();
+      }
     }
   }
   async recover() {
@@ -505,7 +521,9 @@ export class AgentService {
         messages.push({ id: `${entry.id}:0`, role: "user", text: data.text, chart: data.chart, failed: false });
         continue;
       }
-      if (entry.kind === "hv.subagent-notification" && entry.data && typeof entry.data === "object" && "text" in entry.data && typeof entry.data.text === "string") {
+      if (entry.kind === "hv.execution-failure" && entry.data && typeof entry.data === "object" && "text" in entry.data && typeof entry.data.text === "string") {
+        messages.push({ id: `execution-failure:${entry.id}`, role: "assistant", text: entry.data.text, failed: true });
+      } else if (entry.kind === "hv.subagent-notification" && entry.data && typeof entry.data === "object" && "text" in entry.data && typeof entry.data.text === "string") {
         messages.push({ id: `notification:${entry.id}`, role: "assistant", text: entry.data.text, failed: false });
       } else if (entry.kind === "pi.reset") {
         messages.push({ id: `reset:${entry.id}`, role: "system", text: "Context reset", failed: false, marker: "reset" });
@@ -650,6 +668,7 @@ export class AgentService {
       this.admit();
       const current = this.running.get(agent.id);
       if (!current) throw new AgentError("Agent is unavailable. Retry initialization.", 503);
+      await this.assertMainRecoveryClear(current);
       if (!await this.configured(agent, current)) throw new AgentError("Reconnect this Agent's provider or select an available model on the Providers page.", 409);
       const inbox = await current.harness.snapshot(InboxDoc, current.main.id, context);
       if ((inbox?.items.length ?? 0) >= 20) throw new AgentError("Agent message queue is full. Wait for a response.", 429);
@@ -669,6 +688,60 @@ export class AgentService {
       return { submissionId: submission.id };
     });
   }
+  /** A durable guard blocks new main-chat admission until cancellation finishes. */
+  private async assertMainRecoveryClear(current: RunningAgent) {
+    const pending = await current.main.commit(async (tx) => (await tx.doc(MainRecoveryDoc, current.main.id)).tasks.length > 0, context);
+    if (pending) throw new AgentError("The previous response is stopping after repeated interruptions. Try again once cleanup finishes.", 409);
+  }
+  private recoverParkedMain(id: string): Promise<void> {
+    const existing = this.mainRecoveries.get(id);
+    if (existing) return existing;
+    const work = this.stopParkedMain(id).finally(() => { this.mainRecoveries.delete(id); });
+    this.mainRecoveries.set(id, work);
+    return work;
+  }
+  /** Stop the main execution scope and queued inputs, but never independent workers. */
+  private async stopParkedMain(id: string) {
+    const current = this.running.get(id);
+    if (!current || this.stopping || this.draining || this.signal(id).aborted) return;
+    const targets = await this.subagents.execute(id, async () => {
+      if (this.running.get(id) !== current) return [];
+      const graph = await current.harness.taskGraph(context);
+      try {
+        const tasks = Object.values(graph.value.tasks);
+        const scope = new Set(tasks.filter((task) => task.owner === undefined && task.conversationId === current.main.id && (!task.background || task.kind === "pi.compaction")).map((task) => task.id));
+        const conversations = new Set<number>();
+        let changed = true;
+        while (changed) {
+          changed = false;
+          for (const task of tasks) {
+            if (scope.has(task.id)) for (const conversation of task.conversations) if (!conversations.has(conversation)) { conversations.add(conversation); changed = true; }
+            if (!scope.has(task.id) && ((task.owner !== undefined && scope.has(task.owner)) || (task.owner === undefined && conversations.has(task.conversationId)))) {
+              scope.add(task.id); changed = true;
+            }
+          }
+        }
+        const parked = tasks.filter((task) => scope.has(task.id) && task.blocked === "restart_limit");
+        return await current.main.commit(async (tx) => {
+          const recovery = await tx.doc(MainRecoveryDoc, current.main.id);
+          if (recovery.tasks.length) return [...recovery.tasks];
+          if (!parked.length) return [];
+          recovery.tasks = [...scope];
+          for (const task of parked) await tx.appendEntry(current.main.id, {
+            kind: "hv.execution-failure", data: { taskId: task.id, kind: task.kind, text: "Automatic recovery stopped after repeated interruptions. This response and its queued inputs were stopped. Existing exchange orders were not cancelled. Inspect account/order state before starting new work." },
+          });
+          return [...recovery.tasks];
+        }, context);
+      } finally { graph.dispose(); }
+    });
+    if (!targets.length) return;
+    // Joins must run outside admission: a cancelled tool can itself be waiting for that lock.
+    // A non-cooperative tool must not block every other agent's scheduler indefinitely.
+    const cancellation = withAbortSignal(AbortSignal.any([this.signal(id), this.feedShutdown.signal, AbortSignal.timeout(10_000)]), context);
+    await current.main.abort(cancellation);
+    await cancelTaskScope(current.harness, targets, [], cancellation);
+    await current.main.commit(async (tx) => { (await tx.doc(MainRecoveryDoc, current.main.id)).tasks = []; }, context);
+  }
   async stop(userId: string, id: string) {
     this.admit();
     const agent = await this.owned(userId, id);
@@ -680,7 +753,10 @@ export class AgentService {
     const agent = await this.owned(userId, id);
     const current = this.running.get(agent.id);
     if (!current) throw new AgentError("Agent is unavailable. Retry initialization.", 503);
-    await this.subagents.execute(agent.id, () => current.main.reset(undefined, context));
+    await this.subagents.execute(agent.id, async () => {
+      await this.assertMainRecoveryClear(current);
+      await current.main.reset(undefined, context);
+    });
   }
   /** Manually compacts the visible transcript into a summary entry. */
   async compact(userId: string, id: string): Promise<{ message?: string }> {
@@ -694,6 +770,7 @@ export class AgentService {
     const current = this.running.get(agent.id);
     if (!current) throw new AgentError("Agent is unavailable. Retry initialization.", 503);
     if (!await this.configured(agent, current)) throw new AgentError("Reconnect this Agent's provider or select an available model on the Providers page.", 409);
+    await this.assertMainRecoveryClear(current);
     const taskId = await current.main.compact(undefined, context);
     // A decline (nothing older than the kept recent window) settles almost
     // instantly and would otherwise be completely silent; a real summarization
@@ -759,6 +836,7 @@ export class AgentService {
       if (!this.scheduling) throw new AgentError("Agent execution is not ready", 503);
       const current = this.running.get(agent.id);
       if (!current) throw new AgentError("Agent is unavailable. Retry initialization.", 503);
+      await this.assertMainRecoveryClear(current);
       message = chatMessage(message);
       submissionRequestId = requestId(submissionRequestId);
       if (!await this.configured(agent, current)) throw new AgentError("Reconnect this Agent's provider or select an available model on the Providers page.", 409);
@@ -774,7 +852,7 @@ export class AgentService {
     return this.draining = (async () => {
       await this.resuming;
       await subagents;
-      await Promise.allSettled([...this.opening.values(), ...this.enablement.values()]);
+      await Promise.allSettled([...this.opening.values(), ...this.enablement.values(), ...this.mainRecoveries.values()]);
       await this.drainInFlight(force);
     })();
   }

@@ -1,9 +1,10 @@
-import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import { BACKGROUND_CONTEXT as context, withAbortSignal } from "@earendil-works/chord/context";
 import { getSupportedThinkingLevels, type Models } from "@earendil-works/pi-ai/models";
-import { defineDoc, InboxDoc, LiveDoc, type AgentChange, type Conversation, type ConversationId, type Cursor, type EntryRecord, type Extension, type Harness, type ModelRef } from "@earendil-works/pi-durable";
+import { defineDoc, defineDocFamily, InboxDoc, LiveDoc, type AgentChange, type Conversation, type ConversationId, type Cursor, type EntryRecord, type Extension, type Harness, type ModelRef } from "@earendil-works/pi-durable";
 import { and, asc, count, desc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { agentExecutable, assertAgentExecutable } from "./agent-enablement.js";
+import { cancelTaskScope } from "./cancel-task-scope.js";
 import type { AgentRow } from "../db/agent-schema.js";import { hvSubagents, hvSubagentRuns, hvWorkerRequests, type SubagentRow, type SubagentRun, type WorkerRequest } from "../db/subagent-schema.js";
 import type { ApplicationDatabase, SharedDatabase } from "../db/shared-database.js";
 import type { FastifyBaseLogger } from "fastify";
@@ -27,10 +28,16 @@ import { assertActiveActor, type MemoryActor } from "../memory/operations.js";
 import { assignment, defaultMainInstructions, mainToolNames, nextCandleRun, normalizeDelegationTools, subagentInput, type AssignmentSettings } from "./subagent-input.js";
 
 interface Binding extends SubagentExtension { harness: Harness; main: Conversation; hyperliquid: Extension; capabilities: readonly Extension[]; orchestratorInsights: Extension; userId: string }
-export interface SubagentHost { owned(userId: string, id: string): Promise<AgentRow>; models(userId: string): Promise<Models>; changed(id: string): void; signal(id: string): AbortSignal }
+export interface SubagentHost { owned(userId: string, id: string): Promise<AgentRow>; models(userId: string): Promise<Models>; changed(id: string): void; signal(id: string): AbortSignal; recoverParkedMain?(agentId: string): Promise<void> }
 /** Full run detail: snapshotted configuration plus the complete transcript. */
 export interface RunDetail { definition: SubagentRow; run: SubagentRun; entries: EntryRecord[]; prior: EntryRecord[]; tools?: ToolActivity[]; context?: RunContext; warnings?: ExecutionWarning[]; publications?: { ref: string; kind: string; summary: string }[] }
 const active = ["queued", "running"] as const;
+const parkedRunReason = "Automatic recovery stopped after repeated interruptions. Existing exchange orders were not cancelled. Inspect account/order state before starting a new assignment.";
+/** A public, durable cancellation intent. Never clear it before all work drains. */
+export const ParkedRunRecovery = defineDocFamily<{ pending: boolean; done: boolean; conversationId: number | null }, null>({
+  kind: "hv.parked-run-recovery", version: 1, family: true, scope: "conversation", history: "latest", fork: "initial",
+  initial: () => ({ pending: false, done: false, conversationId: null }), checkpointWhen: () => false,
+});
 
 /** Drizzle and Durable can wrap native SQLite errors in a cause. */
 function sqliteFailure(error: unknown, seen = new Set<unknown>()): boolean {
@@ -46,11 +53,11 @@ function sqliteFailure(error: unknown, seen = new Set<unknown>()): boolean {
 // applied, an explicit later tool deselection survives subsequent restarts.
 export const MarketSnapshotUpgradeDoc = defineDoc<{ applied: boolean }>({
   kind: "hv.market-snapshot-upgrade", version: 1, scope: "conversation", history: "latest", fork: "initial",
-  initial: () => ({ applied: false }),
+  initial: () => ({ applied: false }), checkpointWhen: () => false,
 });
 
 export const ChartToolsUpgradeDoc = defineDoc<{ applied: boolean }>({
-  kind: "hv.chart-tools-upgrade", version: 1, scope: "conversation", history: "latest", fork: "initial", initial: () => ({ applied: false }),
+  kind: "hv.chart-tools-upgrade", version: 1, scope: "conversation", history: "latest", fork: "initial", initial: () => ({ applied: false }), checkpointWhen: () => false,
 });
 
 /** Definitions and run intents belong to the app; Durable owns execution and reporting. */
@@ -62,6 +69,7 @@ export class SubagentService {
   private ticking: Promise<void> = Promise.resolve();
   private tickActive = false;
   private ready = false;
+  private starting?: Promise<void>;
   private stopping = false;
   private draining?: Promise<void>;
   private readonly dashboardListeners = new Map<string, Set<() => void>>();
@@ -113,6 +121,7 @@ export class SubagentService {
       await main.commit(async (tx) => { (await tx.doc(ChartToolsUpgradeDoc, main.id)).applied = true; }, context);
     }
     await this.applyMain(binding, row);
+    await this.recoverParkedRuns(agent.id, binding, true);
     // Mark expired children's pending generations/tools before *any* scheduler
     // resumes. abortTask only marks while paused; unlike conversation.abort it
     // does not enable scheduling. The runner then records/reports the timeout.
@@ -639,7 +648,7 @@ export class SubagentService {
     if (this.inboxSignatures.get(id) !== signature) { this.inboxSignatures.set(id, signature); this.historyChanged(agentId, id); }
     if (!pending.length) return;
     const running = await this.db.select().from(hvSubagentRuns).where(and(eq(hvSubagentRuns.agentId, agentId), inArray(hvSubagentRuns.status, active))).all();
-    if (running.length >= 4 || running.some((run) => run.subagentId === id)) return;
+    if (running.length >= 4 || running.some((run) => run.subagentId === id) || await this.recoveryPending(agentId, id, binding)) return;
     await this.validateModel(binding.userId, target, target.thinkingLevel);
     const batch = requestBatch(pending);
     const run = await this.database.appTransaction(async (db, tx) => {
@@ -662,7 +671,7 @@ export class SubagentService {
       if (definition.kind !== "worker" || (source !== "manual" && !definition.enabled) || definition.archived || (source === "delegation" && !definition.delegatable)) throw new AgentError("This worker is not available for this assignment.", 409);
       await this.validateModel(binding.userId, definition, definition.thinkingLevel);
       const runs = await this.db.select().from(hvSubagentRuns).where(and(eq(hvSubagentRuns.agentId, agentId), inArray(hvSubagentRuns.status, active))).all();
-      if (runs.some((run) => run.subagentId === id)) throw new AgentError("This worker already has an active assignment.", 409);
+      if (runs.some((run) => run.subagentId === id) || await this.recoveryPending(agentId, id, binding)) throw new AgentError("This worker already has an active assignment.", 409);
       if (runs.length >= 4) throw new AgentError("This Agent already has four active workers.", 429);
       const run = await this.database.appTransaction(async (db, tx) => {
         signal?.throwIfAborted();
@@ -724,8 +733,12 @@ export class SubagentService {
       await binding.harness.waitForTask(current.taskId as RunnerId, context);
     });
   }
-  async start() {
-    this.admit(); if (this.ready) return;
+  start(): Promise<void> {
+    this.admit();
+    return this.starting ??= this.startScheduler();
+  }
+  private async startScheduler() {
+    if (this.ready) return;
     // No catch-up burst after downtime; pending admitted assignments are recovered separately.
     const definitions = await this.db.select().from(hvSubagents).where(eq(hvSubagents.kind, "worker")).all();
     for (const row of definitions) await this.db.update(hvSubagents).set({ nextRunAt: row.enabled && !row.archived ? nextCandleRun(Date.now(), row.schedule, row.delaySeconds) : null }).where(eq(hvSubagents.id, row.id)).run();
@@ -735,18 +748,92 @@ export class SubagentService {
     this.timer = setInterval(() => { void this.tick(); }, 1000); this.timer.unref();
     await this.tick();
   }
+  private async recoveryPending(agentId: string, subagentId: string, binding: Binding) {
+    const runs = await this.db.select().from(hvSubagentRuns).where(and(eq(hvSubagentRuns.agentId, agentId), eq(hvSubagentRuns.subagentId, subagentId), or(inArray(hvSubagentRuns.status, active), isNull(hvSubagentRuns.reportedAt)))).all();
+    for (const run of runs) if (await binding.main.commit(async (tx) => (await tx.doc(ParkedRunRecovery, binding.main.id, run.id, null)).pending, context)) return true;
+    return false;
+  }
+  /** Outside the admission lock: abort APIs can join invocations waiting for that lock. */
+  private async recoverParkedRuns(agentId: string, binding: Binding, markOnly = false) {
+    const attached = await binding.harness.taskGraph(context);
+    const graph = attached.value;
+    attached.dispose();
+    const liveRunners = new Map<string, number>();
+    for (const node of Object.values(graph.tasks)) {
+      if (node.kind !== "hv.subagent-runner") continue;
+      const task = await binding.harness.getTask(node.id as RunnerId, context);
+      const input = task?.input;
+      if (input && typeof input === "object" && "runId" in input && typeof input.runId === "string") liveRunners.set(input.runId, node.id);
+    }
+    // Live runner IDs cover a report parked after reportedAt but before its
+    // terminal commit. Pending cleanup otherwise keeps reportedAt null.
+    const runs = await this.db.select().from(hvSubagentRuns).where(and(eq(hvSubagentRuns.agentId, agentId), or(inArray(hvSubagentRuns.status, active), isNull(hvSubagentRuns.reportedAt), inArray(hvSubagentRuns.id, [...liveRunners.keys()])))).all();
+    for (const run of runs) {
+      // Dispatch may have committed its receipt before the application task ID.
+      const taskId = liveRunners.get(run.id) ?? run.taskId ?? await binding.main.commit(async (tx) => (await tx.doc(RunReceipt, binding.main.id, run.id, null)).taskId, context);
+      if (taskId === null) continue;
+      const recovery = await binding.main.commit(async (tx) => { const doc = await tx.doc(ParkedRunRecovery, binding.main.id, run.id, null); return { ...doc }; }, context);
+      if (recovery.done) { await this.reported(run.id); continue; }
+      const workerConversation = recovery.pending ? recovery.conversationId : active.includes(run.status as typeof active[number]) ? run.conversationId : null;
+      const ids = new Set<number>([taskId]);
+      const conversations = new Set<number>();
+      if (workerConversation !== null) conversations.add(workerConversation);
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const node of Object.values(graph.tasks)) {
+          if (!ids.has(node.id) && !conversations.has(node.conversationId) && (node.owner === undefined || !ids.has(node.owner))) continue;
+          if (!ids.has(node.id)) { ids.add(node.id); changed = true; }
+          for (const id of node.conversations) if (!conversations.has(id)) { conversations.add(id); changed = true; }
+        }
+      }
+      if (!recovery.pending && !Object.values(graph.tasks).some((node) => ids.has(node.id) && node.blocked === "restart_limit")) continue;
+      await binding.main.commit(async (tx) => { const doc = await tx.doc(ParkedRunRecovery, binding.main.id, run.id, null); doc.pending = true; doc.conversationId = workerConversation; }, context);
+      // Preserve the ID and completed results. Finish first so the runner's abort
+      // handler cannot replace the failure with a generic cancellation result.
+      await this.db.update(hvSubagentRuns).set({ taskId, reportedAt: null }).where(eq(hvSubagentRuns.id, run.id)).run();
+      await this.finish(run.id, "failed", parkedRunReason);
+      // abortTask marks while paused and bypasses restart parking for cancellation.
+      // Mark the whole scope before resume; never retryTask or replay an input.
+      const cancellation = withAbortSignal(AbortSignal.any([this.host.signal(agentId), this.historyShutdown.signal, AbortSignal.timeout(10_000)]), context);
+      for (const id of ids) if (graph.tasks[String(id)]) await binding.harness.abortTask(id as RunnerId, cancellation);
+      if (markOnly) continue;
+      for (const id of conversations) await (await binding.harness.conversation(id as ConversationId, cancellation))?.abort(cancellation, { background: true });
+      await cancelTaskScope(binding.harness, [taskId], workerConversation === null ? [] : [workerConversation], cancellation);
+      // Suppress automatic reporting, including report-only tasks. The existing
+      // result and any already delivered report remain unchanged.
+      await binding.main.commit(async (tx) => { const doc = await tx.doc(ParkedRunRecovery, binding.main.id, run.id, null); doc.pending = false; doc.done = true; }, context);
+      await this.reported(run.id);
+      this.historyChanged(agentId, run.subagentId);
+    }
+  }
   /** Public clock seam for deterministic scheduling tests; never overlaps ticks. */
   tick(now = Date.now()): Promise<void> {
-    if (!this.ready || this.stopping) return Promise.resolve();
+    if (this.stopping) return Promise.resolve();
+    // start() initializes schedules asynchronously. A caller that awaits tick()
+    // must also await that initialization and its first pass.
+    if (!this.ready) return this.starting?.then(() => this.ready ? this.tick(now) : undefined) ?? Promise.resolve();
     if (this.tickActive) return this.ticking;
     this.tickActive = true;
     this.ticking = this.ticking.then(async () => {
       if (this.stopping || this.draining) return;
+      const recoveryFailed = new Set<string>();
+      for (const [agentId, binding] of this.bindings) {
+        if (this.host.signal(agentId).aborted || !await agentExecutable(this.database, agentId)) continue;
+        try {
+          await this.host.recoverParkedMain?.(agentId);
+          await this.recoverParkedRuns(agentId, binding);
+        } catch (error) {
+          recoveryFailed.add(agentId);
+          this.log?.warn({ err: error, agentId }, "Parked-task cleanup deferred; new work remains blocked for this Agent");
+          if (!this.database.available || sqliteFailure(error)) throw error;
+        }
+      }
       // Dispatch intents persisted before a crash; detect terminal task failures too.
       const pending = await this.db.select().from(hvSubagentRuns).where(or(inArray(hvSubagentRuns.status, active), isNull(hvSubagentRuns.reportedAt))).all();
       for (const run of pending) {
         if (this.stopping || this.draining) return;
-        const binding = this.bindings.get(run.agentId); if (!binding || this.host.signal(run.agentId).aborted || !await agentExecutable(this.database, run.agentId)) continue;
+        const binding = this.bindings.get(run.agentId); if (recoveryFailed.has(run.agentId) || !binding || this.host.signal(run.agentId).aborted || !await agentExecutable(this.database, run.agentId)) continue;
         await this.schedulerItem(run.agentId, run.subagentId, run.id, () => this.serial(run.agentId, async () => {
           const current = await this.internalRun(run.agentId, run.id);
           if (current.taskId === null && active.includes(current.status as typeof active[number])) await this.dispatch(binding, current);
@@ -769,16 +856,16 @@ export class SubagentService {
       const inboxes = await this.db.selectDistinct({ agentId: hvWorkerRequests.agentId, id: hvWorkerRequests.subagentId }).from(hvWorkerRequests).where(and(isNull(hvWorkerRequests.runId), isNull(hvWorkerRequests.discardedReason))).all();
       for (const inbox of inboxes) {
         if (this.stopping || this.draining) return;
-        if (this.host.signal(inbox.agentId).aborted || !await agentExecutable(this.database, inbox.agentId)) continue;
+        if (recoveryFailed.has(inbox.agentId) || this.host.signal(inbox.agentId).aborted || !await agentExecutable(this.database, inbox.agentId)) continue;
         await this.schedulerItem(inbox.agentId, inbox.id, undefined, () => this.serial(inbox.agentId, () => this.drainInbox(inbox.agentId, inbox.id, now)));
       }
       const due = await this.db.select().from(hvSubagents).where(and(eq(hvSubagents.enabled, true), eq(hvSubagents.archived, false), lte(hvSubagents.nextRunAt, now))).all();
       for (const row of due) {
         if (this.stopping || this.draining) return;
-        if (this.host.signal(row.agentId).aborted || !await agentExecutable(this.database, row.agentId)) continue;
+        if (recoveryFailed.has(row.agentId) || this.host.signal(row.agentId).aborted || !await agentExecutable(this.database, row.agentId)) continue;
         await this.schedulerItem(row.agentId, row.id, undefined, () => this.schedule(row, now));
       }
-      this.schedulerError = null;
+      this.schedulerError = recoveryFailed.size ? "Parked-task cleanup is pending. Affected Agents will retry cancellation, not assignments." : null;
     }).catch((error: unknown) => {
       this.schedulerError = "Subagent scheduler encountered an error. It will retry; persisted assignments are retained.";
       this.log?.error(error, "Subagent scheduler encountered an error");
@@ -808,6 +895,7 @@ export class SubagentService {
         try { await this.validateModel(binding.userId, row, row.thinkingLevel); }
         catch (error) { if (!(error instanceof AgentError)) throw error; reason = error.message; }
       }
+      if (!reason && binding && await this.recoveryPending(row.agentId, row.id, binding)) reason = "Worker cancellation is still pending.";
       if (!reason) subagentInput(row);
       const run = await this.database.appTransaction(async (db, tx) => {
         const running = await db.select().from(hvSubagentRuns).where(and(eq(hvSubagentRuns.agentId, row.agentId), inArray(hvSubagentRuns.status, active))).all();
@@ -829,7 +917,7 @@ export class SubagentService {
     if (this.draining) return this.draining;
     this.ready = false;
     if (this.timer) clearInterval(this.timer);
-    return this.draining = (async () => { await this.ticking; await Promise.all(this.pending.values()); })();
+    return this.draining = (async () => { await this.starting; await this.ticking; await Promise.all(this.pending.values()); })();
   }
   async close() {
     const drained = this.drain();
