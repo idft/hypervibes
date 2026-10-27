@@ -41,6 +41,39 @@ NPX will be the preferred way to run HyperVibes on your own computer.
 Coming soon. The package name, required Node.js version, and launch command
 will be added when the package is ready.
 
+## Containers
+
+The rewritten Linux AMD64 and ARM64 image is coming with release `v0.4.0` at
+`ghcr.io/idft/hypervibes:0.4.0`. Earlier images use the legacy application and
+are not interchangeable with this setup.
+
+After that release is published, use `compose.yaml` from this repository:
+
+```sh
+docker compose up -d
+```
+
+Open <http://localhost:3003>. The example exposes only the host loopback address.
+For remote access, use a private connection or an HTTPS reverse proxy and set
+`APP_ORIGIN` to the exact browser URL. The app listens on `0.0.0.0` inside the
+container; this does not require exposing the host port publicly.
+
+The named volume holds both the SQLite database and generated secrets:
+
+- Database: `/var/lib/hypervibes/data/hypervibes/hypervibes.sqlite`
+- Secrets: `/var/lib/hypervibes/config/hypervibes/config.json`
+
+Back up the complete volume with the app stopped. Keep it when replacing the
+container; never use `docker compose down -v` unless you intend to delete all
+app data and secrets. Losing the encryption key prevents recovery of saved
+credentials. Restore the original secrets with an existing database, not newly
+generated replacements. Bind mounts must be writable by container UID/GID 1000.
+The `/tmp` cache is disposable. Shutdown waits for running agent work; the
+example allows 31 minutes before the container runtime forces termination.
+
+To upgrade, back up the volume, update the image version in `compose.yaml`, and
+run `docker compose pull && docker compose up -d`.
+
 ## Desktop app
 
 Desktop builds are planned for:
@@ -55,7 +88,7 @@ Coming soon. Downloads and installation steps are not available yet.
 
 A Raspberry Pi or a virtual private server may be useful if you want agents
 to run while your personal computer is off. Server installation steps and
-Raspberry Pi compatibility checks are still to do.
+Raspberry Pi hardware compatibility checks are still to do.
 
 For any always-on installation:
 
@@ -64,4 +97,4 @@ For any always-on installation:
 - Back up your app data and encryption secrets together. Both are needed to recover stored credentials.
 - Protect the host as you would a device with access to your trading account.
 
-Release package instructions will be added when available.
+Public release downloads will be linked when available.

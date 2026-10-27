@@ -8,6 +8,7 @@ TODO
 /cache/
 /.build/
 /dist/
+/artifacts/
 /*.tgz
 /.tanstack/
 /src/routeTree.gen.ts

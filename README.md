@@ -76,22 +76,40 @@ The package exposes the `hypervibes` executable and runs with Node.js and runtim
 dependencies only; it does not need pnpm or TypeScript to launch. Run
 `node bin/hypervibes.js --help` for usage. Public npm releases are coming soon.
 
+## Containers
+
+The rewritten container image is coming with release `v0.4.0` at
+`ghcr.io/idft/hypervibes`, for Linux AMD64 and ARM64. See
+[container setup](docs/Installation.md#containers) and `compose.yaml`.
+
+Build locally from the same release package used by npm installations:
+
+```sh
+pnpm pack --out artifacts/hypervibes.tgz
+docker build -f Containerfile -t hypervibes:local .
+```
+
 ## Checks
 
 ```sh
 pnpm typecheck:server
 pnpm lint:server
-pnpm test:server
-pnpm test:startup
-pnpm build
-pnpm test:build
-pnpm test:package
+pnpm test
 ```
+
+`pnpm test` runs application, startup, and container health-check tests without
+building the app or requiring Docker. For release checks, run `pnpm build`,
+`pnpm test:build`, and `pnpm test:package`; package testing performs a clean install.
 
 GitHub Actions runs validation on pull requests, pushes to `master` and `v*`
 branches, and manual runs. It builds one npm tarball and tests that artifact on
 Linux, macOS, and Windows with runtime dependencies only. The workflow uploads
-the tarball for inspection; it does not publish a release or package.
+the tarball for inspection and validates non-root containers on native AMD64
+and ARM64 runners without opening application listeners. Validation does not
+publish anything. Publishing a GitHub release runs validation again, then
+promotes the tested images to GHCR with version, minor-version, commit, and
+`latest` tags. Prereleases receive no minor-version or `latest` tags. Tag pushes
+only create draft releases; branch pushes do not publish images.
 
 ## License
 

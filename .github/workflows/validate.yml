@@ -7,6 +7,7 @@ on:
       - master
       - 'v*'
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -43,12 +44,22 @@ jobs:
       - name: Server tests
         timeout-minutes: 4
         run: pnpm test:server --testTimeout=240000 --hookTimeout=240000
-      - name: Startup tests
+      - name: Startup and container configuration tests
         timeout-minutes: 4
-        run: node --test --test-timeout=240000 scripts/startup.test.mjs
+        run: node --test --test-timeout=240000 scripts/startup.test.mjs scripts/container.test.mjs
       # prepack runs the release build. Test and upload that same build, not a rebuild.
       - name: Build release tarball
         run: pnpm pack --out artifacts/hypervibes.tgz
+      - name: Check release version against the tested package
+        if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          node --input-type=module -e '
+            import { execFileSync } from "node:child_process";
+            const metadata = JSON.parse(execFileSync("tar", ["-xOf", "artifacts/hypervibes.tgz", "package/package.json"], { encoding: "utf8" }));
+            if (`v${metadata.version}` !== process.env.RELEASE_TAG) throw new Error("The release tag must match the package version");
+          '
       - name: Compiled application tests
         timeout-minutes: 4
         run: node --test --test-timeout=240000 scripts/build.test.mjs
@@ -89,3 +100,64 @@ jobs:
         env:
           HYPERVIBES_TEST_TARBALL: ${{ github.workspace }}/artifacts/hypervibes.tgz
         run: node --test --test-timeout=240000 scripts/package.test.mjs
+
+  container:
+    name: Container (${{ matrix.arch }})
+    needs: [validate, package]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-package
+          path: artifacts
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image from tested package
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Containerfile
+          platforms: ${{ matrix.platform }}
+          load: true
+          push: false
+          tags: hypervibes:test
+      - name: Check CLI
+        run: docker run --rm --network none --read-only hypervibes:test --help
+      - name: Smoke test without listening or network access
+        timeout-minutes: 4
+        run: |
+          volume=$(docker volume create)
+          trap 'docker volume rm "$volume"' EXIT
+          for boot in 1 2; do
+            docker run --rm --network none --read-only \
+              --tmpfs /tmp:mode=1777 \
+              --mount type=volume,src="$volume",dst=/var/lib/hypervibes \
+              --mount type=bind,src="${GITHUB_WORKSPACE}/scripts/container-smoke.mjs",dst=/test.mjs,readonly \
+              --entrypoint node hypervibes:test /test.mjs
+          done
+      # Release publication promotes these exact tested images, with no rebuild.
+      - name: Export tested image
+        if: github.event_name == 'release'
+        run: docker save hypervibes:test | gzip > image.tar.gz
+      - name: Upload tested image
+        if: github.event_name == 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-${{ matrix.arch }}
+          path: image.tar.gz
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1

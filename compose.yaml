@@ -1,0 +1,21 @@
+services:
+  hypervibes:
+    # The rewritten image becomes available with the published v0.4.0 release.
+    image: ghcr.io/idft/hypervibes:0.4.0
+    restart: unless-stopped
+    stop_grace_period: 31m
+    ports:
+      - "127.0.0.1:3003:3003"
+    environment:
+      APP_ORIGIN: ${APP_ORIGIN:-http://localhost:3003}
+    volumes:
+      - hypervibes:/var/lib/hypervibes
+    tmpfs:
+      - /tmp:mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  hypervibes:

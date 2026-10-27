@@ -1,0 +1,5 @@
+# Only the release artifact can enter the build context. No local secrets or DBs.
+**
+!Containerfile
+!artifacts/
+!artifacts/hypervibes.tgz

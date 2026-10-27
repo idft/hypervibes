@@ -28,6 +28,8 @@
     "generate:migrations": "drizzle-kit generate --config drizzle.config.ts",
     "start": "pnpm build && node bin/hypervibes.js",
     "start:built": "node bin/hypervibes.js",
+    "test": "pnpm test:server && pnpm test:startup && pnpm test:container",
+    "test:container": "node --test scripts/container.test.mjs",
     "test:startup": "node --test scripts/startup.test.mjs",
     "test:build": "node --test scripts/build.test.mjs",
     "test:package": "node --test scripts/package.test.mjs",
