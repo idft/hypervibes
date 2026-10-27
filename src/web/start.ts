@@ -1,7 +1,7 @@
 import { access } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { Connect } from "vite";
+import type { Connect, FileSystemServeOptions } from "vite";
 import type { AppConfig } from "../config.js";
 import type { AppRuntime } from "../runtime.js";
 
@@ -14,6 +14,15 @@ export interface StartApplication extends StartEntry {
   close(): Promise<void>;
 }
 
+/** Screenshot sources belong only to the temporary screenshot build, not normal development. */
+export function developmentFileAccess(databasePath: string): FileSystemServeOptions {
+  return {
+    allow: [resolve("src"), resolve("assets"), resolve("node_modules")],
+    deny: [".env", ".env.*", "*.{crt,pem}", "**/.git/**", "**/*.sqlite*", "**/*.db*", databasePath,
+      `${resolve("src/screenshot").replaceAll("\\", "/")}/**`],
+  };
+}
+
 /** Loads the web handler only; the application host owns the runtime and listener. */
 export async function loadStart(config: AppConfig, development: boolean): Promise<StartApplication> {
   if (development) {
@@ -24,10 +33,7 @@ export async function loadStart(config: AppConfig, development: boolean): Promis
       server: {
         middlewareMode: true,
         hmr: false, // No extra listener or runtime restart; refresh the browser after edits.
-        fs: {
-          allow: [resolve("src"), resolve("assets"), resolve("node_modules")],
-          deny: [".env", ".env.*", "*.{crt,pem}", "**/.git/**", "**/*.sqlite*", "**/*.db*", config.databasePath],
-        },
+        fs: developmentFileAccess(config.databasePath),
       },
     });
     try {

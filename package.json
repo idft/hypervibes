@@ -19,6 +19,8 @@
   ],
   "scripts": {
     "dev": "node --env-file-if-exists=.env --import tsx src/main.ts --dev",
+    "screenshot": "node scripts/capture-screenshot.mjs",
+    "test:screenshot": "node --test scripts/screenshot.test.mjs",
     "build": "node scripts/check-node.mjs && pnpm build:app && pnpm build:server",
     "build:app": "pnpm generate:routes && vite build --config vite.app.config.ts",
     "build:server": "node scripts/build-server.mjs",
@@ -28,7 +30,7 @@
     "generate:migrations": "drizzle-kit generate --config drizzle.config.ts",
     "start": "pnpm build && node bin/hypervibes.js",
     "start:built": "node bin/hypervibes.js",
-    "test": "pnpm test:server && pnpm test:startup && pnpm test:container",
+    "test": "pnpm test:server && pnpm test:startup && pnpm test:container && pnpm test:screenshot",
     "test:container": "node --test scripts/container.test.mjs",
     "test:startup": "node --test scripts/startup.test.mjs",
     "test:build": "node --test scripts/build.test.mjs",
@@ -66,7 +68,6 @@
     "viem": "^2.57.7"
   },
   "devDependencies": {
-    "tsx": "4.23.15",
     "@eslint/js": "^10.0.1",
     "@tailwindcss/vite": "4.3.1",
     "@tanstack/router-cli": "1.167.44",
@@ -80,7 +81,9 @@
     "eslint": "^10.13.0",
     "globals": "^17.13.0",
     "jsdom": "^29.1.1",
+    "playwright": "1.64.1",
     "tailwindcss": "^4.3.3",
+    "tsx": "4.23.15",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.71.2",
     "vite": "8.1.5",

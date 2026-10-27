@@ -89,6 +89,24 @@ pnpm pack --out artifacts/hypervibes.tgz
 docker build -f Containerfile -t hypervibes:local .
 ```
 
+## Screenshots
+
+Capture the dashboard with anonymous sample account data and the current React UI:
+
+```sh
+pnpm exec playwright install chromium  # Once
+pnpm screenshot --screen dashboard --output artifacts/dashboard-screenshot.png
+```
+
+The command builds a separate screenshot page, serves `/screenshot` temporarily
+on a loopback-only port, captures it, and closes the server. Each capture fetches
+a fresh public Coinbase BTC-USD quote for the synthetic position and exit prices;
+it stops if a fresh quote is unavailable. The account data stays fictitious, and
+the browser makes no external requests. No running app, login, database, or
+exchange credentials are needed. Normal development and production do not include
+this route. Dashboard fixtures live in `src/screenshot/`; future screens can reuse
+the capture runner.
+
 ## Checks
 
 ```sh
@@ -97,8 +115,8 @@ pnpm lint:server
 pnpm test
 ```
 
-`pnpm test` runs application, startup, and container health-check tests without
-building the app or requiring Docker. For release checks, run `pnpm build`,
+`pnpm test` runs application, startup, container health-check, and screenshot-tool
+tests without building the trading app or requiring Docker or Chromium. For release checks, run `pnpm build`,
 `pnpm test:build`, and `pnpm test:package`; package testing performs a clean install.
 
 GitHub Actions runs validation on pull requests, pushes to `master` and `v*`
