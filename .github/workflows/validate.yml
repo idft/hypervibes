@@ -79,7 +79,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - name: Checkout test script
         uses: actions/checkout@v4
@@ -95,11 +95,21 @@ jobs:
           name: npm-package
           path: artifacts
       # No repository install or pnpm here: only the tarball's runtime dependencies.
+      # Reuse npm's integrity-checked download cache between runs. The test still
+      # installs node_modules fresh, but avoids a cold multi-minute download.
+      - name: Restore npm download cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/npm-package-cache
+          key: npm-package-${{ runner.os }}-${{ hashFiles('package.json', 'pnpm-lock.yaml') }}
+          restore-keys: |
+            npm-package-${{ runner.os }}-
       - name: Standalone package tests
-        timeout-minutes: 4
+        timeout-minutes: 8
         env:
           HYPERVIBES_TEST_TARBALL: ${{ github.workspace }}/artifacts/hypervibes.tgz
-        run: node --test --test-timeout=240000 scripts/package.test.mjs
+          HYPERVIBES_TEST_NPM_CACHE: ${{ runner.temp }}/npm-package-cache
+        run: node --test --test-timeout=600000 scripts/package.test.mjs
 
   container:
     name: Container (${{ matrix.arch }})

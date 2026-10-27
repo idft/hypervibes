@@ -134,6 +134,16 @@ function resolveWindowsBatch(command, env, exists = existsSync) {
   throw new Error(`Cannot resolve Windows batch command on PATH: ${command}`);
 }
 
+// npm's cache is content-addressed and verifies integrity, so a warm cache does
+// not weaken the clean-install check: node_modules is still installed fresh here.
+// CI opts in with HYPERVIBES_TEST_NPM_CACHE; local runs stay fully disposable.
+function npmCacheDirectory(directory, env = process.env) {
+  const shared = env.HYPERVIBES_TEST_NPM_CACHE;
+  if (!shared) return join(directory, "npm-cache");
+  assert.ok(isAbsolute(shared), "HYPERVIBES_TEST_NPM_CACHE must be absolute");
+  return shared;
+}
+
 function archiveMembers(output) {
   return output.trim().split(/\r?\n/);
 }
@@ -303,6 +313,13 @@ test("Windows batch commands resolve from PATH before invocation", () => {
   assert.equal(target.args.at(-1), '""C:\\Program Files\\nodejs\\npm.cmd" "install""');
 });
 
+test("npm download cache is disposable by default and opt-in when configured", () => {
+  const directory = join("tmp", "hypervibes-package");
+  assert.equal(npmCacheDirectory(directory, {}), join(directory, "npm-cache"));
+  assert.equal(npmCacheDirectory(directory, { HYPERVIBES_TEST_NPM_CACHE: "/ci/npm-cache" }), "/ci/npm-cache");
+  assert.throws(() => npmCacheDirectory(directory, { HYPERVIBES_TEST_NPM_CACHE: "relative/cache" }), /must be absolute/);
+});
+
 test("resource paths compare equal through a directory alias", async () => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), "hypervibes-paths-")));
   try {
@@ -325,7 +342,7 @@ test("archive members have no carriage returns with LF or CRLF output", () => {
   }
 });
 
-test("real npm tarball runs with runtime dependencies outside the repository", { timeout: 240_000 }, async (context) => {
+test("real npm tarball runs with runtime dependencies outside the repository", { timeout: 600_000 }, async (context) => {
   const execute = (command, args, options) => run(command, args, { signal: context.signal, ...options });
   // macOS exposes /var through /private/var. Use one canonical temporary root
   // for isolation checks and Node's realpath-resolved module locations.
@@ -354,7 +371,7 @@ test("real npm tarball runs with runtime dependencies outside the repository", {
       XDG_CACHE_HOME: join(directory, "cache"),
       APP_SQLITE_PATH: join(directory, "data/app.sqlite"),
       APP_CACHE_DIR: join(directory, "cache"),
-      npm_config_cache: join(directory, "npm-cache"),
+      npm_config_cache: npmCacheDirectory(directory),
       npm_config_userconfig: join(directory, "npmrc"),
       npm_config_globalconfig: join(directory, "global-npmrc"),
       TMPDIR: join(directory, "tmp"),
@@ -364,12 +381,13 @@ test("real npm tarball runs with runtime dependencies outside the repository", {
     };
     await mkdir(env.HOME);
     await mkdir(env.TMPDIR);
+    await mkdir(env.npm_config_cache, { recursive: true });
     // An explicit tarball is useful for diagnostics. The normal command always
     // creates a fresh release, including the prepack build.
     let tarball = process.env.HYPERVIBES_TEST_TARBALL;
     if (tarball) assert.ok(isAbsolute(tarball), "HYPERVIBES_TEST_TARBALL must be absolute");
     if (!tarball) {
-      await execute("pnpm", ["pack", "--pack-destination", directory], { cwd: repository, label: "build release tarball", timeoutMs: 90_000, stream: true });
+      await execute("pnpm", ["pack", "--pack-destination", directory], { cwd: repository, label: "build release tarball", timeoutMs: 300_000, stream: true });
       tarball = join(directory, (await readdir(directory)).find((name) => name.endsWith(".tgz")));
     }
     const contents = archiveMembers(await execute("tar", ["-tzf", tarball], { label: "inspect tarball" }));
@@ -381,8 +399,8 @@ test("real npm tarball runs with runtime dependencies outside the repository", {
     assert.ok(contents.includes("package/.build/server/server.js"));
     await writeFile(join(installation, "package.json"), JSON.stringify({ private: true }));
     await execute("npm", ["install", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund",
-      "--loglevel=http", "--fetch-retries=1", "--fetch-timeout=30000", tarball], {
-      cwd: installation, env, label: "install runtime dependencies", timeoutMs: 180_000, stream: true,
+      "--prefer-offline", "--loglevel=http", "--fetch-retries=1", "--fetch-timeout=30000", tarball], {
+      cwd: installation, env, label: "install runtime dependencies", timeoutMs: 300_000, stream: true,
     });
     const root = join(installation, "node_modules/hypervibes");
     for (const dependency of ["tsx", "typescript"]) {
