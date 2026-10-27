@@ -82,7 +82,16 @@ dependencies only; it does not need pnpm or TypeScript to launch. Run
 pnpm typecheck:server
 pnpm lint:server
 pnpm test:server
+pnpm test:startup
+pnpm build
+pnpm test:build
+pnpm test:package
 ```
+
+GitHub Actions runs validation on pull requests, pushes to `master` and `v*`
+branches, and manual runs. It builds one npm tarball and tests that artifact on
+Linux, macOS, and Windows with runtime dependencies only. The workflow uploads
+the tarball for inspection; it does not publish a release or package.
 
 ## License
 
