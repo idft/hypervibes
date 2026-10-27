@@ -2,6 +2,7 @@
   "name": "hypervibes",
   "version": "0.4.0-alpha",
   "private": true,
+  "license": "AGPL-3.0-only",
   "type": "module",
   "engines": {
     "node": ">=22.23.3"
