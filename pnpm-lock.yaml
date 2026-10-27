@@ -87,6 +87,9 @@ importers:
       timeago.js:
         specifier: 4.0.2
         version: 4.0.2
+      tsx:
+        specifier: 4.23.15
+        version: 4.23.15
       viem:
         specifier: ^2.57.7
         version: 2.57.7(typescript@5.9.3)(zod@4.6.7)
@@ -133,9 +136,6 @@ importers:
       tailwindcss:
         specifier: ^4.3.3
         version: 4.3.3
-      tsx:
-        specifier: 4.23.15
-        version: 4.23.15
       typescript:
         specifier: ^5.9.3
         version: 5.9.3

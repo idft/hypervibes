@@ -6,12 +6,9 @@ slug: /quick-start
 
 ## Run HyperVibes
 
-NPX will be the preferred way to run HyperVibes. The package and launch command
-are not available yet. Desktop builds for macOS, Windows, and Linux are also
-coming soon.
-
-See [Installation](Installation.md) for release status and hosting options.
-The steps below apply once you can open the app.
+Run `pnpm install` and `pnpm start` in the source checkout, then open
+<http://localhost:3003>. See [Installation](Installation.md) for requirements and
+private LAN setup. NPX packages and desktop builds are coming soon.
 
 ## Set up your account
 

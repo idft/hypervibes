@@ -13,7 +13,9 @@
     "generate:routes": "tsr generate",
     "generate:auth": "auth generate --config src/db/auth-generation.ts --output src/db/auth-schema.ts --yes",
     "generate:migrations": "drizzle-kit generate --config drizzle.config.ts",
+    "start": "node scripts/check-node.mjs && pnpm build:app && pnpm start:server",
     "start:server": "node --env-file-if-exists=.env --import tsx src/main.ts",
+    "test:startup": "node --test scripts/startup.test.mjs",
     "typecheck:server": "tsr generate && tsc --project tsconfig.server.json",
     "lint:server": "eslint src vite.app.config.ts vitest.server.config.ts drizzle.config.ts",
     "test:server": "vitest run --config vitest.server.config.ts"
@@ -44,6 +46,7 @@
     "sonner": "2.0.8",
     "srvx": "1.0.5",
     "timeago.js": "4.0.2",
+    "tsx": "4.23.15",
     "viem": "^2.57.7"
   },
   "devDependencies": {
@@ -61,7 +64,6 @@
     "globals": "^17.13.0",
     "jsdom": "^29.1.1",
     "tailwindcss": "^4.3.3",
-    "tsx": "4.23.15",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.71.2",
     "vite": "8.1.5",

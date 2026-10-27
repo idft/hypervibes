@@ -79,6 +79,24 @@ describe("server config", () => {
     expect(() => testConfig({ APP_ORIGIN: origin })).toThrow("APP_ORIGIN");
   });
 
+  it("requires an explicit opt-in for non-loopback HTTP", () => {
+    const env = { APP_HOST: "0.0.0.0", APP_ORIGIN: "http://10.16.20.111:3003" };
+    expect(() => testConfig(env)).toThrow("APP_ALLOW_INSECURE_HTTP=true");
+    expect(() => testConfig({ ...env, APP_ALLOW_INSECURE_HTTP: "false" })).toThrow("requires HTTPS");
+    expect(testConfig({ ...env, APP_ALLOW_INSECURE_HTTP: "true" }).authOrigin).toBe(env.APP_ORIGIN);
+    expect(testConfig({ APP_ORIGIN: "https://app.example.com", APP_ALLOW_INSECURE_HTTP: "true" }).authOrigin).toBe("https://app.example.com");
+    for (const value of ["1", "yes", "TRUE", ""]) {
+      expect(() => testConfig({ ...env, APP_ALLOW_INSECURE_HTTP: value })).toThrow("must be true or false");
+    }
+    for (const origin of ["http://localhost:3003", "http://127.0.0.1:3003", "http://[::1]:3003"]) {
+      expect(testConfig({ APP_ORIGIN: origin }).authOrigin).toBe(origin);
+    }
+  });
+
+  it.each(["http://example.com/path", "http://user@example.com", "ftp://example.com"])("keeps origin validation with HTTP opt-in: %s", (origin) => {
+    expect(() => testConfig({ APP_ORIGIN: origin, APP_ALLOW_INSECURE_HTTP: "true" })).toThrow("APP_ORIGIN");
+  });
+
   it("accepts an HTTPS origin and rejects missing or short secrets", () => {
     expect(testConfig({ APP_ORIGIN: "https://app.example.com/" }).authOrigin).toBe("https://app.example.com");
     expect(() => loadConfig({})).toThrow("BETTER_AUTH_SECRET");

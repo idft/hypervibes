@@ -63,8 +63,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     || !["http:", "https:"].includes(origin.protocol)) {
     throw new Error("APP_ORIGIN must be an HTTP(S) origin without credentials, path, query or fragment");
   }
-  if (origin.protocol !== "https:" && !["localhost", "127.0.0.1", "[::1]"].includes(origin.hostname)) {
-    throw new Error("APP_ORIGIN requires HTTPS except on loopback");
+  const allowInsecureHttp = env.APP_ALLOW_INSECURE_HTTP?.trim() ?? "false";
+  if (!["true", "false"].includes(allowInsecureHttp)) {
+    throw new Error("APP_ALLOW_INSECURE_HTTP must be true or false");
+  }
+  if (origin.protocol !== "https:" && !["localhost", "127.0.0.1", "[::1]"].includes(origin.hostname)
+    && allowInsecureHttp !== "true") {
+    throw new Error("APP_ORIGIN requires HTTPS except on loopback; private LAN HTTP requires APP_ALLOW_INSECURE_HTTP=true");
   }
   const authSecret = setting(env, "BETTER_AUTH_SECRET", "");
   if (authSecret.length < 32) throw new Error("BETTER_AUTH_SECRET must contain at least 32 random characters");

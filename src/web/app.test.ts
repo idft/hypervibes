@@ -142,23 +142,44 @@ describe("embedded HTTP host", () => {
     expect(response.body).not.toContain("hidden-secret");
   });
 
-  it("serves real Better Auth nonce, verification, session and logout endpoints without delegating to SSR", async () => {
+  it.each(["http://localhost", "http://10.16.20.111:3003", "https://app.example.com"])("serves real Better Auth login, session and logout on %s", async (authOrigin) => {
+    await app.close();
+    config = { ...config, authOrigin };
+    app = await createApp(config, { loadWeb: async () => start });
+    const host = new URL(authOrigin).host;
+    // Injection does not open a listener. Supply the same Host as a browser.
+    const inject = (options: { url: string; method?: "GET" | "POST"; headers?: Record<string, string>; payload?: object }) =>
+      app.inject({ ...options, headers: { ...options.headers, host } });
+    expect((await app.inject({ url: "/healthz", headers: { host: "evil.example", "x-forwarded-host": host } })).statusCode).toBe(400);
     const wallet = privateKeyToAccount(`0x${"33".repeat(32)}`);
-    const nonceResponse = await app.inject({ method: "POST", url: "/api/auth/siwe/nonce", headers: { origin: config.authOrigin }, payload: {} });
+    const nonceResponse = await inject({ method: "POST", url: "/api/auth/siwe/nonce", headers: { origin: config.authOrigin, "x-forwarded-proto": "https", "x-forwarded-host": "evil.example" }, payload: {} });
     expect(nonceResponse.statusCode).toBe(200);
     expect(nonceResponse.headers["cache-control"]).toBe("no-store");
     const binding = nonceResponse.cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
     const now = new Date();
-    const message = createSiweMessage({ address: wallet.address, domain: "localhost", uri: `${config.authOrigin}/login`, chainId: 1, version: "1", nonce: nonceResponse.json<{ nonce: string }>().nonce, issuedAt: now, expirationTime: new Date(now.getTime() + 300_000) });
-    const verify = await app.inject({ method: "POST", url: "/api/auth/siwe/verify", headers: { origin: config.authOrigin, cookie: binding, "x-hv-client-ip": "203.0.113.99", "x-forwarded-for": "203.0.113.98" }, payload: { message, signature: await wallet.signMessage({ message }) } });
+    for (const cookie of nonceResponse.cookies) {
+      expect(Boolean(cookie.secure)).toBe(authOrigin.startsWith("https:"));
+      expect(cookie.httpOnly).toBe(true);
+      expect(cookie.domain).toBeUndefined();
+    }
+    const message = createSiweMessage({ address: wallet.address, domain: host, uri: `${config.authOrigin}/login`, chainId: 1, version: "1", nonce: nonceResponse.json<{ nonce: string }>().nonce, issuedAt: now, expirationTime: new Date(now.getTime() + 300_000) });
+    const verify = await inject({ method: "POST", url: "/api/auth/siwe/verify", headers: { origin: config.authOrigin, cookie: binding, "x-hv-client-ip": "203.0.113.99", "x-forwarded-for": "203.0.113.98" }, payload: { message, signature: await wallet.signMessage({ message }) } });
     expect(verify.statusCode).toBe(200);
     const cookie = verify.cookies.filter((item) => item.name.includes("session_token")).map((item) => `${item.name}=${item.value}`).join("; ");
-    const session = await app.inject({ url: "/api/auth/get-session", headers: { cookie } });
+    const sessionCookie = verify.cookies.find((item) => item.name.includes("session_token"));
+    expect(sessionCookie).toBeDefined();
+    expect(Boolean(sessionCookie?.secure)).toBe(authOrigin.startsWith("https:"));
+    expect(sessionCookie?.httpOnly).toBe(true);
+    expect(sessionCookie?.sameSite).toBe("Lax");
+    expect(sessionCookie?.domain).toBeUndefined();
+    const session = await inject({ url: "/api/auth/get-session", headers: { cookie } });
     expect(session.json<{ user: { name: string }; session: { ipAddress: string } }>().user.name).toBe(wallet.address);
     expect(session.json<{ session: { ipAddress: string } }>().session.ipAddress).toBe("127.0.0.1");
-    expect((await app.inject({ method: "POST", url: "/api/auth/sign-out", headers: { origin: "https://evil.example", cookie }, payload: {} })).statusCode).toBe(403);
-    expect((await app.inject({ method: "POST", url: "/api/auth/sign-out", headers: { origin: config.authOrigin, cookie }, payload: {} })).statusCode).toBe(200);
-    expect((await app.inject({ url: "/api/auth/get-session", headers: { cookie } })).json()).toBeNull();
+    for (const origin of ["https://evil.example", "http://10.16.20.111:3004", ""]) {
+      expect((await inject({ method: "POST", url: "/api/auth/sign-out", headers: { origin, cookie }, payload: {} })).statusCode).toBe(403);
+    }
+    expect((await inject({ method: "POST", url: "/api/auth/sign-out", headers: { origin: config.authOrigin, cookie }, payload: {} })).statusCode).toBe(200);
+    expect((await inject({ url: "/api/auth/get-session", headers: { cookie } })).json()).toBeNull();
     expect(runtimes).toHaveLength(0);
   });
 

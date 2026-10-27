@@ -34,6 +34,8 @@ export function createAuthOptions(config: Pick<AppConfig, "authOrigin" | "authSe
     session: { modelName: "hvSessions", expiresIn: 60 * 60 * 24 * 7, cookieCache: { enabled: false } },
     advanced: {
       cookiePrefix: "hv_auth",
+      // Follow the configured public origin, not NODE_ENV or proxy headers.
+      useSecureCookies: origin.protocol === "https:",
       database: { generateId: "uuid" },
       trustedProxyHeaders: false,
       // The host overwrites this header with the socket IP; never trust client XFF.

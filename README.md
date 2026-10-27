@@ -8,7 +8,7 @@ Choose your models, give agents instructions, and review their work in one place
 Agents can place real orders. AI can make mistakes, and trading can lose money.
 Start with trading disabled while you check your setup.
 
-## Development
+## Run from source
 
 HyperVibes requires Node.js 22.23.3 or newer and pnpm.
 
@@ -18,13 +18,18 @@ HyperVibes requires Node.js 22.23.3 or newer and pnpm.
    pnpm install
    ```
 
-2. Start the development server. No `.env` file is required.
+2. Build and start the app. No `.env` file is required.
 
    ```sh
-   pnpm dev:server
+   pnpm start
    ```
 
-Open <http://localhost:3003>. The SQLite development database is created
+Each start builds fresh production assets before serving. Install development
+dependencies too: the source build needs them. Use `pnpm dev:server` instead
+for development with hot reload. `pnpm start:server` remains available to serve
+an existing build without rebuilding.
+
+Open <http://localhost:3003>. The SQLite database is created
 automatically on first start. Authentication and credential-encryption secrets are
 generated once and saved privately outside the project:
 
@@ -40,6 +45,21 @@ Environment variables override saved settings. Later secret overrides are not
 saved, so back them up too. An optional `.env` file is loaded by the development
 and server commands; see `.env.example`. Keep existing secrets when upgrading.
 Disposable caches use your OS user-cache directory; `APP_CACHE_DIR` overrides it.
+
+For access from another device, prefer HTTPS through a reverse proxy and set
+`APP_ORIGIN` to the exact browser URL. Private LAN HTTP requires an explicit
+opt-in in `.env`, for example:
+
+```dotenv
+APP_HOST=0.0.0.0
+APP_ORIGIN=http://10.16.20.111:3003
+APP_ALLOW_INSECURE_HTTP=true
+```
+
+Open that exact URL, not `localhost` or another hostname. HTTP sends sessions
+and app data without transport encryption. Use it only on a trusted private
+network, never directly on the public internet. Some browser wallets require
+HTTPS and may not work over LAN HTTP.
 
 See `docs/` for the user guide and `AGENTS.md` for architecture and project
 conventions.
