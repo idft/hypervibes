@@ -80,7 +80,7 @@ export default function Home() {
               <span><i /><i /><i /></span>
               <small>terminal</small>
             </div>
-            <pre><code><span className="terminal-comment"># Clone the repository and install dependencies</span>{'\n'}<span className="terminal-prompt">$</span> git clone https://github.com/idft/hypervibes.git{'\n'}<span className="terminal-prompt">$</span> cd hypervibes &amp;&amp; pnpm install{'\n\n'}<span className="terminal-comment"># Set BETTER_AUTH_SECRET in .env, then start HyperVibes</span>{'\n'}<span className="terminal-prompt">$</span> pnpm dev:server</code></pre>
+            <pre><code><span className="terminal-comment"># Clone the repository and install dependencies</span>{'\n'}<span className="terminal-prompt">$</span> git clone https://github.com/idft/hypervibes.git{'\n'}<span className="terminal-prompt">$</span> cd hypervibes &amp;&amp; pnpm install{'\n\n'}<span className="terminal-comment"># Build and start HyperVibes; no .env required</span>{'\n'}<span className="terminal-prompt">$</span> pnpm start</code></pre>
           </div>
         </section>
 

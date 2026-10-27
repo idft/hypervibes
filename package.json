@@ -1,21 +1,36 @@
 {
   "name": "hypervibes",
   "version": "0.4.0-alpha",
-  "private": true,
   "license": "AGPL-3.0-only",
   "type": "module",
   "engines": {
     "node": ">=22.23.3"
   },
+  "bin": {
+    "hypervibes": "./bin/hypervibes.js"
+  },
+  "files": [
+    "bin/",
+    "dist/",
+    ".build/server/",
+    ".build/client/",
+    "static/",
+    "scripts/check-node.mjs"
+  ],
   "scripts": {
-    "dev:server": "node --env-file-if-exists=.env --import tsx src/main.ts --dev",
+    "dev": "node --env-file-if-exists=.env --import tsx src/main.ts --dev",
+    "build": "node scripts/check-node.mjs && pnpm build:app && pnpm build:server",
     "build:app": "pnpm generate:routes && vite build --config vite.app.config.ts",
+    "build:server": "node scripts/build-server.mjs",
+    "prepack": "pnpm build",
     "generate:routes": "tsr generate",
     "generate:auth": "auth generate --config src/db/auth-generation.ts --output src/db/auth-schema.ts --yes",
     "generate:migrations": "drizzle-kit generate --config drizzle.config.ts",
-    "start": "node scripts/check-node.mjs && pnpm build:app && pnpm start:server",
-    "start:server": "node --env-file-if-exists=.env --import tsx src/main.ts",
+    "start": "pnpm build && node bin/hypervibes.js",
+    "start:built": "node bin/hypervibes.js",
     "test:startup": "node --test scripts/startup.test.mjs",
+    "test:build": "node --test scripts/build.test.mjs",
+    "test:package": "node --test scripts/package.test.mjs",
     "typecheck:server": "tsr generate && tsc --project tsconfig.server.json",
     "lint:server": "eslint src vite.app.config.ts vitest.server.config.ts drizzle.config.ts",
     "test:server": "vitest run --config vitest.server.config.ts"
@@ -46,10 +61,10 @@
     "sonner": "2.0.8",
     "srvx": "1.0.5",
     "timeago.js": "4.0.2",
-    "tsx": "4.23.15",
     "viem": "^2.57.7"
   },
   "devDependencies": {
+    "tsx": "4.23.15",
     "@eslint/js": "^10.0.1",
     "@tailwindcss/vite": "4.3.1",
     "@tanstack/router-cli": "1.167.44",

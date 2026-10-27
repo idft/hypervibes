@@ -53,7 +53,7 @@ export async function loadStart(config: AppConfig, development: boolean): Promis
   try {
     await access(entryPath);
   } catch (cause) {
-    throw new Error("Start build not found. Run pnpm build:app first, or use pnpm dev:server.", { cause });
+    throw new Error("Start build not found. Run pnpm build:app first, or use pnpm dev.", { cause });
   }
   const entry: { default: StartEntry } = await import(pathToFileURL(entryPath).href);
   return {

@@ -85,8 +85,18 @@ The dev database is a single SQLite file (no containers):
 
 ## Running and building
 
-* Backend dev server: `pnpm dev:server` (port 3003, loads `.env`).
+* Backend dev server: `pnpm dev` (port 3003, loads `.env`).
   **Never start the dev webserver yourself; the user will run it.**
+* Source startup: `pnpm start` builds and runs the compiled application.
+  `pnpm start:built` runs an existing build. `pnpm build` creates frontend assets
+  in `.build/` and structure-preserving backend JavaScript in `dist/`.
+  `pnpm build:server` copies SQL migrations and bundled Pine sources beside the
+  compiled modules. Keep these runtime resources when changing the build.
+* The npm executable is `bin/hypervibes.js`; it uses compiled code, not `tsx`.
+  `pnpm pack` builds first. Package files use an explicit allowlist.
+  Run `pnpm test:startup` when changing packaging or startup scripts.
+  After `pnpm build`, run `pnpm test:build` to check the compiled application
+  with disposable data and injected HTTP requests, without a listening port.
 * Frontend build: `pnpm build:app` (Vite/TanStack Start). Don't test web UI
   changes with browser-mcp; the user will test.
 * Buttons should change the cursor on mouseover.

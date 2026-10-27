@@ -25,9 +25,9 @@ HyperVibes requires Node.js 22.23.3 or newer and pnpm.
    ```
 
 Each start builds fresh production assets before serving. Install development
-dependencies too: the source build needs them. Use `pnpm dev:server` instead
-for development with hot reload. `pnpm start:server` remains available to serve
-an existing build without rebuilding.
+dependencies too: the source build needs them. Use `pnpm dev` instead
+for development with hot reload. `pnpm start:built` serves an existing compiled
+build without rebuilding.
 
 Open <http://localhost:3003>. The SQLite database is created
 automatically on first start. Authentication and credential-encryption secrets are
@@ -63,6 +63,18 @@ HTTPS and may not work over LAN HTTP.
 
 See `docs/` for the user guide and `AGENTS.md` for architecture and project
 conventions.
+
+## Build a release package
+
+```sh
+pnpm build          # Compiled backend, frontend, and runtime resources
+pnpm start:built    # Run that build without rebuilding
+pnpm pack           # Rebuild and create a local npm tarball
+```
+
+The package exposes the `hypervibes` executable and runs with Node.js and runtime
+dependencies only; it does not need pnpm or TypeScript to launch. Run
+`node bin/hypervibes.js --help` for usage. Public npm releases are coming soon.
 
 ## Checks
 
