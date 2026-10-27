@@ -18,23 +18,28 @@ HyperVibes requires Node.js 22.23.3 or newer and pnpm.
    pnpm install
    ```
 
-2. Create local configuration and set a random auth secret.
-
-   ```sh
-   cp .env.example .env
-   openssl rand -hex 32
-   ```
-
-   Paste the generated value into `BETTER_AUTH_SECRET` in `.env`.
-
-3. Start the development server.
+2. Start the development server. No `.env` file is required.
 
    ```sh
    pnpm dev:server
    ```
 
 Open <http://localhost:3003>. The SQLite development database is created
-automatically on first start.
+automatically on first start. Authentication and credential-encryption secrets are
+generated once and saved privately outside the project:
+
+- Linux: `$XDG_CONFIG_HOME/hypervibes/config.json`, or `~/.config/hypervibes/config.json`.
+- macOS: `~/Library/Application Support/HyperVibes/config.json`.
+- Windows: `%APPDATA%\HyperVibes\config.json`, or the home `AppData\Roaming` equivalent.
+
+Back up this file with your database. Losing the encryption key prevents recovery
+of stored credentials. Existing installations without this file must supply their
+original `AGENTS_ENCRYPTION_KEY`; startup never silently replaces a missing key.
+
+Environment variables override saved settings. Later secret overrides are not
+saved, so back them up too. An optional `.env` file is loaded by the development
+and server commands; see `.env.example`. Keep existing secrets when upgrading.
+Disposable caches use your OS user-cache directory; `APP_CACHE_DIR` overrides it.
 
 See `docs/` for the user guide and `AGENTS.md` for architecture and project
 conventions.

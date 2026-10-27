@@ -1,12 +1,11 @@
 import fastifyStatic from "@fastify/static";
 import Fastify from "fastify";
 import { isAbsolute, join, relative, sep } from "node:path";
-import { tmpdir } from "node:os";
 import { CurrencyLogoCache } from "../hyperliquid/logo-cache.js";
 import { isPerpetualLogoSymbol } from "../hyperliquid/currency-logo.js";
 import { ProviderLogoCache, isProviderSlug } from "../providers/provider-logo.js";
 import { NodeRequest, sendNodeResponse } from "srvx/node";
-import type { AppConfig } from "../config.js";
+import { defaultCacheDirectory, type AppConfig } from "../config.js";
 import { createRuntime } from "../runtime.js";
 import { AgentEventStreams } from "./agent-events.js";
 import { artifactDownloads } from "./artifact-downloads.js";
@@ -47,8 +46,9 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
       transport: { target: "pino-pretty", options: { colorize: process.stdout.isTTY === true, singleLine: true, translateTime: "HH:MM:ss.l", ignore: "pid,hostname" } },
     } : false,
   });
-  const logos = new CurrencyLogoCache(config.cacheDir ?? join(tmpdir(), "hypervibes"), options.logoFetcher);
-  const providerLogos = new ProviderLogoCache(config.cacheDir ?? join(tmpdir(), "hypervibes"), options.logoFetcher);
+  const cacheDir = config.cacheDir ?? defaultCacheDirectory(process.env);
+  const logos = new CurrencyLogoCache(cacheDir, options.logoFetcher);
+  const providerLogos = new ProviderLogoCache(cacheDir, options.logoFetcher);
   const origin = new URL(config.authOrigin);
   app.addHook("onRequest", async (request, reply) => {
     let host: string | undefined;

@@ -1,5 +1,5 @@
 import { isAbsolute, join, resolve, win32 } from "node:path";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 export interface EncryptionKeySetting {
@@ -31,6 +31,17 @@ export function defaultDatabasePath(env: NodeJS.ProcessEnv, platform = process.p
   if (platform === "darwin") return join(home, "Library", "Application Support", "HyperVibes", "hypervibes.sqlite");
   const dataHome = env.XDG_DATA_HOME?.trim();
   return join(dataHome && isAbsolute(dataHome) ? dataHome : join(home, ".local", "share"), "hypervibes", "hypervibes.sqlite");
+}
+
+/** OS-appropriate per-user storage for disposable cached assets. */
+export function defaultCacheDirectory(env: NodeJS.ProcessEnv, platform = process.platform, home = homedir()): string {
+  if (platform === "win32") {
+    const localAppData = env.LOCALAPPDATA?.trim();
+    return win32.join(localAppData && win32.isAbsolute(localAppData) ? localAppData : win32.join(home, "AppData", "Local"), "HyperVibes", "Cache");
+  }
+  if (platform === "darwin") return join(home, "Library", "Caches", "HyperVibes");
+  const cacheHome = env.XDG_CACHE_HOME?.trim();
+  return join(cacheHome && isAbsolute(cacheHome) ? cacheHome : join(home, ".cache"), "hypervibes");
 }
 
 function setting(env: NodeJS.ProcessEnv, name: string, fallback: string): string {
@@ -71,7 +82,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       "APP_STATIC_DIR",
       fileURLToPath(new URL("../static/", import.meta.url)),
     )),
-    cacheDir: resolve(setting(env, "APP_CACHE_DIR", join(tmpdir(), "hypervibes"))),
+    cacheDir: resolve(setting(env, "APP_CACHE_DIR", defaultCacheDirectory(env))),
     encryptionKey,
   };
 }

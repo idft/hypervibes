@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createApp: vi.fn(),
+  initializeConfig: vi.fn(),
   app: {
     listen: vi.fn(),
     close: vi.fn(),
@@ -12,13 +13,11 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./web/app.js", () => ({ createApp: mocks.createApp }));
-vi.mock("./config.js", () => ({
-  loadConfig: () => ({ host: "127.0.0.1", port: 3003 }),
-}));
+vi.mock("./initialize-config.js", () => ({ initializeConfig: mocks.initializeConfig }));
 
 import { main } from "./main.js";
 
-// All server methods are mocked: these tests never open a socket or database.
+// Startup configuration and all server methods are mocked: no real user files, sockets, or databases.
 describe("server entry point", () => {
   const signals = ["SIGINT", "SIGTERM"] as const;
   let originalListeners: Map<string, NodeJS.SignalsListener[]>;
@@ -42,6 +41,7 @@ describe("server entry point", () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    mocks.initializeConfig.mockReturnValue({ host: "127.0.0.1", port: 3003 });
     mocks.app.listen.mockResolvedValue(undefined);
     mocks.app.close.mockResolvedValue(undefined);
     mocks.app.shutdown.mockImplementation(() => mocks.app.close());
@@ -66,6 +66,7 @@ describe("server entry point", () => {
 
   it("listens using config, then closes only once on repeated shutdown signals", async () => {
     await main(["--dev"]);
+    expect(mocks.initializeConfig).toHaveBeenCalledExactlyOnceWith();
     expect(mocks.createApp).toHaveBeenCalledWith({ host: "127.0.0.1", port: 3003 }, { logger: true, development: true, forceShutdown: expect.any(AbortSignal) });
     expect(mocks.app.listen).toHaveBeenCalledWith({ host: "127.0.0.1", port: 3003 });
     const stop = process.listeners("SIGTERM").find((listener) =>
@@ -172,6 +173,14 @@ describe("server entry point", () => {
     for (const signal of signals) {
       expect(process.listeners(signal)).toEqual(originalListeners.get(signal));
     }
+  });
+
+  it("rejects configuration failure before constructing the application", async () => {
+    const failure = new Error("restore the original encryption key");
+    mocks.initializeConfig.mockImplementation(() => { throw failure; });
+    await expect(main()).rejects.toBe(failure);
+    expect(mocks.createApp).not.toHaveBeenCalled();
+    for (const signal of signals) expect(process.listeners(signal)).toEqual(originalListeners.get(signal));
   });
 
   it("logs shutdown errors and sets a failing exit code", async () => {

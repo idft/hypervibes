@@ -1,7 +1,7 @@
 import { join, resolve } from "node:path";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { describe, expect, it } from "vitest";
-import { defaultDatabasePath, loadConfig } from "./config.js";
+import { defaultCacheDirectory, defaultDatabasePath, loadConfig } from "./config.js";
 import { testAuthSecret, testConfig } from "./test-config.js";
 
 describe("server config", () => {
@@ -17,7 +17,7 @@ describe("server config", () => {
     expect(config.databasePath).toBe(resolve(expectedDefault));
     expect(config.staticDir).toBe(resolve("static"));
     expect(config.buildDir).toBe(resolve(".build"));
-    expect(config.cacheDir).toBe(join(tmpdir(), "hypervibes"));
+    expect(config.cacheDir).toBe(resolve(defaultCacheDirectory({})));
     expect(config.authOrigin).toBe("http://localhost:3003");
   });
 
@@ -29,6 +29,26 @@ describe("server config", () => {
     expect(defaultDatabasePath({}, "win32", "C:\\Users\\test")).toBe("C:\\Users\\test\\AppData\\Roaming\\HyperVibes\\hypervibes.sqlite");
     expect(defaultDatabasePath({ APPDATA: "D:\\Profile" }, "win32", "C:\\Users\\test")).toBe("D:\\Profile\\HyperVibes\\hypervibes.sqlite");
     if (process.platform === "linux") expect(testConfig({ XDG_DATA_HOME: "/custom/data" }).databasePath).toBe("/custom/data/hypervibes/hypervibes.sqlite");
+  });
+
+  it("uses each platform's per-user cache directory", () => {
+    expect(defaultCacheDirectory({}, "linux", "/home/test")).toBe("/home/test/.cache/hypervibes");
+    expect(defaultCacheDirectory({ XDG_CACHE_HOME: " /custom/cache " }, "linux", "/home/test")).toBe("/custom/cache/hypervibes");
+    for (const cacheHome of ["relative", "", " "]) {
+      expect(defaultCacheDirectory({ XDG_CACHE_HOME: cacheHome }, "linux", "/home/test")).toBe("/home/test/.cache/hypervibes");
+    }
+    expect(defaultCacheDirectory({ XDG_CACHE_HOME: "/ignored" }, "darwin", "/Users/test")).toBe("/Users/test/Library/Caches/HyperVibes");
+    expect(defaultCacheDirectory({}, "win32", "C:\\Users\\test")).toBe("C:\\Users\\test\\AppData\\Local\\HyperVibes\\Cache");
+    expect(defaultCacheDirectory({ LOCALAPPDATA: " D:\\Profile " }, "win32", "C:\\Users\\test")).toBe("D:\\Profile\\HyperVibes\\Cache");
+    for (const localAppData of ["relative", "C:relative", "", " "]) {
+      expect(defaultCacheDirectory({ LOCALAPPDATA: localAppData }, "win32", "C:\\Users\\test")).toBe("C:\\Users\\test\\AppData\\Local\\HyperVibes\\Cache");
+    }
+    if (process.platform === "linux") expect(testConfig({ XDG_CACHE_HOME: "/custom/cache" }).cacheDir).toBe("/custom/cache/hypervibes");
+  });
+
+  it("preserves explicit cache directory overrides", () => {
+    expect(testConfig({ APP_CACHE_DIR: " private/cache ", XDG_CACHE_HOME: "/ignored" }).cacheDir).toBe(resolve("private/cache"));
+    expect(testConfig({ APP_CACHE_DIR: resolve("custom-cache") }).cacheDir).toBe(resolve("custom-cache"));
   });
 
   it("accepts explicit paths and bind settings", () => {

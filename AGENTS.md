@@ -56,6 +56,14 @@ The dev database is a single SQLite file (no containers):
     otherwise `<home>\AppData\Roaming\HyperVibes\hypervibes.sqlite`.
   The dev server loads `.env`; relative path overrides resolve from the repo
   root. The schema is created/migrated on server startup.
+* The executable calls `initializeConfig` before constructing the runtime. It saves
+  first-run secrets in the per-user `config.json` (see `src/initialize-config.ts`).
+  `loadConfig` remains pure; imports must not initialize configuration. Tests must
+  use disposable configuration paths, never the real user configuration.
+* No `.env` file is required. Preserve existing encryption keys when upgrading.
+  A missing saved key with an existing database requires the original environment
+  key; startup must not silently generate a replacement. OS user-cache defaults
+  are defined by `defaultCacheDirectory` in `src/config.ts`.
 * **Read-only inspection with the sqlite3 CLI is fine while the server runs**
   (the database is in WAL mode, so concurrent readers are safe):
   ```sh

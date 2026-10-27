@@ -1,10 +1,10 @@
 import { cleanupSessionResources } from "@earendil-works/pi-ai";
 import { pathToFileURL } from "node:url";
-import { loadConfig } from "./config.js";
+import { initializeConfig } from "./initialize-config.js";
 import { createApp } from "./web/app.js";
 
 export async function main(args: string[] = process.argv.slice(2)): Promise<void> {
-  const config = loadConfig();
+  const config = initializeConfig();
   const force = new AbortController();
   const app = await createApp(config, { logger: true, development: args.includes("--dev"), forceShutdown: force.signal }).catch((error: unknown) => {
     cleanupSessionResources();
