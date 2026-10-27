@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { access, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, relative, win32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -342,16 +342,111 @@ test("archive members have no carriage returns with LF or CRLF output", () => {
   }
 });
 
-test("real npm tarball runs with runtime dependencies outside the repository", { timeout: 600_000 }, async (context) => {
+function packageMode(env = process.env) {
+  const phase = env.HYPERVIBES_TEST_PHASE ?? "all";
+  assert.ok(["all", "install", "test", "cleanup"].includes(phase), "Invalid HYPERVIBES_TEST_PHASE");
+  const directory = env.HYPERVIBES_TEST_INSTALLATION;
+  if (phase !== "all") assert.ok(directory && isAbsolute(directory), "Staged package tests require an absolute HYPERVIBES_TEST_INSTALLATION");
+  else assert.equal(directory, undefined, "HYPERVIBES_TEST_INSTALLATION requires an explicit phase");
+  return { phase, directory };
+}
+
+const profileMarker = ".hypervibes-package-test.json";
+async function verifyProfile(directory) {
+  assert.ok(isAbsolute(directory), "The test directory must be absolute");
+  assert.equal((await lstat(directory)).isSymbolicLink(), false, "Refusing a symlink or junction as the test directory");
+  const canonical = await realpath(directory);
+  const inside = (parent) => {
+    const path = relative(parent, canonical);
+    return path && !isAbsolute(path) && path.split(/[\\/]/)[0] !== "..";
+  };
+  const parents = [await realpath(tmpdir())];
+  if (process.env.RUNNER_TEMP) parents.push(await realpath(process.env.RUNNER_TEMP));
+  assert.ok(!parents.includes(canonical) && parents.some(inside), "The profile must be a child of a temporary directory, not the temporary directory itself");
+  const repositoryPath = await realpath(repository);
+  assert.ok(canonical !== repositoryPath && !inside(repositoryPath), "The profile must be outside the repository");
+  const marker = JSON.parse(await readFile(join(canonical, profileMarker), "utf8"));
+  assert.deepEqual(marker, { purpose: "hypervibes-package-test", directory: canonical }, "Refusing to use or remove an unowned test directory");
+}
+
+async function cleanupProfile(directory) {
+  await verifyProfile(directory);
+  console.error("[package] remove disposable installation and profile");
+  await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  console.error("[package] cleanup complete");
+}
+
+test("package phases require explicit isolated paths", () => {
+  assert.deepEqual(packageMode({}), { phase: "all", directory: undefined });
+  assert.throws(() => packageMode({ HYPERVIBES_TEST_PHASE: "invalid" }), /Invalid/);
+  assert.throws(() => packageMode({ HYPERVIBES_TEST_PHASE: "test" }), /absolute/);
+  assert.throws(() => packageMode({ HYPERVIBES_TEST_PHASE: "cleanup", HYPERVIBES_TEST_INSTALLATION: "relative" }), /absolute/);
+  assert.throws(() => packageMode({ HYPERVIBES_TEST_INSTALLATION: tmpdir() }), /explicit phase/);
+});
+
+test("profile cleanup refuses an unowned directory", async () => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "hypervibes-ownership-")));
+  try {
+    await writeFile(join(directory, "keep.txt"), "untouched");
+    await assert.rejects(cleanupProfile(directory), { code: "ENOENT" });
+    await writeFile(join(directory, profileMarker), JSON.stringify({ purpose: "hypervibes-package-test", directory: "somewhere else" }));
+    await assert.rejects(cleanupProfile(directory), /unowned/);
+    assert.equal(await readFile(join(directory, "keep.txt"), "utf8"), "untouched");
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("profile cleanup rejects aliases and temporary roots but removes owned partial installs", async () => {
+  const parent = await realpath(await mkdtemp(join(tmpdir(), "hypervibes-cleanup-")));
+  try {
+    const directory = join(parent, "profile");
+    const alias = join(parent, "alias");
+    await mkdir(directory);
+    await writeFile(join(directory, profileMarker), JSON.stringify({ purpose: "hypervibes-package-test", directory }));
+    await writeFile(join(directory, "partial-install"), "incomplete");
+    await symlink(directory, alias, process.platform === "win32" ? "junction" : "dir");
+    await assert.rejects(cleanupProfile(alias), /symlink or junction/);
+    await assert.rejects(cleanupProfile(await realpath(tmpdir())), /temporary directory itself/);
+    await cleanupProfile(directory);
+    await assert.rejects(access(directory), { code: "ENOENT" });
+  } finally { await rm(parent, { recursive: true, force: true }); }
+});
+
+test("test-only mode requires a completed installation and never reinstalls", async () => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "hypervibes-incomplete-")));
+  try {
+    await writeFile(join(directory, profileMarker), JSON.stringify({ purpose: "hypervibes-package-test", directory }));
+    await assert.rejects(run(process.execPath, ["--test", "--test-name-pattern=real npm tarball", fileURLToPath(import.meta.url)], {
+      label: "incomplete installation guard",
+      env: { ...process.env, NODE_TEST_CONTEXT: undefined, HYPERVIBES_TEST_PHASE: "test", HYPERVIBES_TEST_INSTALLATION: directory },
+    }), /\.installation-complete/);
+    await assert.rejects(access(join(directory, "installation")), { code: "ENOENT" });
+  } finally { await cleanupProfile(directory); }
+});
+
+const mode = packageMode();
+// CI gives installation its own budget and caps application tests at 240s.
+// Local combined runs also include a source build, so allow the sum of budgets.
+const phaseTimeout = mode.phase === "all" ? 1_200_000 : mode.phase === "install" ? 660_000 : mode.phase === "cleanup" ? 30_000 : 240_000;
+test("real npm tarball runs with runtime dependencies outside the repository", { timeout: phaseTimeout }, async (context) => {
   const execute = (command, args, options) => run(command, args, { signal: context.signal, ...options });
-  // macOS exposes /var through /private/var. Use one canonical temporary root
-  // for isolation checks and Node's realpath-resolved module locations.
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "hypervibes-package-")));
+  if (mode.phase === "cleanup") {
+    try { await access(mode.directory); }
+    catch (error) { if (error.code === "ENOENT") return; throw error; }
+    await cleanupProfile(mode.directory);
+    return;
+  }
+  if (mode.phase === "install") await mkdir(mode.directory); // Refuse to reuse an existing directory.
+  // Canonical paths account for macOS /var aliases and Windows junctions.
+  const directory = await realpath(mode.directory ?? await mkdtemp(join(tmpdir(), "hypervibes-package-")));
+  if (mode.phase !== "test") await writeFile(join(directory, profileMarker), JSON.stringify({ purpose: "hypervibes-package-test", directory }), { flag: "wx", mode: 0o600 });
+  await verifyProfile(mode.directory ?? directory);
   try {
     const working = join(directory, "unrelated");
     const installation = join(directory, "installation");
-    await mkdir(working);
-    await mkdir(installation);
+    if (mode.phase !== "test") {
+      await mkdir(working);
+      await mkdir(installation);
+    }
     // Keep only operating-system essentials, without inheriting app secrets,
     // NODE_OPTIONS, or the real user's npm configuration and profile paths.
     const inherited = {};
@@ -379,29 +474,37 @@ test("real npm tarball runs with runtime dependencies outside the repository", {
       TEMP: join(directory, "tmp"),
       NODE_ENV: "production",
     };
-    await mkdir(env.HOME);
-    await mkdir(env.TMPDIR);
-    await mkdir(env.npm_config_cache, { recursive: true });
-    // An explicit tarball is useful for diagnostics. The normal command always
-    // creates a fresh release, including the prepack build.
-    let tarball = process.env.HYPERVIBES_TEST_TARBALL;
-    if (tarball) assert.ok(isAbsolute(tarball), "HYPERVIBES_TEST_TARBALL must be absolute");
-    if (!tarball) {
-      await execute("pnpm", ["pack", "--pack-destination", directory], { cwd: repository, label: "build release tarball", timeoutMs: 300_000, stream: true });
-      tarball = join(directory, (await readdir(directory)).find((name) => name.endsWith(".tgz")));
+    if (mode.phase !== "test") {
+      await mkdir(env.HOME);
+      await mkdir(env.TMPDIR);
+      await mkdir(env.npm_config_cache, { recursive: true });
+      // An explicit tarball is useful for diagnostics. Local runs build one.
+      let tarball = process.env.HYPERVIBES_TEST_TARBALL;
+      if (tarball) assert.ok(isAbsolute(tarball), "HYPERVIBES_TEST_TARBALL must be absolute");
+      if (!tarball) {
+        assert.equal(mode.phase, "all", "The install phase requires HYPERVIBES_TEST_TARBALL");
+        await execute("pnpm", ["pack", "--pack-destination", directory], { cwd: repository, label: "build release tarball", timeoutMs: 300_000, stream: true });
+        tarball = join(directory, (await readdir(directory)).find((name) => name.endsWith(".tgz")));
+      }
+      const contents = archiveMembers(await execute("tar", ["-tzf", tarball], { label: "inspect tarball" }));
+      for (const path of contents) {
+        assert.match(path, /^package\/(?:bin\/|dist\/|\.build\/(?:client|server)\/|static\/|scripts\/check-node\.mjs$|package\.json$|README\.md$|LICENSE$)/, path);
+        assert.doesNotMatch(path, /(?:\.env(?:\.|$)|\.sqlite|\.db$|\.test\.|\.map$|\.ts$|memory-review|pi\.md|config\.json$)/, path);
+      }
+      assert.ok(contents.some((path) => /dist\/db\/migrations\/.+\/migration\.sql$/.test(path)));
+      assert.ok(contents.includes("package/.build/server/server.js"));
+      await writeFile(join(installation, "package.json"), JSON.stringify({ private: true }));
+      await execute("npm", ["install", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund",
+        "--prefer-offline", "--loglevel=http", "--fetch-retries=1", "--fetch-timeout=30000", tarball], {
+        cwd: installation, env, label: "install runtime dependencies", timeoutMs: 600_000, stream: true,
+      });
+      await writeFile(join(directory, ".installation-complete"), "ready", { flag: "wx" });
     }
-    const contents = archiveMembers(await execute("tar", ["-tzf", tarball], { label: "inspect tarball" }));
-    for (const path of contents) {
-      assert.match(path, /^package\/(?:bin\/|dist\/|\.build\/(?:client|server)\/|static\/|scripts\/check-node\.mjs$|package\.json$|README\.md$|LICENSE$)/, path);
-      assert.doesNotMatch(path, /(?:\.env(?:\.|$)|\.sqlite|\.db$|\.test\.|\.map$|\.ts$|memory-review|pi\.md|config\.json$)/, path);
+    if (mode.phase === "install") {
+      console.error("[package] installation ready for the separate application-test step");
+      return;
     }
-    assert.ok(contents.some((path) => /dist\/db\/migrations\/.+\/migration\.sql$/.test(path)));
-    assert.ok(contents.includes("package/.build/server/server.js"));
-    await writeFile(join(installation, "package.json"), JSON.stringify({ private: true }));
-    await execute("npm", ["install", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund",
-      "--prefer-offline", "--loglevel=http", "--fetch-retries=1", "--fetch-timeout=30000", tarball], {
-      cwd: installation, env, label: "install runtime dependencies", timeoutMs: 300_000, stream: true,
-    });
+    await access(join(directory, ".installation-complete"));
     const root = join(installation, "node_modules/hypervibes");
     for (const dependency of ["tsx", "typescript"]) {
       await assert.rejects(access(join(installation, "node_modules", dependency)));
@@ -431,8 +534,7 @@ test("real npm tarball runs with runtime dependencies outside the repository", {
       })).trim());
     }
   } finally {
-    console.error("[package] remove disposable installation and profile");
-    await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-    console.error("[package] cleanup complete");
+    // Staged CI runs clean up in an always-run step, including failed installs.
+    if (mode.phase === "all") await cleanupProfile(directory);
   }
 });

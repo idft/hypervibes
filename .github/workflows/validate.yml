@@ -79,7 +79,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 12
+    timeout-minutes: 18
+    env:
+      HYPERVIBES_TEST_TARBALL: ${{ github.workspace }}/artifacts/hypervibes.tgz
     steps:
       - name: Checkout test script
         uses: actions/checkout@v4
@@ -94,22 +96,50 @@ jobs:
         with:
           name: npm-package
           path: artifacts
+      - name: Select isolated installation and cache paths
+        run: |
+          node -e "const fs = require('node:fs'); const path = require('node:path'); const root = fs.realpathSync(process.env.RUNNER_TEMP); fs.appendFileSync(process.env.GITHUB_ENV, 'HYPERVIBES_TEST_INSTALLATION=' + path.join(root, 'hypervibes-package-' + require('node:crypto').randomUUID()) + '\nHYPERVIBES_TEST_NPM_CACHE=' + path.join(root, 'npm-package-cache') + '\n');"
       # No repository install or pnpm here: only the tarball's runtime dependencies.
       # Reuse npm's integrity-checked download cache between runs. The test still
       # installs node_modules fresh, but avoids a cold multi-minute download.
       - name: Restore npm download cache
-        uses: actions/cache@v4
+        id: npm-cache
+        uses: actions/cache/restore@v4
         with:
-          path: ${{ runner.temp }}/npm-package-cache
-          key: npm-package-${{ runner.os }}-${{ hashFiles('package.json', 'pnpm-lock.yaml') }}
+          path: ${{ runner.temp }}/npm-package-cache/_cacache
+          # Cache entries are immutable. A unique run key lets partial downloads
+          # grow on retries instead of freezing the first incomplete cache.
+          key: npm-downloads-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package.json', 'pnpm-lock.yaml') }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            npm-package-${{ runner.os }}-
-      - name: Standalone package tests
-        timeout-minutes: 8
+            npm-downloads-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package.json', 'pnpm-lock.yaml') }}-
+            npm-downloads-v2-${{ runner.os }}-${{ runner.arch }}-
+      - name: Install standalone package
+        # npm has a 10-minute limit; the extra minute allows setup and teardown.
+        timeout-minutes: 11
         env:
-          HYPERVIBES_TEST_TARBALL: ${{ github.workspace }}/artifacts/hypervibes.tgz
-          HYPERVIBES_TEST_NPM_CACHE: ${{ runner.temp }}/npm-package-cache
-        run: node --test --test-timeout=600000 scripts/package.test.mjs
+          HYPERVIBES_TEST_PHASE: install
+        run: node --test --test-name-pattern="real npm tarball" --test-timeout=660000 scripts/package.test.mjs
+      - name: Test installed application
+        timeout-minutes: 4
+        env:
+          HYPERVIBES_TEST_PHASE: test
+        run: node --test --test-timeout=240000 scripts/package.test.mjs
+      - name: Remove disposable installation and profile
+        if: ${{ always() && env.HYPERVIBES_TEST_INSTALLATION != '' }}
+        timeout-minutes: 1
+        env:
+          HYPERVIBES_TEST_PHASE: cleanup
+        run: node --test --test-name-pattern="real npm tarball" --test-timeout=30000 scripts/package.test.mjs
+      # The combined cache action only saves after a successful job. Preserve
+      # completed downloads even if installation or application tests fail.
+      # Never cache node_modules, app data, npm logs, or credentials.
+      - name: Save npm downloads even after test failure
+        if: ${{ !cancelled() && steps.npm-cache.outcome == 'success' && steps.npm-cache.outputs.cache-hit != 'true' }}
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/npm-package-cache/_cacache
+          key: ${{ steps.npm-cache.outputs.cache-primary-key }}
 
   container:
     name: Container (${{ matrix.arch }})
