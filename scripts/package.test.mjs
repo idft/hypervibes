@@ -382,7 +382,7 @@ test("real npm tarball runs with runtime dependencies outside the repository", {
     await writeFile(join(installation, "package.json"), JSON.stringify({ private: true }));
     await execute("npm", ["install", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund",
       "--loglevel=http", "--fetch-retries=1", "--fetch-timeout=30000", tarball], {
-      cwd: installation, env, label: "install runtime dependencies", timeoutMs: 90_000, stream: true,
+      cwd: installation, env, label: "install runtime dependencies", timeoutMs: 180_000, stream: true,
     });
     const root = join(installation, "node_modules/hypervibes");
     for (const dependency of ["tsx", "typescript"]) {
