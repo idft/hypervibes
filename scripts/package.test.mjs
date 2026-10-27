@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { access, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, isAbsolute, join, relative } from "node:path";
+import { delimiter, dirname, isAbsolute, join, relative, win32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "node:test";
 
@@ -12,7 +13,7 @@ const repository = fileURLToPath(new URL("../", import.meta.url));
 // imports resolve into the npm installation, not the development dependency tree.
 const fixture = `
 import assert from "node:assert/strict";
-import { readFile, readdir, stat, access } from "node:fs/promises";
+import { readFile, readdir, realpath, stat, access } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
@@ -32,8 +33,8 @@ const first = initializeConfig();
 const secrets = await readFile(configPath, "utf8");
 if (previousSecrets !== undefined) assert.equal(secrets, previousSecrets);
 if (process.platform !== "win32") assert.equal((await stat(configPath)).mode & 0o777, 0o600);
-assert.equal(first.buildDir, join(root, ".build"));
-assert.equal(first.staticDir, join(root, "static"));
+assert.equal(await realpath(first.buildDir), await realpath(join(root, ".build")));
+assert.equal(await realpath(first.staticDir), await realpath(join(root, "static")));
 let migrationCount;
 for (let boot = 0; boot < 2; boot++) {
   const config = initializeConfig();
@@ -110,12 +111,27 @@ function invocation(command, args, platform = process.platform, env = process.en
   };
 }
 
+function resolveWindowsBatch(command, env, exists = existsSync) {
+  if (["npm", "pnpm"].includes(command)) command += ".cmd";
+  if (!command.toLowerCase().endsWith(".cmd") || win32.isAbsolute(command)) return command;
+  const path = Object.entries(env).find(([key]) => key.toLowerCase() === "path")?.[1] ?? "";
+  for (const directory of path.split(";")) {
+    const candidate = win32.join(directory.replace(/^"|"$/g, ""), command);
+    if (win32.isAbsolute(candidate) && exists(candidate)) return candidate;
+  }
+  throw new Error(`Cannot resolve Windows batch command on PATH: ${command}`);
+}
+
 function archiveMembers(output) {
   return output.trim().split(/\r?\n/);
 }
 
 function run(command, args, options = {}) {
-  const target = invocation(command, args, process.platform, options.env ?? process.env);
+  const env = options.env ?? process.env;
+  // A bare batch filename can make npm's %~dp0 point at the test working
+  // directory. Resolve the wrapper before cmd.exe runs it, preserving its base.
+  const executable = process.platform === "win32" ? resolveWindowsBatch(command, env) : command;
+  const target = invocation(executable, args, process.platform, env);
   const result = spawnSync(target.command, target.args, {
     encoding: "utf8", timeout: 240_000, maxBuffer: 10 * 1024 * 1024,
     ...options, windowsVerbatimArguments: target.windowsVerbatimArguments,
@@ -138,6 +154,34 @@ test("Windows batch commands quote paths and reject shell expansion", () => {
   assert.deepEqual(invocation("npm", ["install"], "linux"), { command: "npm", args: ["install"] });
 });
 
+test("Windows batch commands resolve from PATH before invocation", () => {
+  const wrapper = "C:\\Program Files\\nodejs\\npm.cmd";
+  const env = { Path: 'C:\\missing;"C:\\Program Files\\nodejs"' };
+  assert.equal(resolveWindowsBatch("npm", env, (candidate) => candidate === wrapper), wrapper);
+  assert.equal(resolveWindowsBatch(wrapper, {}), wrapper);
+  assert.equal(resolveWindowsBatch("C:\\tools\\hypervibes.cmd", {}), "C:\\tools\\hypervibes.cmd");
+  assert.equal(resolveWindowsBatch("node.exe", {}), "node.exe");
+  assert.throws(() => resolveWindowsBatch("npm", env, () => false), /Cannot resolve/);
+  assert.throws(() => resolveWindowsBatch("npm", { PATH: "." }, () => true), /Cannot resolve/);
+  const target = invocation(resolveWindowsBatch("npm", env, (candidate) => candidate === wrapper), ["install"], "win32", {});
+  assert.equal(target.args.at(-1), '""C:\\Program Files\\nodejs\\npm.cmd" "install""');
+});
+
+test("resource paths compare equal through a directory alias", async () => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "hypervibes-paths-")));
+  try {
+    const original = join(directory, "original");
+    const alias = join(directory, "alias");
+    await mkdir(original);
+    await mkdir(join(original, ".build"));
+    await symlink(original, alias, process.platform === "win32" ? "junction" : "dir");
+    assert.notEqual(join(original, ".build"), join(alias, ".build"));
+    assert.equal(await realpath(join(original, ".build")), await realpath(join(alias, ".build")));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("archive members have no carriage returns with LF or CRLF output", () => {
   const expected = ["package/package.json", "package/.build/server/server.js"];
   for (const newline of ["\n", "\r\n"]) {
@@ -146,7 +190,9 @@ test("archive members have no carriage returns with LF or CRLF output", () => {
 });
 
 test("real npm tarball runs with runtime dependencies outside the repository", { timeout: 240_000 }, async () => {
-  const directory = await mkdtemp(join(tmpdir(), "hypervibes-package-"));
+  // macOS exposes /var through /private/var. Use one canonical temporary root
+  // for isolation checks and Node's realpath-resolved module locations.
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "hypervibes-package-")));
   try {
     const working = join(directory, "unrelated");
     const installation = join(directory, "installation");
