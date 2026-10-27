@@ -1,3 +1,4 @@
+import { randomUuid } from "../web/random-uuid.js";
 import { useState } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import type { ChartIndicatorInstance } from "../indicators/contracts.js";
@@ -18,7 +19,7 @@ function IndicatorActionIcon({ name }: { name: "eye" | "eye-off" | "gear" | "tra
 
 export function ChartIndicatorControls({ agentId, instances, disabled, onChange }: { agentId: string; instances: ChartIndicatorInstance[]; disabled: boolean; onChange: (instances: ChartIndicatorInstance[]) => Promise<boolean> }) {
   const [open, setOpen] = useState(false), [editing, setEditing] = useState<ChartIndicatorInstance | null>(null);
-  const [adding, setAdding] = useState(false);
+  const [adding, setAdding] = useState(false), [preparationError, setPreparationError] = useState("");
   const [query, setQuery] = useState(""), [offset, setOffset] = useState(0);
   const catalog = useQuery({ ...indicatorListQueryOptions(agentId, { query, offset, limit: 20 }), enabled: open });
   const indicatorIds = [...new Set(instances.map((instance) => instance.indicatorId))];
@@ -44,8 +45,8 @@ export function ChartIndicatorControls({ agentId, instances, disabled, onChange 
         })}</tbody>
       </table></div>}
       <label className="my-3 block text-sm">Search<input className={configInput} value={query} onChange={(e) => { setQuery(e.target.value); setOffset(0); }} /></label>
-      {catalog.error && <p role="alert">{catalog.error.message}</p>}
-      <ul className="space-y-2">{catalog.data?.indicators.map((entry) => <li key={entry.id} className="flex items-center justify-between gap-2 text-sm"><span>{entry.name} · {entry.builtIn ? "Built-in" : `Custom · v${entry.version}`}</span><button type="button" className={configButton} disabled={disabled || instances.length >= 10} onClick={() => { setAdding(true); setEditing({ id: crypto.randomUUID(), indicatorId: entry.id, configuredVersion: entry.version, inputs: {}, pane: "auto", hidden: false, styles: {} }); }}>Add</button></li>)}</ul>
+      {(preparationError || catalog.error) && <p role="alert">{preparationError || catalog.error?.message}</p>}
+      <ul className="space-y-2">{catalog.data?.indicators.map((entry) => <li key={entry.id} className="flex items-center justify-between gap-2 text-sm"><span>{entry.name} · {entry.builtIn ? "Built-in" : `Custom · v${entry.version}`}</span><button type="button" className={configButton} disabled={disabled || instances.length >= 10} onClick={() => { try { const id = randomUuid(); setPreparationError(""); setAdding(true); setEditing({ id, indicatorId: entry.id, configuredVersion: entry.version, inputs: {}, pane: "auto", hidden: false, styles: {} }); } catch (cause) { setPreparationError(cause instanceof Error ? cause.message : "Unable to prepare the indicator"); } }}>Add</button></li>)}</ul>
       <div className="mt-3 flex gap-2"><button type="button" className={configButton} disabled={!offset} onClick={() => setOffset(Math.max(0, offset - 20))}>Previous</button><button type="button" className={configButton} disabled={catalog.data?.nextOffset == null} onClick={() => setOffset(catalog.data!.nextOffset!)}>Next</button></div>
     </ConfigDialog>}
     {editing && <IndicatorInstanceDialog key={editing.id} agentId={agentId} initial={editing} adding={adding} disabled={disabled || (adding && instances.length >= 10)} onCancel={() => setEditing(null)} onApply={async (value) => { if (await onChange(adding ? [...instances, value] : instances.map((v) => v.id === value.id ? value : v))) { setEditing(null); if (adding) setOpen(false); } }} />}

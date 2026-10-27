@@ -43,7 +43,8 @@ describe("Agent dashboard", () => {
     await act(async () => {});
   });
   afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
-  it("sends dashboard chat to the orchestrator, prevents duplicates and navigates only after acceptance", async () => {
+  it("sends dashboard chat on HTTP, prevents duplicates and reuses its UUID after failure", async () => {
+    vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto) });
     const section = container.querySelector('[aria-label="Chat"]')!;
     expect(section.previousElementSibling?.getAttribute("aria-label")).toBe("Sub-agents");
     const input = section.querySelector("textarea")!;
@@ -60,6 +61,7 @@ describe("Agent dashboard", () => {
     expect(mocks.navigate).not.toHaveBeenCalled();
     const first = mocks.sendAgentMessage.mock.calls[0]![0];
     expect(first.data).toMatchObject({ id: "fixture", message: "Review my positions" });
+    expect(first.data.requestId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     await act(async () => reject(new Error("offline")));
     expect(section.querySelector('[role="alert"]')?.textContent).toContain("Retry with the same message");
     expect(input.value).toBe("Review my positions");
@@ -71,6 +73,26 @@ describe("Agent dashboard", () => {
     await act(async () => { submit(); });
     expect(mocks.sendAgentMessage.mock.calls[2]![0]).toEqual(first);
     expect(mocks.navigate).toHaveBeenCalledWith({ to: "/agents/$agentId/chat", params: { agentId: "fixture" } });
+  });
+  it("shows dashboard chat preparation errors and permits another attempt", async () => {
+    const webCrypto = crypto;
+    vi.stubGlobal("crypto", undefined);
+    const section = container.querySelector('[aria-label="Chat"]')!;
+    const input = section.querySelector("textarea")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, "Review positions");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    mocks.sendAgentMessage.mockClear();
+    const submit = () => section.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await act(async () => { submit(); });
+    expect(section.querySelector('[role="alert"]')?.textContent).toContain("Web Crypto is unavailable");
+    expect(mocks.sendAgentMessage).not.toHaveBeenCalled();
+    expect(input.value).toBe("Review positions");
+    vi.stubGlobal("crypto", { getRandomValues: webCrypto.getRandomValues.bind(webCrypto) });
+    mocks.sendAgentMessage.mockResolvedValueOnce({ submissionId: 1 });
+    await act(async () => { submit(); });
+    expect(mocks.sendAgentMessage).toHaveBeenCalledOnce();
   });
   it("shows a sub-agent empty state and creation link without the Performance section", () => {
     expect(container.textContent).toContain("No sub-agents yet.");

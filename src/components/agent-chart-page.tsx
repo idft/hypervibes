@@ -1,3 +1,4 @@
+import { randomUuid } from "../web/random-uuid.js";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { chartIntervals, isChartInterval } from "../hyperliquid/chart-contracts.js";
 import { drawingKinds, type ChartDrawing, type DrawingKind } from "../charts/contracts.js";
@@ -204,6 +205,14 @@ function LayoutNotesDialog({ notes, pending, error, onApply, onCancel }: { notes
 }
 function LayoutNameDialog({ title, initial, pending, error, onApply, onCancel }: { title: string; initial: string; pending: boolean; error: string; onApply: (name: string, operationId: string) => Promise<void>; onCancel: () => void }) {
   const [name, setName] = useState(initial);
-  const request = useRef({ name: initial, id: crypto.randomUUID() });
-  return <ConfigDialog title={title} onCancel={onCancel} onApply={() => { if (request.current.name !== name.trim()) request.current = { name: name.trim(), id: crypto.randomUUID() }; void onApply(name.trim(), request.current.id); }} applyDisabled={pending || !name.trim()}><label className="block space-y-2 text-sm">Name<input autoFocus maxLength={80} value={name} disabled={pending} onChange={(e) => setName(e.target.value)} className={configInput} /></label><p className="mt-3 text-xs text-zinc-500">Layouts autosave instrument, timeframe, objects, styles and notes. Reopening follows the latest candles.</p>{error && <p role="alert" className="text-sm text-red-300">{error}</p>}</ConfigDialog>;
+  const request = useRef<{ name: string; id: string } | null>(null);
+  const [preparationError, setPreparationError] = useState("");
+  async function apply() {
+    try {
+      setPreparationError("");
+      if (request.current?.name !== name.trim()) request.current = { name: name.trim(), id: randomUuid() };
+      await onApply(name.trim(), request.current.id);
+    } catch (cause) { setPreparationError(cause instanceof Error ? cause.message : "Unable to prepare the layout"); }
+  }
+  return <ConfigDialog title={title} onCancel={onCancel} onApply={() => { void apply(); }} applyDisabled={pending || !name.trim()}><label className="block space-y-2 text-sm">Name<input autoFocus maxLength={80} value={name} disabled={pending} onChange={(e) => setName(e.target.value)} className={configInput} /></label><p className="mt-3 text-xs text-zinc-500">Layouts autosave instrument, timeframe, objects, styles and notes. Reopening follows the latest candles.</p>{(preparationError || error) && <p role="alert" className="text-sm text-red-300">{preparationError || error}</p>}</ConfigDialog>;
 }

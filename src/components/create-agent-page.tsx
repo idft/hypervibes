@@ -2,6 +2,7 @@ import { useRouter } from "@tanstack/react-router";
 import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { invalidateAgentCollection } from "../web/agent-queries.js";
+import { randomUuid } from "../web/random-uuid.js";
 import type { AgentRow } from "../db/agent-schema.js";
 import type { TradingAccountChoices } from "../hyperliquid/service.js";
 import { formatMoneyText } from "../hyperliquid/decimal.js";
@@ -38,7 +39,8 @@ export function CreateAgentPage({ choices, models, create, createSubaccount }: {
   });
   const pending = creation.isPending;
   const subaccountPending = subaccount.isPending;
-  const error = creation.error?.message;
+  const [submissionError, setSubmissionError] = useState<string>();
+  const error = submissionError ?? creation.error?.message;
   const subaccountStatus = subaccount.error?.message ?? (subaccount.data ? subaccount.data.created ? "Sub-account created." : "An existing matching Sub-account was found." : "");
   const request = useRef<{ settings: string; id: string } | null>(null);
   const inFlight = useRef(false);
@@ -50,11 +52,15 @@ export function CreateAgentPage({ choices, models, create, createSubaccount }: {
   async function submit() {
     if (inFlight.current || !trimmed || !model || !accountReady) return;
     inFlight.current = true;
+    setSubmissionError(undefined);
     try {
       const settings = JSON.stringify([trimmed, selection, selectedModel, includeDefaultSubagents, thinkingLevel]);
-      if (request.current?.settings !== settings) request.current = { settings, id: crypto.randomUUID() };
+      if (request.current?.settings !== settings) request.current = { settings, id: randomUuid() };
       await creation.mutateAsync([trimmed, request.current.id, selection, model, includeDefaultSubagents, thinkingLevel]);
-    } catch { /* Query retains the error; preserve the creation request for retries. */ }
+    } catch (error) {
+      // Preparation can fail before Query starts. Keep those failures visible too.
+      setSubmissionError(error instanceof Error ? error.message : "Could not create the agent. Please try again.");
+    }
     finally { inFlight.current = false; }
   }
 

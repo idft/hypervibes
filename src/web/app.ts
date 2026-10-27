@@ -1,6 +1,6 @@
 import fastifyStatic from "@fastify/static";
 import Fastify from "fastify";
-import { isAbsolute, join, relative, sep } from "node:path";
+import { basename, isAbsolute, join, relative, sep } from "node:path";
 import { CurrencyLogoCache } from "../hyperliquid/logo-cache.js";
 import { isPerpetualLogoSymbol } from "../hyperliquid/currency-logo.js";
 import { ProviderLogoCache, isProviderSlug } from "../providers/provider-logo.js";
@@ -97,6 +97,14 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
         decorateReply: false,
         dotfiles: "deny",
         index: false,
+        setHeaders(response, path) {
+          // Vite's client output uses [name]-[hash].[ext], with an 8-character
+          // base64url hash. Keep HTML and non-hashed files on the default policy.
+          const filename = basename(path);
+          if (/^.+-[A-Za-z0-9_-]{8}\.[A-Za-z0-9]+$/.test(filename) && !/\.html?$/i.test(filename)) {
+            response.header("Cache-Control", "public, max-age=31536000, immutable");
+          }
+        },
       });
     }
     app.get<{ Params: { file: string } }>("/currency/:file", async (request, reply) => {

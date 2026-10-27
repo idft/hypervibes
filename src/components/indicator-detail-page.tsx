@@ -1,3 +1,4 @@
+import { randomUuid } from "../web/random-uuid.js";
 import { useState } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -38,7 +39,7 @@ function IndicatorEditor({ agentId, indicatorId, descriptor, currentVersion, ini
   const [operation, setOperation] = useState<{ body: string; key: string } | undefined>();
   const save = useMutation({ mutationFn: async () => {
     const request = { ...(creating ? {} : { indicatorId, expectedVersion: currentVersion }), name, description, interpretation, source, validation: { coin, interval, start: Date.parse(start), end: Date.parse(end) } };
-    const body = JSON.stringify(request), key = operation?.body === body ? operation.key : crypto.randomUUID(); setOperation({ body, key });
+    const body = JSON.stringify(request), key = operation?.body === body ? operation.key : randomUuid(); setOperation({ body, key });
     return saveIndicator({ data: { agentId, operationKey: key, request } });
   }, onSuccess: async (result) => { await client.invalidateQueries({ queryKey: indicatorKeys.all(agentId) }); await navigate({ to: "/agents/$agentId/indicators/$indicatorId", params: { agentId, indicatorId: result.indicatorId }, search: {} }); } });
   const schema = preview.data?.result.inputs ?? descriptor?.inputs ?? [];

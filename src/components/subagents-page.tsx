@@ -1,3 +1,4 @@
+import { randomUuid } from "../web/random-uuid.js";
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { invalidateSubagentLists, subagentsQueryOptions } from "../web/subagent-queries.js";
@@ -46,7 +47,7 @@ export function SubagentsPage({ agentId }: { agentId: string }) {
   const importRequest = useRef<string | null>(null);
   const importing = useMutation({
     mutationFn: () => {
-      importRequest.current ??= crypto.randomUUID();
+      importRequest.current ??= randomUuid();
       return importDefaultSubagents({ data: { agentId, requestId: importRequest.current } });
     },
     onSuccess: async () => {

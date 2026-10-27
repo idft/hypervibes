@@ -23,13 +23,24 @@ beforeEach(async () => {
   await act(async () => root.render(<QueryClientProvider client={createTestQueryClient()}><ChartIndicatorControls agentId="agent" instances={[]} disabled={false} onChange={change} /></QueryClientProvider>));
   await click("Indicators (0)");
 });
-afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
+afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
 
 it("removes library link, explanatory text, and built-in versions", () => {
   expect(document.body.textContent).not.toContain("Open indicator library");
   expect(document.body.textContent).not.toContain("Latest versions");
   expect(document.body.textContent).toContain("EMA · Built-in");
   expect(document.body.textContent).not.toContain("v1");
+});
+
+it("shows UUID failures in the indicator dialog and permits retry", async () => {
+  const webCrypto = crypto;
+  vi.stubGlobal("crypto", undefined);
+  await click("Add");
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain("Web Crypto is unavailable");
+  expect(change).not.toHaveBeenCalled();
+  vi.stubGlobal("crypto", { getRandomValues: webCrypto.getRandomValues.bind(webCrypto) });
+  await click("Add"); await click("Add to chart");
+  expect(change).toHaveBeenCalledWith([expect.objectContaining({ id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/) })]);
 });
 
 it("configures inputs before adding the indicator", async () => {

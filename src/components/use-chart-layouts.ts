@@ -1,3 +1,4 @@
+import { randomUuid } from "../web/random-uuid.js";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import type { ChartEdit, ChartLayout } from "../charts/contracts.js";
 import { changeChartLayout, createChartLayout, deleteChartLayout } from "../web/charts.js";
@@ -15,7 +16,7 @@ export function useChartLayouts(id: string, instruments: string[]) {
   const error = mutation.error?.message;
   const [connectionError, setConnectionError] = useState("");
   const [ready, setReady] = useState(false);
-  const busy = useRef(false), alive = useRef(true), creation = useRef(crypto.randomUUID()), streamVersion = useRef(0);
+  const busy = useRef(false), alive = useRef(true), streamVersion = useRef(0);
   const key = `hypervibes:chart-layout:${id}`;
   const restorePreference = useEffectEvent(() => {
     try { const saved = localStorage.getItem(key); if (saved && layouts.some((l) => l.id === saved)) setSelected(saved); } catch { /* Optional preference. */ }
@@ -65,8 +66,9 @@ export function useChartLayouts(id: string, instruments: string[]) {
   }
   const layout = layouts.find((item) => item.id === selected) ?? layouts[0];
   async function create(name: string, duplicate = false, defaultId?: string) {
-    const layoutId = defaultId ?? crypto.randomUUID();
+    let layoutId = defaultId;
     return run(async (before) => {
+      layoutId ??= randomUuid();
       const result = await createChartLayout({ data: { id, layoutId, settings: { name, ...(duplicate ? {} : { coin: instruments.includes("BTC") ? "BTC" : instruments[0] ?? "BTC", interval: "1h" }) }, ...(duplicate && layout ? { sourceId: layout.id } : {}) } });
       if (streamVersion.current === before) accept(result);
       if (alive.current) choose(result.id);
@@ -74,7 +76,7 @@ export function useChartLayouts(id: string, instruments: string[]) {
     });
   }
   const initialize = useRef(false);
-  const initializeLayout = useEffectEvent(() => { void create("My chart", false, creation.current); });
+  const initializeLayout = useEffectEvent(() => { void create("My chart"); });
   useEffect(() => {
     if (!ready || initialize.current || !instruments.length) return;
     initialize.current = true;
@@ -82,8 +84,9 @@ export function useChartLayouts(id: string, instruments: string[]) {
   }, [ready, layouts.length, instruments.length]);
   async function change(action: "edit" | "undo" | "redo", edit?: ChartEdit) {
     if (!layout) return undefined;
-    const requestId = crypto.randomUUID();
+    let requestId: string | undefined;
     return run(async (before) => {
+      requestId ??= randomUuid();
       const result = await changeChartLayout({ data: { id, layoutId: layout.id, revision: layout.revision, requestId, action, edit } });
       // Compare revisions, not arrival order: a mid-request SSE frame may be
       // older than this committed response. Never resurrect a streamed deletion.

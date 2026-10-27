@@ -1,3 +1,4 @@
+import { randomUuid } from "../web/random-uuid.js";
 import { useRouter } from "@tanstack/react-router";
 import { useRef, useState } from "react";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
@@ -96,7 +97,7 @@ export function SubagentDetailPage({ agentId, subagentId, choices }: { agentId: 
   async function startRun() {
     if (definition.archived) throw new Error("This worker is unavailable for new assignments.");
     await operate(async () => {
-      if (assignmentId.current?.task !== task) assignmentId.current = { task, id: crypto.randomUUID() };
+      if (assignmentId.current?.task !== task) assignmentId.current = { task, id: randomUuid() };
       const run = await mutations.run({ id: definition.id, task, requestId: assignmentId.current.id });
       assignmentId.current = null; setRunOpen(false); setTask("");
       toast.success("Assignment started");

@@ -164,6 +164,24 @@ describe("chart workspace", () => {
     await act(async () => document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true })));
     expect(popup()).toBeNull();
   });
+  it("opens layout dialogs without entropy and reports UUID preparation errors before creation", async () => {
+    await render();
+    const webCrypto = crypto;
+    vi.stubGlobal("crypto", undefined);
+    await click("Layout settings"); await click("New");
+    expect(document.querySelector("dialog")?.textContent).toContain("New layout");
+    await click("Apply");
+    expect(document.querySelector('dialog [role="alert"]')?.textContent).toContain("Web Crypto is unavailable");
+    expect(mocks.create).not.toHaveBeenCalled();
+    vi.stubGlobal("crypto", { getRandomValues: webCrypto.getRandomValues.bind(webCrypto) });
+    mocks.create.mockRejectedValueOnce(new Error("Lost response"));
+    await click("Apply");
+    const first = mocks.create.mock.calls[0]![0];
+    expect(first.data.layoutId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    await click("Apply");
+    expect(mocks.create.mock.calls[1]![0]).toEqual(first);
+    expect(document.querySelector("dialog")).toBeNull();
+  });
   it("keeps new, duplicate, rename and confirmed deletion available through layout settings", async () => {
     await render();
     for (const [label, title] of [["New", "New layout"], ["Duplicate", "Duplicate layout"], ["Rename", "Rename layout"]]) {

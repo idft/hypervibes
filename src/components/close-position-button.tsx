@@ -1,3 +1,4 @@
+import { randomUuid } from "../web/random-uuid.js";
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { closeAgentPosition } from "../web/agents.js";
@@ -19,7 +20,10 @@ export function ClosePositionButton({ agentId, symbol }: { agentId: string; symb
     return () => { window.clearTimeout(timeout); document.removeEventListener("keydown", escape); };
   }, [confirmation, armed]);
   const client = useQueryClient();
-  const mutation = useMutation({ mutationFn: closeAgentPosition, onSettled: async () => {
+  const mutation = useMutation({ mutationFn: async () => {
+    request.current ??= randomUuid();
+    return closeAgentPosition({ data: { id: agentId, symbol, requestId: request.current } });
+  }, onSettled: async () => {
     await client.invalidateQueries({ queryKey: ["agent-dashboard", agentId] });
   } });
   async function close() {
@@ -27,9 +31,8 @@ export function ClosePositionButton({ agentId, symbol }: { agentId: string; symb
     if (!armed) { setConfirmation({ agentId, symbol }); return; }
     setConfirmation(null);
     inFlight.current = true;
-    request.current ??= crypto.randomUUID();
     try {
-      const result = await mutation.mutateAsync({ data: { id: agentId, symbol, requestId: request.current } });
+      const result = await mutation.mutateAsync();
       // A new explicit click may close a known remainder; uncertainty must reuse the original ID.
       if (!result.cancel.uncertain && !result.close.uncertain && result.remainingSize !== null) request.current = null;
     } catch { /* Retain the ID after a lost response; never blindly resubmit a new command. */ }

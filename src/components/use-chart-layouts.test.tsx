@@ -58,6 +58,38 @@ describe("SSE chart layouts", () => {
     expect(mocks.list).not.toHaveBeenCalled();
   });
 
+  it("renders without Web Crypto and reports create and edit UUID failures through mutation state", async () => {
+    vi.stubGlobal("crypto", undefined);
+    await render(); await push(initial);
+    await act(async () => { await state!.create("New"); });
+    expect(state!.error).toContain("Web Crypto is unavailable");
+    expect(mocks.create).not.toHaveBeenCalled();
+    await act(async () => { await state!.change("edit", { label: "My edit" }); });
+    expect(state!.error).toContain("Web Crypto is unavailable");
+    expect(mocks.change).not.toHaveBeenCalled();
+    expect(state!.pending).toBe(false);
+    vi.unstubAllGlobals(); vi.stubGlobal("EventSource", LayoutSource);
+    mocks.change.mockResolvedValue(fixture("first", 1));
+    await act(async () => { await state!.change("edit", { label: "My edit" }); });
+    expect(mocks.change).toHaveBeenCalledOnce();
+  });
+
+  it("uses valid HTTP UUIDs and keeps them across mutation retries", async () => {
+    vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto) });
+    client.setDefaultOptions({ ...client.getDefaultOptions(), mutations: { retry: 1, retryDelay: 0 } });
+    mocks.create.mockRejectedValueOnce(new Error("Lost response")).mockResolvedValueOnce(fixture("created"));
+    mocks.change.mockRejectedValueOnce(new Error("Lost response")).mockResolvedValueOnce(fixture("created", 1));
+    await render(); await push(initial);
+    await act(async () => { await state!.create("New"); });
+    expect(mocks.create).toHaveBeenCalledTimes(2);
+    expect(mocks.create.mock.calls[0]![0]).toEqual(mocks.create.mock.calls[1]![0]);
+    expect(mocks.create.mock.calls[0]![0].data.layoutId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    await act(async () => { await state!.change("edit", { label: "My edit" }); });
+    expect(mocks.change).toHaveBeenCalledTimes(2);
+    expect(mocks.change.mock.calls[0]![0]).toEqual(mocks.change.mock.calls[1]![0]);
+    expect(mocks.change.mock.calls[0]![0].data.requestId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  });
+
   it("keeps a newer streamed revision when an older mutation response arrives", async () => {
     let finish!: (value: unknown) => void;
     mocks.change.mockReturnValue(new Promise((resolve) => { finish = resolve; }));

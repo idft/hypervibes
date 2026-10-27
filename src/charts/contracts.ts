@@ -1,3 +1,4 @@
+import { randomUuid } from "../web/random-uuid.js";
 import { AgentError, requestId } from "../agents/agent-input.js";
 import { chartIntervals, isChartInterval, type ChartCandle, type ChartInterval, type ChartSelection } from "../hyperliquid/chart-contracts.js";
 
@@ -111,8 +112,8 @@ export function chartCapture(value: unknown): ChartCapture {
     ...(c.selectedDrawingId === undefined ? {} : { selectedDrawingId: requestId(text(c.selectedDrawingId, 36)) }),
     ...(c.image === undefined ? {} : { image: text(c.image, 700_000, false) }) };
 }
-export function newDrawing(kind: DrawingKind, coin: string, points: ChartPoint[]): ChartDrawing {
-  return { id: crypto.randomUUID(), coin, kind, points, name: kind.replaceAll("-", " "), text: "", color: "#a78bfa", width: 2, dashed: false, fillOpacity: 0.15, locked: false, hidden: false, intervals: [], group: "", author: "user" };
+export function newDrawing(kind: DrawingKind, coin: string, points: ChartPoint[], id = randomUuid()): ChartDrawing {
+  return { id, coin, kind, points, name: kind.replaceAll("-", " "), text: "", color: "#a78bfa", width: 2, dashed: false, fillOpacity: 0.15, locked: false, hidden: false, intervals: [], group: "", author: "user" };
 }
 export function visibleDrawing(d: ChartDrawing, document: ChartDocument): boolean {
   return !document.hideDrawings && !d.hidden && d.coin === document.coin && (!d.intervals.length || d.intervals.includes(document.interval));

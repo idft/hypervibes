@@ -25,10 +25,26 @@ describe("chart drawing interactions", () => {
     SVGElement.prototype.hasPointerCapture = vi.fn(function (this: SVGElement, id: number) { return captures.get(this)?.has(id) ?? false; });
     SVGElement.prototype.releasePointerCapture = vi.fn(function (this: SVGElement, id: number) { captures.get(this)?.delete(id); this.dispatchEvent(pointerEvent("lostpointercapture", 0, 0, false, id)); });
   });
-  afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
+  afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
   async function render(tool: DrawingKind | "select", selected = "", revision = 0, disabled = false) { await act(async () => root.render(<Fixture key={tool} document={documentValue} revision={revision} disabled={disabled} tool={tool} selected={selected} onSave={save} onSelect={select} onEdit={edit} onDrawn={drawn} />)); }
   async function pointer(type: string, target: Element, x: number, y: number, ctrlKey = false) { await act(async () => target.dispatchEvent(pointerEvent(type, x, y, ctrlKey))); }
   const svg = () => container.querySelector("svg")!;
+  it("previews drawings without entropy, reports UUID failures, and allows an HTTP retry", async () => {
+    const webCrypto = crypto;
+    vi.stubGlobal("crypto", undefined);
+    await render("rectangle");
+    await pointer("pointerdown", svg(), 23, 297);
+    await pointer("pointermove", svg(), 50, 250);
+    expect(container.querySelector('g[aria-label="rectangle"]')).not.toBeNull();
+    await pointer("pointerdown", svg(), 50, 250);
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Web Crypto is unavailable");
+    expect(save).not.toHaveBeenCalled(); expect(drawn).not.toHaveBeenCalled();
+    vi.stubGlobal("crypto", { getRandomValues: webCrypto.getRandomValues.bind(webCrypto) });
+    await pointer("pointerdown", svg(), 50, 250);
+    expect(save).toHaveBeenCalledOnce();
+    expect(save.mock.calls[0]![0].id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
   it("creates snapped one-anchor levels and two-anchor zones, with a temporary magnet override", async () => {
     await render("horizontal"); await pointer("pointerdown", svg(), 23, 297);
     expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ kind: "horizontal", points: [{ time: 200, price: 100 }] }));

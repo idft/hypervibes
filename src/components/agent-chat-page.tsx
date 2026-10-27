@@ -1,3 +1,4 @@
+import { randomUuid } from "../web/random-uuid.js";
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useEffectEvent, useId, useLayoutEffect, useRef, useState } from "react";
@@ -129,7 +130,7 @@ export function AgentChatPage({ initial, choices, embedded = false, visible = tr
       }
       if (kind === "stop") { await stopAgentChat({ data: { id } }); return; }
       if (kind === "reset") { await resetAgentChat({ data: { id } }); return; }
-      if (request.current?.message !== message) request.current = { message, id: crypto.randomUUID() };
+      if (request.current?.message !== message) request.current = { message, id: randomUuid() };
       const outgoing = request.current;
       if (chartContext && !outgoing.chart) outgoing.chart = await chartContext.capture(includeImage && chat.supportsImages === true);
       await sendAgentMessage({ data: { id, message: outgoing.message, requestId: outgoing.id, ...(outgoing.chart ? { chart: outgoing.chart } : {}) } });

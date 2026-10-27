@@ -1,3 +1,4 @@
+import { randomUuid } from "../web/random-uuid.js";
 import { useRouter } from "@tanstack/react-router";
 import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -30,7 +31,7 @@ export function NewSubagentPage({ agentId, model, choices }: { agentId: string; 
       if (!createdId.current) {
         const settings = { ...(templateId ? templateDraft(templateId, selectedModel) : { ...blank, ...selectedModel }), name, description, enabled: false };
         const fingerprint = JSON.stringify([templateId, settings]);
-        if (request.current?.settings !== fingerprint) request.current = { settings: fingerprint, id: crypto.randomUUID() };
+        if (request.current?.settings !== fingerprint) request.current = { settings: fingerprint, id: randomUuid() };
         const row = await saveSubagent({ data: { agentId, id: "", requestId: request.current.id, templateId, settings } });
         createdId.current = row.id;
         toast.success("Sub-agent created paused", { description: "Review the configuration, then enable when ready." });

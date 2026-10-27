@@ -7,6 +7,7 @@ export function ChartDrawings({ document, revision, projection, tool, selected, 
   document: ChartDocument; revision: number; projection: ChartProjection; tool: DrawingKind | "select"; selected: string; disabled: boolean; svgRef: RefObject<SVGSVGElement | null>;
   onSelect: (id: string) => void; onSave: (drawing: ChartDrawing) => Promise<number | undefined>; onDrawn: () => void; onEdit: () => void;
 }) {
+  const [preparationError, setPreparationError] = useState("");
   const [anchor, setAnchor] = useState<ChartPoint | null>(null);
   const [preview, setPreview] = useState<ChartPoint | null>(null);
   const [draft, setDraft] = useState<{ drawing: ChartDrawing; revision: number | null } | null>(null);
@@ -75,14 +76,17 @@ export function ChartDrawings({ document, revision, projection, tool, selected, 
     if (tool === "select") { onSelect(""); return; }
     const single = ["horizontal", "horizontal-ray", "vertical", "text"].includes(tool);
     if (!single && !anchor) { setAnchor(point); setPreview(point); return; }
-    const drawing = newDrawing(tool, document.coin, single ? [point] : [anchor!, point]);
-    if (["text", "callout"].includes(tool)) drawing.text = "Note";
-    void onSave(drawing); onSelect(drawing.id); setAnchor(null); setPreview(null); onDrawn();
+    try {
+      const drawing = newDrawing(tool, document.coin, single ? [point] : [anchor!, point]);
+      setPreparationError("");
+      if (["text", "callout"].includes(tool)) drawing.text = "Note";
+      void onSave(drawing); onSelect(drawing.id); setAnchor(null); setPreview(null); onDrawn();
+    } catch (cause) { setPreparationError(cause instanceof Error ? cause.message : "Unable to prepare the drawing"); }
   }
   const previewDrawing = draft && (draft.revision === null || revision < draft.revision) ? draft.drawing : null;
   const drawings = document.drawings.filter((d) => visibleDrawing(d, document)).map((d) => previewDrawing?.id === d.id ? previewDrawing : d);
-  if (anchor && preview && tool !== "select") drawings.push({ ...newDrawing(tool, document.coin, [anchor, preview]), id: "preview", color: "#71717a" });
-  return <svg ref={svgRef} xmlns="http://www.w3.org/2000/svg" width={projection.width} height={projection.height} viewBox={`0 0 ${projection.width} ${projection.height}`} aria-label="Chart drawings"
+  if (anchor && preview && tool !== "select") drawings.push({ ...newDrawing(tool, document.coin, [anchor, preview], "preview"), color: "#71717a" });
+  return <><svg ref={svgRef} xmlns="http://www.w3.org/2000/svg" width={projection.width} height={projection.height} viewBox={`0 0 ${projection.width} ${projection.height}`} aria-label="Chart drawings"
     className="absolute left-0 top-0 z-10 overflow-hidden" style={{ pointerEvents: tool === "select" || blocked ? "none" : "auto", cursor: tool === "select" ? "default" : "crosshair", touchAction: "none" }}
     onPointerDown={place} onPointerMove={move} onPointerUp={finish} onPointerCancel={cancel} onLostPointerCapture={cancel}>
     {tool !== "select" && !blocked && <rect data-drawing-surface="true" width={projection.width} height={projection.height} fill="transparent" style={{ pointerEvents: "all" }} />}
@@ -109,5 +113,5 @@ export function ChartDrawings({ document, revision, projection, tool, selected, 
         })}
       </g>;
     })}
-  </svg>;
+  </svg>{preparationError && <p role="alert" className="absolute left-2 top-2 z-20 text-sm text-red-300">{preparationError}</p>}</>;
 }

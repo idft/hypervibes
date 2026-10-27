@@ -29,7 +29,30 @@ describe("Agent creation default sub-agents", () => {
     await act(async () => document.querySelector<HTMLInputElement>('dialog input[type="radio"]')!.click());
     await act(async () => [...document.querySelectorAll<HTMLButtonElement>("dialog button")].find((button) => button.textContent === "Apply")!.click());
   });
-  afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
+  afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
+  it("creates over HTTP without crypto.randomUUID and keeps the same request ID for retries", async () => {
+    const getRandomValues = vi.fn(globalThis.crypto.getRandomValues.bind(globalThis.crypto));
+    vi.stubGlobal("crypto", { getRandomValues });
+    await submit();
+    expect(getRandomValues).toHaveBeenCalled();
+    expect(mocks.create).toHaveBeenCalledWith("Desk", expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/), "main", model, true, "");
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Retry safely");
+    await submit();
+    expect(mocks.create.mock.calls[1]).toEqual(mocks.create.mock.calls[0]);
+    expect(getRandomValues).toHaveBeenCalledTimes(1);
+  });
+  it("shows errors before the mutation starts and allows another attempt", async () => {
+    const crypto = globalThis.crypto;
+    vi.stubGlobal("crypto", { getRandomValues: () => { throw new Error("Randomness unavailable"); } });
+    await submit();
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Randomness unavailable");
+    vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto) });
+    await submit();
+    expect(mocks.create).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Retry safely");
+    expect(container.textContent).not.toContain("Randomness unavailable");
+  });
   it("includes paused defaults by default, passes the selection and reuses the creation ID on retry", async () => {
     expect(container.textContent).toContain("Include default sub-agents");
     expect(container.textContent).toContain("Adds a connected Technical Analyst, Trader, and Daily Reviewer. All start paused.");

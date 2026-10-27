@@ -17,6 +17,9 @@ Never paste API keys into agent chat or instructions.
 For OpenAI OAuth, choose **Browser (default)** or **Device code**.
 Browser login opens the provider sign-in page in a new tab automatically.
 If your browser blocks the tab, use **Open provider sign-in** in the dialog.
+For OpenAI Codex on a remote server, choose **Device code**. Browser login
+redirects to localhost on your browser's machine; alternatively, paste the full
+redirect URL into the sign-in dialog to finish.
 
 ## Choose models
 

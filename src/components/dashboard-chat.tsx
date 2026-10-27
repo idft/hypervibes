@@ -1,3 +1,4 @@
+import { randomUuid } from "../web/random-uuid.js";
 import { useRef, useState } from "react";
 import { useRouter } from "@tanstack/react-router";
 import { useMutation } from "@tanstack/react-query";
@@ -7,7 +8,10 @@ export function DashboardChat({ agentId, enabled = true }: { agentId: string; en
   const router = useRouter();
   const [message, setMessage] = useState("");
   const mutation = useMutation({
-    mutationFn: sendAgentMessage,
+    mutationFn: async () => {
+      if (request.current?.message !== message) request.current = { message, id: randomUuid() };
+      return sendAgentMessage({ data: { id: agentId, message, requestId: request.current.id } });
+    },
     onSuccess: async () => { await router.navigate({ to: "/agents/$agentId/chat", params: { agentId } }); },
   });
   const pending = mutation.isPending;
@@ -19,8 +23,7 @@ export function DashboardChat({ agentId, enabled = true }: { agentId: string; en
     if (!enabled || inFlight.current || !message.trim()) return;
     inFlight.current = true;
     try {
-      if (request.current?.message !== message) request.current = { message, id: crypto.randomUUID() };
-      await mutation.mutateAsync({ data: { id: agentId, message, requestId: request.current.id } });
+      await mutation.mutateAsync();
     } catch { /* Query retains the error; preserve the idempotent submission. */ }
     finally { inFlight.current = false; }
   }

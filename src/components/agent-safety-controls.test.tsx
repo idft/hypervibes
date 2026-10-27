@@ -110,12 +110,14 @@ describe("agent safety controls", () => {
     expect(mocks.enabled).toHaveBeenCalledTimes(1);
     expect(mocks.enabled.mock.calls[0]![0]).toEqual({ data: { id: "agent", enabled: true } });
   });
-  it("keeps the close ID after lost responses and uncertainty, then permits an explicit new remainder close", async () => {
+  it("keeps the HTTP close UUID after lost responses and uncertainty, then permits an explicit new remainder close", async () => {
+    vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto) });
     mocks.close.mockRejectedValueOnce(new Error("Lost response"));
     await renderClose();
     await confirmClose();
     const first = mocks.close.mock.calls[0]![0] as { data: { id: string; symbol: string; requestId: string } };
     expect(first.data).toMatchObject({ id: "agent", symbol: "BTC" });
+    expect(first.data.requestId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     expect(Object.keys(first.data).sort()).toEqual(["id", "requestId", "symbol"]);
     mocks.close.mockResolvedValueOnce(outcome(true));
     await confirmClose();
@@ -129,6 +131,19 @@ describe("agent safety controls", () => {
     await confirmClose();
     expect(mocks.close.mock.calls[3]![0].data.requestId).not.toBe(first.data.requestId);
     expect(window.confirm).not.toHaveBeenCalled();
+  });
+  it("reports close preparation errors without sending an order and releases its submission guard", async () => {
+    const webCrypto = crypto;
+    vi.stubGlobal("crypto", { getRandomValues: () => { throw new Error("Random bytes unavailable"); } });
+    await renderClose();
+    await confirmClose();
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Random bytes unavailable");
+    expect(mocks.close).not.toHaveBeenCalled();
+    expect(button().disabled).toBe(false);
+    vi.stubGlobal("crypto", { getRandomValues: webCrypto.getRandomValues.bind(webCrypto) });
+    mocks.close.mockResolvedValueOnce(outcome(false));
+    await confirmClose();
+    expect(mocks.close).toHaveBeenCalledOnce();
   });
   it("shows only the close icon until confirmation, prevents duplicates and honors cancellation", async () => {
     await renderClose();

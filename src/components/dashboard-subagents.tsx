@@ -1,3 +1,4 @@
+import { randomUuid } from "../web/random-uuid.js";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -92,7 +93,7 @@ function DashboardRunDialog({ agentId, subagentId, onClose }: { agentId: string;
   const client = useQueryClient();
   const mutation = useMutation({
     mutationFn: async () => {
-      if (assignmentId.current?.task !== task) assignmentId.current = { task, id: crypto.randomUUID() };
+      if (assignmentId.current?.task !== task) assignmentId.current = { task, id: randomUuid() };
       try { return await subagentMutations(client, agentId).run({ id: subagentId, task, requestId: assignmentId.current.id }); }
       catch (cause) { throw new Error(`${cause instanceof Error ? cause.message : "Unable to confirm the assignment."} Retry with the same task to reuse its request ID.`, { cause }); }
     },

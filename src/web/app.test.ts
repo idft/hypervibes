@@ -135,6 +135,52 @@ describe("embedded HTTP host", () => {
     expect(runtimes).toHaveLength(0);
   });
 
+  it.each(["app-DVv5JCfs.js", "app-auds93B5.css", "font-hT_Q4pu-.woff2"])("caches production hashed assets immutably: %s", async (filename) => {
+    writeFileSync(join(config.buildDir, "client", "assets", filename), "hashed fixture");
+    const response = await app.inject(`/assets/${filename}?v=1`);
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toBe("hashed fixture");
+    expect(response.headers["cache-control"]).toBe("public, max-age=31536000, immutable");
+    const head = await app.inject({ method: "HEAD", url: `/assets/${filename}` });
+    expect(head.statusCode).toBe(200);
+    expect(head.body).toBe("");
+    expect(head.headers["cache-control"]).toBe(response.headers["cache-control"]);
+    const unchanged = await app.inject({ url: `/assets/${filename}`, headers: { "if-none-match": response.headers.etag! } });
+    expect(unchanged.statusCode).toBe(304);
+    expect(unchanged.headers["cache-control"]).toBe(response.headers["cache-control"]);
+    expect(runtimes).toHaveLength(0);
+  });
+
+  it("preserves caching for non-hashed assets, HTML, static files and API responses", async () => {
+    for (const filename of ["plain.js", "app-123.js", "app-123456789.js", "page-DVv5JCfs.html", "page-DVv5JCfs.htm"]) {
+      writeFileSync(join(config.buildDir, "client", "assets", filename), "ordinary fixture");
+      const response = await app.inject(`/assets/${filename}`);
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["cache-control"]).toBe("public, max-age=0");
+    }
+    writeFileSync(join(config.staticDir, "app-DVv5JCfs.js"), "static fixture");
+    expect((await app.inject("/static/app-DVv5JCfs.js")).headers["cache-control"]).toBeUndefined();
+    for (const url of ["/", "/api/auth/get-session"]) {
+      const response = await app.inject(url);
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+    }
+    const missing = await app.inject("/assets/missing-DVv5JCfs.js");
+    expect(missing.statusCode).toBe(404);
+    expect(missing.headers["cache-control"]).toBeUndefined();
+  });
+
+  it("does not apply production asset caching in development", async () => {
+    writeFileSync(join(config.buildDir, "client", "assets", "app-DVv5JCfs.js"), "production fixture");
+    await app.close();
+    start.fetch = async () => new Response("development fixture");
+    app = await createApp(config, { development: true, loadWeb: async () => start });
+    const response = await app.inject("/assets/app-DVv5JCfs.js");
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toBe("development fixture");
+    expect(response.headers["cache-control"]).toBe("no-store");
+  });
+
   it.each(["/static/missing.js", "/static/", "/static/.env", "/static/%2e%2e/secret.txt", "/assets/%2e%2e/secret.txt", "/src/main.ts"])("does not expose non-public files: %s", async (url) => {
     const response = await app.inject(url);
     expect(response.statusCode).toBeGreaterThanOrEqual(400);
