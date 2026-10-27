@@ -52,6 +52,33 @@ describe("per-Agent durable execution", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
+  it("publishes risk saves through the existing Agent feed without changing the Agent row", async () => {
+    const agent = await create();
+    const viewer = new AbortController();
+    let ready!: () => void;
+    let changed!: () => void;
+    const initial = new Promise<void>((resolve) => { ready = resolve; });
+    const update = new Promise<void>((resolve) => { changed = resolve; });
+    const snapshots: typeof agent[] = [];
+    const watching = runtime.agents.watchAgent("owner", agent.id, viewer.signal, (row) => {
+      snapshots.push(row);
+      if (snapshots.length === 1) ready();
+      else changed();
+    });
+    try {
+      await initial;
+      const input = { tradingEnabled: true, allowedInstruments: ["BTC"], maxOrderNotional: "100", maxTotalNotional: null };
+      await runtime.agents.risk.save(agent.id, input);
+      await update;
+      expect(snapshots).toHaveLength(2);
+      expect(snapshots[1]).toEqual(snapshots[0]);
+      expect(await runtime.agents.risk.get(agent.id)).toEqual(input);
+    } finally {
+      viewer.abort();
+      await watching;
+    }
+  });
+
   it("durably disables all execution, withdraws queued chat and preserves risk settings and exchange state", async () => {
     const agent = await create();
     expect(agent.enabled).toBe(true);

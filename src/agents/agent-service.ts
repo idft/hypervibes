@@ -168,7 +168,7 @@ export class AgentService {
     this.charts = new ChartService(database);
     this.execution = new ExecutionContextService(database, (error) => options.logger?.error(error, "Orchestrator insights snapshot failed"));
     this.orders.installAdmission(this.execution);
-    this.risk = new RiskSettingsService(database);
+    this.risk = new RiskSettingsService(database, (id) => this.notify(id));
     this.research = new ResearchService(database, hyperliquid, this.risk, (error) => options.logger?.error(error, "Artifact maintenance failed"));
     this.indicators = new IndicatorService(database, hyperliquid.charts, new IndicatorRuntime({}, (message) => options.logger?.warn(message)), (error) => options.logger?.error(error, "Indicator catalog listener failed"));
     this.subagents = new SubagentService(db, database, providers, {

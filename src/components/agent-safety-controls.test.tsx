@@ -1,17 +1,19 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
+import { QueryClientProvider, QueryObserver, type QueryClient } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestQueryClient } from "../test/query.js";
-const mocks = vi.hoisted(() => ({ enabled: vi.fn(), close: vi.fn(), invalidate: vi.fn().mockResolvedValue(undefined) }));
+const mocks = vi.hoisted(() => ({ enabled: vi.fn(), close: vi.fn(), risk: vi.fn(), invalidate: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("../web/agents.js", () => ({ setAgentEnabled: mocks.enabled, closeAgentPosition: mocks.close }));
+vi.mock("../web/risk.js", () => ({ getRiskSettings: mocks.risk }));
 vi.mock("../web/agent-queries.js", () => ({ agentQueryOptions: (id: string) => ({ queryKey: ["agent", id] }), agentsQueryOptions: () => ({ queryKey: ["agents"] }) }));
 vi.mock("@tanstack/react-router", () => ({ useRouter: () => ({ invalidate: mocks.invalidate }) }));
 import { AgentEnablementControl } from "./agent-enablement-control.js";
 import { ClosePositionButton } from "./close-position-button.js";
 import { AgentLifecycleSubscriber } from "./agent-lifecycle-subscriber.js";
 import { AgentEventsProvider } from "./agent-events.js";
+import { riskQueryOptions } from "../web/risk-queries.js";
 
 const outcome = (uncertain = false, remainingSize: string | null = "0.001") => ({
   requestId: "test", complete: false, remainingSize, remainingOrders: 0, warnings: uncertain ? ["Unknown outcome; reconcile"] : ["Partial fill"],
@@ -46,6 +48,38 @@ describe("agent safety controls", () => {
     await act(async () => Source.current.dispatchEvent(new MessageEvent("agent", { data: JSON.stringify({ id: "agent", enabled: false, state: "ready" }) })));
     expect(client.getQueryData(["agent", "agent"])).toMatchObject({ enabled: false });
     expect(client.getQueryData(["agents"])).toEqual([{ id: "agent", enabled: false, state: "ready", tradingEnabled: true }]);
+  });
+
+  it("refreshes trading settings from agent events without polling", async () => {
+    class Source extends EventTarget {
+      static current: Source;
+      close = vi.fn();
+      constructor() { super(); Source.current = this; }
+    }
+    vi.stubGlobal("EventSource", Source);
+    const options = riskQueryOptions("agent");
+    const settings = { tradingEnabled: false, allowedInstruments: null, maxOrderNotional: null, maxTotalNotional: null };
+    client.setQueryData(options.queryKey, settings);
+    const observer = new QueryObserver(client, { ...options, staleTime: Infinity });
+    const unsubscribe = observer.subscribe(() => {});
+    try {
+      await act(async () => root.render(<QueryClientProvider client={client}><AgentEventsProvider agentId="agent"><AgentLifecycleSubscriber agentId="agent" /></AgentEventsProvider></QueryClientProvider>));
+      const emit = (id: string) => act(async () => { Source.current.dispatchEvent(new MessageEvent("agent", { data: JSON.stringify({ id, enabled: true, state: "ready" }) })); });
+      await emit("other");
+      expect(mocks.risk).not.toHaveBeenCalled();
+      mocks.risk.mockResolvedValueOnce({ ...settings, tradingEnabled: true });
+      await emit("agent");
+      expect(client.getQueryData(options.queryKey)).toEqual({ ...settings, tradingEnabled: true });
+      expect(mocks.risk).toHaveBeenCalledExactlyOnceWith({ data: { agentId: "agent" } });
+      // A second event must refresh risk even when the agent row itself is unchanged.
+      mocks.risk.mockResolvedValueOnce(settings);
+      await emit("agent");
+      expect(client.getQueryData(options.queryKey)).toEqual(settings);
+      expect(mocks.risk).toHaveBeenCalledTimes(2);
+      vi.useFakeTimers();
+      await act(async () => vi.advanceTimersByTime(60_000));
+      expect(mocks.risk).toHaveBeenCalledTimes(2);
+    } finally { unsubscribe(); }
   });
 
   it("arms inline without a browser prompt and cancels without disabling the agent", async () => {

@@ -9,20 +9,15 @@ import { SubagentEnabledToggle } from "./subagent-enabled-toggle.js";
 import { RunSubagentDialog } from "./run-subagent-dialog.js";
 import type { DashboardSubagent } from "../agents/subagent-dashboard.js";
 import { RelativeTime, RunStatus, runUrl } from "./subagent-run-history.js";
-import { useAgentEvent, useAgentEventsStatus } from "./agent-events.js";
+import { useAgentEventsStatus } from "./agent-events.js";
 
 export function DashboardSubagents({ agentId, subagents, agentEnabled, error }: { agentId: string; subagents: DashboardSubagent[]; agentEnabled: boolean; error?: string }) {
   const [runTarget, setRunTarget] = useState<string | null>(null);
-  const [workers, setWorkers] = useState(subagents);
+  const workers = subagents;
+  const loadError = error;
   const [refreshError, setRefreshError] = useState("");
-  const [loadError, setLoadError] = useState(error);
-  useEffect(() => { setWorkers(subagents); setLoadError(error); }, [subagents, error]);
   useEffect(() => { if (!agentEnabled) setRunTarget(null); }, [agentEnabled]);
   const { interrupted, controlMessage, streamErrors } = useAgentEventsStatus();
-  useAgentEvent("subagents", (event) => {
-    setWorkers(JSON.parse(event.data) as DashboardSubagent[]);
-    setRefreshError(""); setLoadError(undefined);
-  });
   useEffect(() => {
     const topicError = streamErrors["subagents"];
     if (topicError) setRefreshError(topicError);

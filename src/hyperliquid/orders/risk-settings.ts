@@ -34,18 +34,20 @@ function settings(row: { trading_enabled: number; allowed_instruments: string | 
 }
 
 export class RiskSettingsService {
-  constructor(private readonly db: SharedDatabase) {}
+  constructor(private readonly db: SharedDatabase, private readonly changed?: (agentId: string) => void) {}
   async get(agentId: string): Promise<RiskSettings> {
     return settings(await this.db.get(`SELECT ${columns} FROM hv_risk_settings WHERE agent_id=?`, agentId));
   }
   async save(agentId: string, value: unknown): Promise<RiskSettings> {
     const input = riskSettingsInput(value), now = Date.now();
-    return settings(await this.db.transaction(async (tx) => {
+    const saved = settings(await this.db.transaction(async (tx) => {
       const agent = await tx.get<{ state: string }>("SELECT state FROM hv_agents WHERE id=?", agentId);
       if (!agent) throw new AgentError("Agent not found", 404);
       if (agent.state === "stopping" || agent.state === "stopped") throw new AgentError("Agent is being deleted", 409);
       await tx.run("INSERT INTO hv_risk_settings(agent_id,trading_enabled,allowed_instruments,max_order_notional,max_total_notional,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(agent_id) DO UPDATE SET trading_enabled=excluded.trading_enabled,allowed_instruments=excluded.allowed_instruments,max_order_notional=excluded.max_order_notional,max_total_notional=excluded.max_total_notional,updated_at=excluded.updated_at", agentId, input.tradingEnabled ? 1 : 0, input.allowedInstruments && JSON.stringify(input.allowedInstruments), input.maxOrderNotional, input.maxTotalNotional, now);
       return await tx.get(`SELECT ${columns} FROM hv_risk_settings WHERE agent_id=?`, agentId);
     }));
+    this.changed?.(agentId);
+    return saved;
   }
 }

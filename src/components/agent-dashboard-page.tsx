@@ -8,6 +8,7 @@ import { DashboardSubagents } from "./dashboard-subagents.js";
 import { BalanceSparkline } from "./balance-sparkline.js";
 import { ClosePositionButton } from "./close-position-button.js";
 import { DashboardChat } from "./dashboard-chat.js";
+import { AgentSetupChecklist } from "./agent-setup-checklist.js";
 
 function Panel({ title, children }: { title: string; children: ReactNode }) {
   return <section className="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6"><h3 className="mb-4 text-lg font-medium text-white">{title}</h3>{children}</section>;
@@ -29,10 +30,23 @@ const cell = "whitespace-nowrap px-3 py-3 text-left";
 
 const noSubagents: DashboardSubagent[] = [];
 
-export function AgentDashboardPage({ id, initial, enabled = true, subagents = noSubagents, subagentsError }: { id: string; initial: AgentDashboard; enabled?: boolean; subagents?: DashboardSubagent[]; subagentsError?: string }) {
+export function AgentDashboardPage({ id, initial, enabled = true, tradingEnabled, subagents, subagentsError }: { id: string; initial: AgentDashboard; enabled?: boolean; tradingEnabled?: boolean; subagents?: DashboardSubagent[]; subagentsError?: string }) {
   const [snapshot, setSnapshot] = useState(initial);
+  const [workers, setWorkers] = useState(subagents);
+  const [workersError, setWorkersError] = useState(subagentsError);
+  // Another topic can reconnect first; setup must wait for fresh worker data.
+  const [workersCurrent, setWorkersCurrent] = useState(true);
+  useEffect(() => { setWorkers(subagents); setWorkersError(subagentsError); setWorkersCurrent(true); }, [id, subagents, subagentsError]);
+  useAgentEvent("subagents", (event) => {
+    setWorkers(JSON.parse(event.data) as DashboardSubagent[]);
+    setWorkersError(undefined);
+    setWorkersCurrent(true);
+  });
   const [error, setError] = useState("");
   const { interrupted, controlMessage, streamErrors } = useAgentEventsStatus();
+  useEffect(() => {
+    if (interrupted || streamErrors.subagents) setWorkersCurrent(false);
+  }, [interrupted, streamErrors.subagents]);
   const hasAddress = Boolean(initial.address);
   useAgentEvent("dashboard", (event) => {
     setSnapshot(JSON.parse(event.data) as AgentDashboard);
@@ -57,6 +71,7 @@ export function AgentDashboardPage({ id, initial, enabled = true, subagents = no
   return <div className="flex h-[calc(100dvh-4.5rem)] min-h-0 w-full flex-col gap-2 overflow-hidden sm:h-[calc(100dvh-5rem)]">
     <h2 className="sr-only">Dashboard</h2>
     <div className="max-h-[55%] shrink-0 space-y-2 overflow-y-auto">
+    {tradingEnabled !== undefined && workers && workersCurrent && !workersError && !streamErrors.subagents && !interrupted && <AgentSetupChecklist agentId={id} tradingEnabled={tradingEnabled} subagents={workers} />}
     {!snapshot.address ? <Panel title="Trading account"><p className="text-sm text-zinc-400">This agent is missing its required Hyperliquid account. Create a new agent with a linked account.</p></Panel> : <>
       <section aria-label="Account overview" className="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
         <p role="status" className="mb-5 flex items-center gap-2 text-xs text-zinc-400"><span aria-hidden="true" className={`h-2 w-2 rounded-full ${connectionColor}`} />{connectionLabel}</p>
@@ -73,7 +88,7 @@ export function AgentDashboardPage({ id, initial, enabled = true, subagents = no
       <Panel title="Open orders">{snapshot.orders === null ? <p className="text-sm text-amber-200">Orders unavailable.</p> : snapshot.orders.length === 0 ? <p className="text-sm text-zinc-500">No open orders.</p> : <div className="overflow-x-auto"><table className="w-full text-sm text-zinc-300"><thead className="text-xs text-zinc-500"><tr>{["Market", "Side", "Type", "Size", "Price / trigger"].map((label) => <th key={label} className={cell}>{label}</th>)}</tr></thead><tbody className="divide-y divide-zinc-800">{snapshot.orders.map((order) => <tr key={order.id}><td className={cell}><InstrumentLabel symbol={order.coin} /></td><td className={cell}>{order.side}</td><td className={cell}>{order.type}</td><td className={cell}><span className="font-mono tabular-nums">{formatAmountText(order.size)}</span></td><td className={cell}><span className="font-mono tabular-nums">{formatAmountText(order.triggerPrice ?? order.price)}</span></td></tr>)}</tbody></table></div>}</Panel>
     </>}
     </div>
-    <DashboardSubagents agentId={id} agentEnabled={enabled} subagents={subagents} error={subagentsError} />
+    <DashboardSubagents agentId={id} agentEnabled={enabled} subagents={workers ?? noSubagents} error={workersError} />
     <DashboardChat key={id} agentId={id} enabled={enabled} />
   </div>;
 }

@@ -43,6 +43,49 @@ describe("Agent dashboard", () => {
     await act(async () => {});
   });
   afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
+  it("places setup above the account stats and updates it from live sub-agent activity", async () => {
+    const worker = { id: "worker", name: "Research", enabled: false, schedule: "", nextRunAt: null, runs: [] };
+    await act(async () => root.render(<Page id="fixture" initial={initial} tradingEnabled={false} subagents={[worker]} />));
+    const setup = () => container.querySelector('[aria-label="Agent setup"]');
+    expect(setup()?.nextElementSibling?.getAttribute("aria-label")).toBe("Account overview");
+    expect(setup()?.textContent).toContain("Enable sub-agents");
+    // Enabling trading alone must leave the paused-worker step visible.
+    await act(async () => root.render(<Page id="fixture" initial={initial} tradingEnabled subagents={[worker]} />));
+    expect(setup()?.textContent).toContain("Completed: Enable Trading");
+    expect(setup()?.querySelector('[aria-current="step"]')?.textContent).toContain("Enable sub-agents");
+    await act(async () => workerSource().sendSubagents([{ ...worker, enabled: true }]));
+    expect(setup()).toBeNull();
+    await act(async () => workerSource().sendSubagents([worker]));
+    expect(setup()).not.toBeNull();
+    await act(async () => workerSource().sendSubagents([{ ...worker, runs: [{ id: "run", status: "completed", createdAt: 1, result: "Done" }] }]));
+    expect(setup()).toBeNull();
+  });
+  it("keeps setup visible when sub-agents are enabled before trading", async () => {
+    const worker = { id: "worker", name: "Research", enabled: false, schedule: "", nextRunAt: null, runs: [] };
+    await act(async () => root.render(<Page id="fixture" initial={initial} tradingEnabled={false} subagents={[worker]} />));
+    await act(async () => workerSource().sendSubagents([{ ...worker, enabled: true }]));
+    const setup = container.querySelector('[aria-label="Agent setup"]');
+    expect(setup?.textContent).toContain("Completed: Enable sub-agents");
+    expect(setup?.querySelector('[aria-current="step"]')?.textContent).toContain("Enable Trading");
+  });
+  it("does not show setup until trading and sub-agent settings are known", async () => {
+    const setup = () => container.querySelector('[aria-label="Agent setup"]');
+    await act(async () => root.render(<Page id="fixture" initial={initial} tradingEnabled={false} />));
+    expect(setup()).toBeNull();
+    await act(async () => root.render(<Page id="fixture" initial={initial} subagents={[]} />));
+    expect(setup()).toBeNull();
+    await act(async () => root.render(<Page id="fixture" initial={initial} tradingEnabled={false} subagents={[]} subagentsError="Please retry." />));
+    expect(setup()).toBeNull();
+    await act(async () => workerSource().sendSubagents([]));
+    expect(setup()?.textContent).toContain("Create a new sub-agent");
+    await act(async () => workerSource().onerror?.());
+    expect(setup()).toBeNull();
+    // An account update does not prove that the worker snapshot has recovered.
+    await act(async () => source().send(initial));
+    expect(setup()).toBeNull();
+    await act(async () => workerSource().sendSubagents([]));
+    expect(setup()).not.toBeNull();
+  });
   it("sends dashboard chat on HTTP, prevents duplicates and reuses its UUID after failure", async () => {
     vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto) });
     const section = container.querySelector('[aria-label="Chat"]')!;

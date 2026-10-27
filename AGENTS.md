@@ -20,6 +20,14 @@ Pi Durable. See `pi.md` for design research and history; use the root
 * **Frontend:** TanStack Start + React, built with Vite (`vite.app.config.ts`,
   output in `.build/`). Routes live in `src/routes/`; the generated route tree is
   `src/routeTree.gen.ts` (`pnpm generate:routes`).
+* **Live updates — no polling:** Use the existing multiplexed SSE events system
+  (`src/web/agent-events.ts`, `src/components/agent-events.tsx`) for application
+  updates. Agent pages share one connection through `AgentEventsProvider`;
+  subscribe with `useAgentEvent`. Notify subscribers after committed changes,
+  then update or invalidate the relevant TanStack Query caches from the event.
+  Extend the existing event flow when a change is not covered. Do not add polling,
+  `refetchInterval`, or timer-based data refreshes as a shortcut. Initial loads
+  and event-triggered refetches are fine; local display timers are not polling.
 * **Auth:** better-auth with Drizzle adapter (`src/auth-options.ts`,
   `src/db/auth-schema.ts`).
 * **Database:** single SQLite file via Node's built-in `node:sqlite`, opened by
