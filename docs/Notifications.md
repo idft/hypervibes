@@ -1,6 +1,10 @@
 # Notifications
 
-Open Notifications inside an agent to read its messages and order activity.
+Open Notifications inside an agent to read its messages, order activity, and
+warnings about assignments discarded before starting or waiting on paused workers.
+These system warnings remain in the app even when Telegram notifications are off.
+Expired assignments are not retried; inspect the current account before starting
+new work.
 
 ## Read notifications
 
@@ -11,9 +15,9 @@ Open Notifications inside an agent to read its messages and order activity.
 
 ## Choose what you receive
 
-Open Settings, then Notifications, to:
+Open Settings, then Telegram, to:
 
-- Enable or disable notifications.
+- Enable or disable Telegram notifications.
 - Include order submissions.
 - Include order fills, including external or manual trades on the linked account.
 

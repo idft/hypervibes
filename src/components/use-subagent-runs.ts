@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import { runPagination, type InboxRequestSummary, type RunHistory, type RunPagination, type RunSummary } from "../agents/subagent-history.js";
+import { runPagination, type RunHistory, type RunPagination, type RunSummary } from "../agents/subagent-history.js";
 
-type InitialHistory = { inbox?: InboxRequestSummary[]; runs: RunSummary[]; pagination?: RunPagination; schedulerError: string | null };
+type InitialHistory = { runs: RunSummary[]; pagination?: RunPagination; schedulerError: string | null };
 /** One page-scoped subscription; reconnects receive a fresh backend snapshot. */
 export function useSubagentRuns(agentId: string, subagentId: string | undefined, initial?: InitialHistory) {
-  const [history, setHistory] = useState<RunHistory>(() => ({ inbox: initial?.inbox, runs: initial?.runs ?? [], pagination: initial?.pagination ?? runPagination(initial?.runs.length ?? 0), schedulerError: initial?.schedulerError ?? null }));
+  const [history, setHistory] = useState<RunHistory>(() => ({ runs: initial?.runs ?? [], pagination: initial?.pagination ?? runPagination(initial?.runs.length ?? 0), schedulerError: initial?.schedulerError ?? null }));
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [connectionError, setConnectionError] = useState("");

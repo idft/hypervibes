@@ -35,7 +35,7 @@ export function SubagentDetailPage({ agentId, subagentId, choices }: { agentId: 
   const [runOpen, setRunOpen] = useState(false);
   const inFlight = useRef(false), assignmentId = useRef<{ task: string; id: string } | null>(null);
   const main = definition.kind === "orchestrator";
-  const { history: { runs, pagination, schedulerError, schedule, inbox }, loading, connectionError, setPage } = useSubagentRuns(agentId, main ? undefined : definition.id, initial);
+  const { history: { runs, pagination, schedulerError, schedule }, loading, connectionError, setPage } = useSubagentRuns(agentId, main ? undefined : definition.id, initial);
   const nextRunAt = schedule && schedule.updatedAt >= definition.updatedAt ? schedule.nextRunAt : definition.nextRunAt;
   const selected = choices.find((choice) => modelKey(choice) === modelKey(form));
   const set = <K extends keyof SubagentInput>(key: K, value: SubagentInput[K]) => setForm((current) => ({ ...current, [key]: value }));
@@ -160,7 +160,6 @@ export function SubagentDetailPage({ agentId, subagentId, choices }: { agentId: 
       </fieldset>
     </form>
     {runOpen && !main && <RunSubagentDialog task={task} onTaskChange={setTask} onCancel={() => setRunOpen(false)} onRun={startRun} />}
-    {!main && !!inbox?.length && <section className={panel}><h3 className="font-medium text-white">Worker inbox</h3><p className="text-xs text-zinc-400">Pending and recently discarded requests (up to 25). Paused workers retain requests until resumed or discarded; expired requests will not execute.</p>{inbox.map((request) => <div key={request.id} className="space-y-1 border-t border-zinc-800 pt-3 text-sm"><p className="text-zinc-300">{request.intent} · {request.reason}</p><p className="break-words text-xs text-zinc-400">{request.preview}</p>{request.discardedReason ? <p className="text-xs text-amber-200">{request.discardedReason}</p> : <button type="button" disabled={pending} onClick={() => { void perform("stop", request.id); }} className="cursor-pointer text-xs text-red-300 hover:underline disabled:cursor-wait">Discard request</button>}</div>)}</section>}
     {!main && <section className={panel}><header className="flex items-center justify-between"><h3 className="font-medium text-white">Run history</h3></header>{schedulerError && <p role="alert" className="text-sm text-red-300">{schedulerError}</p>}{connectionError && <p role="status" className="text-sm text-amber-200">{connectionError}</p>}<SubagentRunHistory agentId={agentId} runs={runs} pending={pending} onStop={(id) => { void perform("stop", id); }} pagination={pagination} loading={loading} onPage={setPage} /></section>}
     {archiveOpen && !main && <ArchiveSubagentDialog name={definition.name} onCancel={() => setArchiveOpen(false)} onConfirm={() => { setArchiveOpen(false); void perform("archive"); }} />}
     {error && <p role="alert" className="text-sm text-red-300">{error}</p>}

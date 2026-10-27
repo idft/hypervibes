@@ -1,3 +1,5 @@
+import type { NotificationService } from "../notifications/notification-service.js";
+import type { SqliteExecutor } from "@earendil-works/pi-durable/storage/sqlite";
 import { BACKGROUND_CONTEXT as context, withAbortSignal } from "@earendil-works/chord/context";
 import { getSupportedThinkingLevels, type Models } from "@earendil-works/pi-ai/models";
 import { defineDoc, defineDocFamily, InboxDoc, LiveDoc, type AgentChange, type Conversation, type ConversationId, type Cursor, type EntryRecord, type Extension, type Harness, type ModelRef } from "@earendil-works/pi-durable";
@@ -76,7 +78,6 @@ export class SubagentService {
   private readonly historyListeners = new Map<string, Set<() => void>>();
   private readonly historyShutdown = new AbortController();
   private readonly historyFeeds = new Set<Promise<void>>();
-  private readonly inboxSignatures = new Map<string, string>();
   private schedulerFailure: string | null = null;
   get schedulerError() { return this.schedulerFailure; }
   set schedulerError(value: string | null) {
@@ -89,7 +90,7 @@ export class SubagentService {
     for (const listener of this.historyListeners.get(id) ?? []) listener();
     this.dashboardChanged(agentId);
   }
-  constructor(private readonly db: ApplicationDatabase, private readonly database: SharedDatabase, private readonly providers: ProviderService, private readonly host: SubagentHost, private readonly execution: ExecutionContextService, private readonly injectedModels = false, private readonly log?: FastifyBaseLogger) {}
+  constructor(private readonly db: ApplicationDatabase, private readonly database: SharedDatabase, private readonly providers: ProviderService, private readonly host: SubagentHost, private readonly execution: ExecutionContextService, private readonly notifications: NotificationService, private readonly injectedModels = false, private readonly log?: FastifyBaseLogger) {}
   extension(agentId: string, hyperliquid: Extension, capabilities: readonly Extension[]) { return createSubagentExtension(this, agentId, hyperliquid, capabilities, this.execution); }
   async bind(agent: AgentRow, harness: Harness, main: Conversation, hyperliquid: Extension, execution: SubagentExtension, capabilities: readonly Extension[], orchestratorInsights: Extension) {
     const resolved = await main.agent(context);
@@ -141,13 +142,18 @@ export class SubagentService {
   /** Clear application queues without changing each worker's configured enablement. */
   async discardPending(agentId: string) {
     const now = Date.now();
-    const affected = await this.database.appTransaction(async (db) => {
-      const discarded = await db.update(hvWorkerRequests).set({ discardedReason: "Agent disabled; request will not replay" }).where(and(eq(hvWorkerRequests.agentId, agentId), isNull(hvWorkerRequests.runId), isNull(hvWorkerRequests.discardedReason))).returning({ id: hvWorkerRequests.subagentId }).all();
+    const affected = await this.database.appTransaction(async (db, tx) => {
+      const discarded = await db.update(hvWorkerRequests).set({ discardedReason: "Agent disabled; request will not replay" }).where(and(eq(hvWorkerRequests.agentId, agentId), isNull(hvWorkerRequests.runId), isNull(hvWorkerRequests.discardedReason))).returning().all();
+      for (const request of discarded) await this.requestWarningTx(tx, request, request.discardedReason!);
       const definitions = await db.select().from(hvSubagents).where(and(eq(hvSubagents.agentId, agentId), eq(hvSubagents.kind, "worker"))).all();
       for (const row of definitions) await db.update(hvSubagents).set({ nextRunAt: row.enabled && !row.archived ? nextCandleRun(now, row.schedule, row.delaySeconds) : null }).where(eq(hvSubagents.id, row.id)).run();
-      return [...new Set(discarded.map((row) => row.id))];
+      return [...new Set(discarded.map((row) => row.subagentId))];
     });
     for (const id of affected) this.historyChanged(agentId, id);
+    if (affected.length) {
+      this.notifications.changed(agentId);
+      this.log?.warn({ agentId }, "Queued worker requests discarded because Agent was disabled");
+    }
     this.dashboardChanged(agentId);
   }
   /** Only claim cancellation after the harness has confirmed its ownership tree is idle. */
@@ -219,7 +225,7 @@ export class SubagentService {
       const runs = await db.select().from(hvSubagentRuns).where(filter).orderBy(desc(hvSubagentRuns.createdAt), desc(hvSubagentRuns.id)).limit(runHistoryPageSize).all();
       return { runs, pagination: runPagination(total) };
     });
-    return { definition, runs, pagination, schedulerError: this.schedulerError, workers: (await this.db.select({ id: hvSubagents.id, name: hvSubagents.name, archived: hvSubagents.archived, tools: hvSubagents.tools }).from(hvSubagents).where(and(eq(hvSubagents.agentId, agentId), eq(hvSubagents.kind, "worker"))).all()).filter((worker) => !worker.archived || [...definition.triggers.researchSources, ...definition.triggers.workerDelegates].includes(worker.id)), inbox: await this.inboxHistory(agentId, id) };
+    return { definition, runs, pagination, schedulerError: this.schedulerError, workers: (await this.db.select({ id: hvSubagents.id, name: hvSubagents.name, archived: hvSubagents.archived, tools: hvSubagents.tools }).from(hvSubagents).where(and(eq(hvSubagents.agentId, agentId), eq(hvSubagents.kind, "worker"))).all()).filter((worker) => !worker.archived || [...definition.triggers.researchSources, ...definition.triggers.workerDelegates].includes(worker.id)) };
   }
   async history(userId: string, agentId: string, id: string, page = 1): Promise<RunHistory> {
     if (!Number.isSafeInteger(page) || page < 1) throw new AgentError("Invalid history page");
@@ -233,11 +239,8 @@ export class SubagentService {
       // belong on run details. Keep 50 valid, large assignments below the SSE cap.
       const { id: runId, subagentId, source, task, status, createdAt } = hvSubagentRuns;
       const runs = await db.select({ id: runId, subagentId, source, task: sql<string>`substr(${task}, 1, 512)`, status, createdAt }).from(hvSubagentRuns).where(filter).orderBy(desc(createdAt), desc(runId)).limit(runHistoryPageSize).offset((pagination.page - 1) * runHistoryPageSize).all();
-      return { runs, pagination, inbox: await this.inboxHistory(agentId, id, db), schedulerError: this.schedulerError, schedule: { nextRunAt: definition.enabled && !definition.archived ? definition.nextRunAt : null, updatedAt: definition.updatedAt } };
+      return { runs, pagination, schedulerError: this.schedulerError, schedule: { nextRunAt: definition.enabled && !definition.archived ? definition.nextRunAt : null, updatedAt: definition.updatedAt } };
     });
-  }
-  private inboxHistory(agentId: string, id: string, db = this.db) {
-    return db.select({ id: hvWorkerRequests.id, intent: sql<string>`json_extract(${hvWorkerRequests.payload}, '$.intent')`, reason: sql<string>`json_extract(${hvWorkerRequests.payload}, '$.reason')`, preview: sql<string>`substr(json_extract(${hvWorkerRequests.payload}, '$.task'), 1, 300)`, createdAt: hvWorkerRequests.createdAt, discardedReason: hvWorkerRequests.discardedReason }).from(hvWorkerRequests).where(and(eq(hvWorkerRequests.agentId, agentId), eq(hvWorkerRequests.subagentId, id), isNull(hvWorkerRequests.runId))).orderBy(desc(hvWorkerRequests.createdAt), desc(hvWorkerRequests.id)).limit(25).all();
   }
   async watchDashboard(userId: string, agentId: string, signal: AbortSignal, publish: (snapshot: DashboardSubagent[]) => void): Promise<void> {
     this.admit(true);
@@ -623,15 +626,48 @@ export class SubagentService {
     if (!request) return view(await this.internalRun(agentId, id));
     return { request, run: request.runId ? view(await this.internalRun(agentId, request.runId)) : null };
   }
+  private async requestWarningTx(tx: SqliteExecutor, request: WorkerRequest, reason: string, paused = false) {
+    const worker = await tx.get<{ name: string }>("SELECT name FROM hv_subagents WHERE agent_id=? AND id=?", request.agentId, request.subagentId);
+    const name = worker?.name ?? "Worker";
+    return this.notifications.systemWarningTx(tx, request.agentId, `worker-request:${request.id}:${paused ? "paused" : "discarded"}`, {
+      title: `${name} assignment ${paused ? "waiting while paused" : reason.startsWith("Request expired") ? "expired before starting" : "discarded before starting"}`,
+      body: `${reason}\n\nRequest: ${request.id}\nAssignment: ${request.payload.task.slice(0, 10000)}\n\nExisting exchange orders were not cancelled. Inspect the current account before starting a new assignment.`,
+      severity: "warning",
+    }, { source: name, subagentId: request.subagentId });
+  }
+  private async discardRequest(request: WorkerRequest, reason: string) {
+    const discarded = await this.database.appTransaction(async (db, tx) => {
+      const row = await db.update(hvWorkerRequests).set({ discardedReason: reason }).where(and(eq(hvWorkerRequests.id, request.id), isNull(hvWorkerRequests.runId), isNull(hvWorkerRequests.discardedReason))).returning().get();
+      if (!row) return false;
+      await this.requestWarningTx(tx, row, reason);
+      return true;
+    });
+    if (discarded) {
+      this.notifications.changed(request.agentId);
+      this.log?.warn({ agentId: request.agentId, subagentId: request.subagentId, requestId: request.id, reason }, "Worker request discarded before dispatch");
+      this.historyChanged(request.agentId, request.subagentId);
+    }
+  }
   private async drainInbox(agentId: string, id: string, now: number) {
     await assertAgentExecutable(this.database, agentId);
     const binding = this.bindings.get(agentId); if (!binding) return;
     const target = await this.definition(agentId, id);
     if (target.archived || !target.triggers.inboxEnabled) {
-      await this.db.update(hvWorkerRequests).set({ discardedReason: "Worker inbox disabled or archived" }).where(and(eq(hvWorkerRequests.subagentId, id), isNull(hvWorkerRequests.runId), isNull(hvWorkerRequests.discardedReason))).run();
+      const requests = await this.db.select().from(hvWorkerRequests).where(and(eq(hvWorkerRequests.subagentId, id), isNull(hvWorkerRequests.runId), isNull(hvWorkerRequests.discardedReason))).all();
+      for (const request of requests) await this.discardRequest(request, "Worker inbox disabled or archived");
       return;
     }
-    if (!target.enabled) return;
+    if (!target.enabled) {
+      const stalled = await this.db.select().from(hvWorkerRequests).where(and(eq(hvWorkerRequests.subagentId, id), isNull(hvWorkerRequests.runId), isNull(hvWorkerRequests.discardedReason), lte(hvWorkerRequests.createdAt, now - target.timeoutSeconds * 1000))).all();
+      for (const request of stalled) {
+        const warning = await this.database.transaction((tx) => this.requestWarningTx(tx, request, "The worker is paused. This request remains queued, but it will expire before dispatch when the worker resumes.", true));
+        if (warning.created) {
+          this.notifications.changed(agentId);
+          this.log?.warn({ agentId, subagentId: id, requestId: request.id }, "Worker request waiting while paused");
+        }
+      }
+      return;
+    }
     const requests = await this.db.select().from(hvWorkerRequests).where(and(eq(hvWorkerRequests.subagentId, id), isNull(hvWorkerRequests.runId), isNull(hvWorkerRequests.discardedReason))).orderBy(sql`CASE json_extract(${hvWorkerRequests.payload}, '$.intent') WHEN 'account_event' THEN 0 WHEN 'operator_trade' THEN 1 ELSE 2 END`, asc(hvWorkerRequests.createdAt), asc(hvWorkerRequests.id)).limit(256).all();
     const pending = [];
     for (const request of requests) {
@@ -640,12 +676,9 @@ export class SubagentService {
         : payload.reason === "fill" ? !target.triggers.fills : payload.reason === "order_status" ? !target.triggers.orderChanges
           : !target.delegatable || (payload.callerRunId !== null && !target.triggers.workerDelegates.includes(payload.callerSubagentId ?? ""));
       if (revoked || now >= request.createdAt + target.timeoutSeconds * 1000) {
-        await this.db.update(hvWorkerRequests).set({ discardedReason: revoked ? "Trigger/delegation permission removed" : "Request expired before dispatch; inspect account before requesting again" }).where(eq(hvWorkerRequests.id, request.id)).run();
-        this.historyChanged(agentId, id);
+        await this.discardRequest(request, revoked ? "Trigger/delegation permission removed" : "Request expired before dispatch; inspect account before requesting again");
       } else pending.push(request);
     }
-    const signature = pending.map((request) => request.id).join(",");
-    if (this.inboxSignatures.get(id) !== signature) { this.inboxSignatures.set(id, signature); this.historyChanged(agentId, id); }
     if (!pending.length) return;
     const running = await this.db.select().from(hvSubagentRuns).where(and(eq(hvSubagentRuns.agentId, agentId), inArray(hvSubagentRuns.status, active))).all();
     if (running.length >= 4 || running.some((run) => run.subagentId === id) || await this.recoveryPending(agentId, id, binding)) return;

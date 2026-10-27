@@ -31,7 +31,8 @@ They start paused so you can review their configuration first.
 
 - Browse run history and open a run's assignment, result, and recorded activity.
 - Inspect saved publications and supporting evidence.
-- Stop a run or discard a pending inbox request.
+- Stop a run.
+- Check Notifications for expired assignments and work waiting on paused workers.
 - Archive a worker while preserving its history.
 - Unarchive a worker when needed. It returns paused.
 

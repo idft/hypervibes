@@ -234,14 +234,19 @@ describe("subagent pages", () => {
     await click("Apply");
     expect(mocks.saveSubagentSection).toHaveBeenCalledWith({ data: { agentId: definition.agentId, id: definition.id, section: "triggers", settings: { triggers: { ...triggers, researchSources: [] } } } });
   });
-  it("shows queued event provenance and allows discarding a pending request", async () => {
-    await render();
-    await act(async () => HistorySource.instances.at(-1)!.dispatchEvent(new MessageEvent("runs", { data: JSON.stringify({ runs: [], pagination: { page: 1, pages: 1, total: 0, pageSize: 50 }, schedulerError: null, inbox: [{ id: "request-1", intent: "account_event", reason: "fill", preview: "Partial BTC fill", createdAt: 1, discardedReason: null }] }) })));
-    expect(container.textContent).toContain("Partial BTC fill");
-    expect(container.textContent).toContain("account_event");
-    mocks.stopSubagentRun.mockResolvedValue(undefined);
-    await click("Discard request");
-    expect(mocks.stopSubagentRun).toHaveBeenCalledWith({ data: { agentId: definition.agentId, runId: "request-1" } });
+  it("omits the Worker inbox for initial data and legacy history events", async () => {
+    const legacy = { ...initial(), inbox: [{ id: "request-1", intent: "account_event", reason: "fill", preview: "Partial BTC fill", createdAt: 1, discardedReason: null }] };
+    const expectNoInbox = () => {
+      expect(container.textContent).not.toContain("Worker inbox");
+      expect(container.textContent).not.toContain("Partial BTC fill");
+      expect(container.textContent).not.toContain("Discard request");
+      expect(container.textContent).toContain("Run history");
+    };
+    await act(async () => root.render(detailPage({ agentId: definition.agentId, initial: legacy, choices })));
+    expectNoInbox();
+    await act(async () => HistorySource.instances.at(-1)!.dispatchEvent(new MessageEvent("runs", { data: JSON.stringify({ ...legacy, pagination: { page: 1, pages: 1, total: 0, pageSize: 50 } }) })));
+    expectNoInbox();
+    expect(mocks.stopSubagentRun).not.toHaveBeenCalled();
   });
   it("edits the orchestrator model, thinking and tools without offering deletion or schedules", async () => {
     const main = { ...definition, id: "main:fixture", name: "Orchestrator", kind: "orchestrator" as const, tools: mainToolNames };

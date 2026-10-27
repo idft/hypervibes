@@ -33,7 +33,7 @@ Written strategy instructions are not enforced risk limits.
 ## Connections and messages
 
 - Check the linked trading account and agent status.
-- Choose which [notifications](Notifications.md) to receive.
+- Choose which [notifications](Notifications.md) to receive in Telegram.
 - Connect or disconnect the [Telegram bridge](Telegram.md).
 
 Manage wallet approvals on [Account](Hyperliquid.md) and AI connections on

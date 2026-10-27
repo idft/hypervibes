@@ -629,7 +629,7 @@ describe("subagent definitions, execution and scheduling", () => {
     expect((await completed(agent.id, healthy.id)).result).toBe("Healthy worker");
     expect((await detail(agent.id, broken.id)).runs).toEqual([]);
     if (source === "schedule") expect((await detail(agent.id, broken.id)).definition.nextRunAt).toBe(now);
-    else expect((await detail(agent.id, broken.id)).inbox).toHaveLength(1);
+    else expect(await runtime.database.all("SELECT id FROM hv_worker_requests WHERE agent_id=? AND subagent_id=? AND run_id IS NULL AND discarded_reason IS NULL", agent.id, broken.id)).toHaveLength(1);
     expect(runtime.agents.subagents.schedulerError).toBeNull();
   });
 

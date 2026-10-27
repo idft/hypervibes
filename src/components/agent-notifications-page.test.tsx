@@ -75,11 +75,14 @@ describe("Agent notification pages", () => {
 describe("Notification settings", () => {
   it("retains child choices when master is off and saves all three booleans", async () => {
     await render(<NotificationSettingsSection agentId="agent" />);
+    expect(container.querySelector("h3")?.textContent).toBe("Notifications");
     const inputs = [...container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
+    expect(inputs[0]!.labels?.[0]?.textContent).toBe("Enable Telegram notifications");
     expect(inputs.map((element) => element.checked)).toEqual([true, false, true]);
     await act(async () => inputs[0]!.click());
     expect(inputs.map((element) => element.checked)).toEqual([false, false, true]);
     expect(inputs[1]!.closest("fieldset")?.disabled).toBe(true);
+    expect(container.querySelector('button[type="submit"]')?.textContent).toBe("Save Telegram notification settings");
     await act(async () => container.querySelector<HTMLButtonElement>('button[type="submit"]')!.click());
     expect(mocks.save).toHaveBeenCalledWith({ data: { agentId: "agent", enabled: false, submissions: false, fills: true } });
     expect(mocks.success).toHaveBeenCalledWith("Notification settings saved");

@@ -192,7 +192,6 @@ function TelegramSetupDialog({ agentId, initial, pollMs = 4000, onClose, onChang
         </form>
       </> : status.connected ? <>
         <p role="status">Telegram connected — this Agent's main conversation is bridged to <span className="font-medium text-white">@{status.botUsername}</span>{status.chatUsername && <> · chat <span className="font-medium text-white">@{status.chatUsername}</span></>}{status.chatId !== null && <> · id <span className="font-medium text-white">{status.chatId}</span></>}.</p>
-        <p className="text-zinc-500">Close this dialog and start chatting. Messages from the linked chat go to the Agent's main conversation.</p>
       </> : <>
         <p className="text-zinc-400">Bot <span className="font-medium text-white">@{status.botUsername}</span> is ready. Link the Telegram chat this Agent should talk in.</p>
         {link ? <div className="space-y-3">
@@ -209,7 +208,7 @@ function TelegramSetupDialog({ agentId, initial, pollMs = 4000, onClose, onChang
   </dialog>, document.body);
 }
 
-function TelegramSection({ agentId }: { agentId: string }) {
+function TelegramSection({ agentId, notificationsAvailable }: { agentId: string; notificationsAvailable: boolean }) {
   const client = useQueryClient();
   const { data: saved } = useSuspenseQuery(gatewayQueryOptions(agentId));
   const [open, setOpen] = useState(false);
@@ -220,13 +219,13 @@ function TelegramSection({ agentId }: { agentId: string }) {
   });
   return <section id="telegram" className="w-full scroll-mt-2 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6" aria-label="Telegram">
     <h2 className="flex items-center gap-2 text-lg font-medium text-white"><img src="/static/telegram.svg" alt="" aria-hidden="true" className="h-5 w-5 rounded-full" />Telegram</h2>
-    <p className="mt-3 text-sm text-zinc-400">Bridge this Agent's main conversation to a Telegram bot: the linked chat can send messages, run commands, and receive the Agent's replies.</p>
     {saved.error && <p role="status" className="mt-3 text-sm text-amber-300">{saved.error}</p>}
     {saved.connected ? <div className="mt-4 space-y-3 text-sm text-zinc-300">
       <p>Connected to <span className="font-medium text-white">@{saved.botUsername}</span>{saved.chatUsername && <> · chat <span className="font-medium text-white">@{saved.chatUsername}</span></>}{saved.chatId !== null && <> · id <span className="font-medium text-white">{saved.chatId}</span></>}</p>
       <button type="button" disabled={disconnectMutation.isPending} onClick={() => disconnectMutation.mutate()} className="cursor-pointer rounded-full border border-red-800 px-4 py-2 text-sm text-red-300 hover:bg-red-950 disabled:cursor-not-allowed disabled:opacity-50">Disconnect Telegram</button>
     </div> : <button type="button" aria-haspopup="dialog" onClick={() => setOpen(true)} className={`${outlinedButton} mt-4`}>Connect Telegram</button>}
     {disconnectMutation.error && <p role="alert" className="mt-3 text-sm text-red-300">{disconnectMutation.error.message}</p>}
+    {saved.connected && notificationsAvailable && <NotificationSettingsSection agentId={agentId} />}
     {open && <TelegramSetupDialog agentId={agentId} initial={saved} onClose={() => setOpen(false)} onChanged={refresh} />}
   </section>;
 }
@@ -238,8 +237,7 @@ export function AgentSettingsPage({ initial }: { initial: AgentChat }) {
       <dl className="mt-4 grid gap-4 sm:grid-cols-2"><div><dt className="text-xs uppercase tracking-wide text-zinc-500">Trading account</dt><dd className="mt-2 break-all font-mono text-sm text-zinc-300">{initial.agent.tradingAccountAddress ?? "No account linked (chat only)"}</dd></div><div><dt className="text-xs uppercase tracking-wide text-zinc-500">Lifecycle status</dt><dd className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-zinc-300">{initial.agent.state === "stopping" || initial.agent.state === "stopped" ? initial.agent.state : <AgentEnablementControl id={initial.agent.id} name={initial.agent.name} enabled={initial.agent.enabled} variant="settings" />}</dd></div></dl>
     </section>
     {initial.agent.state !== "stopping" && initial.agent.state !== "stopped" && <RiskManagementSection agentId={initial.agent.id} />}
-    {initial.agent.state !== "stopping" && initial.agent.state !== "stopped" && <NotificationSettingsSection agentId={initial.agent.id} />}
-    <TelegramSection agentId={initial.agent.id} />
+    <TelegramSection agentId={initial.agent.id} notificationsAvailable={initial.agent.state !== "stopping" && initial.agent.state !== "stopped"} />
     <DeleteAgentSection agent={initial.agent} />
   </div>;
 }

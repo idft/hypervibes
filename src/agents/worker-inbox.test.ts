@@ -56,6 +56,7 @@ describe("event-driven worker inboxes", () => {
     expect(queued.status).toBe("pending");
     await runtime.agents.setEnabled("owner", agentId, false);
     expect((await requests())[0]?.discarded_reason).toContain("Agent disabled");
+    expect((await runtime.notifications.list(agentId)).items).toMatchObject([{ title: "Worker assignment discarded before starting", severity: "warning" }]);
     await event("", "fill-while-disabled", "fill");
     expect(await requests()).toHaveLength(1);
     await expect(runtime.agents.subagents.delegate(agentId, trader.id, "Blocked", randomUUID(), undefined, "operator_trade")).rejects.toMatchObject({ status: 409 });
@@ -214,7 +215,7 @@ describe("event-driven worker inboxes", () => {
     expect(await requests()).toHaveLength(3);
     expect((await requests()).every((request) => request.run_id === null)).toBe(true);
     const history = await runtime.agents.subagents.history("owner", agentId, trader.id);
-    expect(history.inbox?.map((request) => request.id).sort()).toEqual((await requests()).map((request) => request.id).sort());
+    expect(history).not.toHaveProperty("inbox");
     release!();
     await waitCompleted(trader.id);
     await runtime.agents.subagents.tick();
@@ -300,6 +301,65 @@ describe("event-driven worker inboxes", () => {
     await runtime.agents.subagents.tick(Date.now() + 31000);
     expect(await runs(trader.id)).toHaveLength(0);
     expect((await requests())[0]!.discarded_reason).toContain("expired");
+    const notices = await runtime.notifications.list(agentId);
+    expect(notices.items).toHaveLength(1);
+    expect(notices.items[0]).toMatchObject({ title: "Worker assignment expired before starting", severity: "warning", subagentId: trader.id, runId: null });
+    await runtime.agents.subagents.tick(Date.now() + 32000);
+    expect((await runtime.notifications.list(agentId)).total).toBe(1);
+  });
+
+  it("keeps dropped-work warnings with Telegram notifications disabled, including after restart", async () => {
+    await runtime.notifications.saveSettings(agentId, { enabled: false, submissions: false, fills: false });
+    const trader = await createWorker({ triggers: inbox(), timeoutSeconds: 30 });
+    await runtime.agents.subagents.delegate(agentId, trader.id, "Inspect old research", "expired:disabled");
+    await runtime.agents.subagents.tick(Date.now() + 31000);
+    expect((await runtime.notifications.list(agentId)).items).toMatchObject([{ delivery: "web_only", severity: "warning" }]);
+    await runtime.close();
+    runtime = await createRuntime(config(), options());
+    runtime.start(); await runtime.agents.subagents.tick();
+    expect((await runtime.notifications.list(agentId)).total).toBe(1);
+    expect(await runs(trader.id)).toHaveLength(0);
+  });
+
+  it("warns once for stale paused work and keeps the request pending until resumed", async () => {
+    const trader = await createWorker({ triggers: inbox(), timeoutSeconds: 30 });
+    await runtime.agents.subagents.delegate(agentId, trader.id, "Inspect account", "paused:stale");
+    await runtime.agents.subagents.updateSection("owner", agentId, trader.id, "enabled", { enabled: false });
+    const now = Date.now() + 31000;
+    await runtime.agents.subagents.tick(now);
+    await runtime.agents.subagents.tick(now);
+    expect((await requests())[0]!.discarded_reason).toBeNull();
+    expect((await runtime.notifications.list(agentId)).items).toMatchObject([{ title: "Worker assignment waiting while paused", severity: "warning" }]);
+    await runtime.agents.subagents.updateSection("owner", agentId, trader.id, "enabled", { enabled: true });
+    await runtime.agents.subagents.tick(now);
+    expect((await requests())[0]!.discarded_reason).toContain("expired");
+    expect((await runtime.notifications.list(agentId)).total).toBe(2);
+    expect(await runs(trader.id)).toHaveLength(0);
+  });
+
+  it("rolls back discard if the warning cannot be saved", async () => {
+    const trader = await createWorker({ triggers: inbox(), timeoutSeconds: 30 });
+    await runtime.agents.subagents.delegate(agentId, trader.id, "Inspect account", "discard:rollback");
+    const failed = vi.spyOn(runtime.notifications, "systemWarningTx").mockRejectedValue(new Error("Warning write unavailable"));
+    await runtime.agents.subagents.tick(Date.now() + 31000);
+    expect((await requests())[0]!.discarded_reason).toBeNull();
+    expect((await runtime.notifications.list(agentId)).total).toBe(0);
+    failed.mockRestore();
+    await runtime.agents.subagents.tick(Date.now() + 32000);
+    expect((await requests())[0]!.discarded_reason).toContain("expired");
+    expect((await runtime.notifications.list(agentId)).total).toBe(1);
+  });
+
+  it.each(["archived", "inbox disabled", "permission removed"] as const)("records a warning when a queued request is discarded: %s", async (reason) => {
+    const analyst = await createWorker();
+    const trader = await createWorker({ triggers: inbox({ researchSources: [analyst.id] }) });
+    await event(analyst.id, `research:${reason}`);
+    if (reason === "archived") await runtime.agents.subagents.archive("owner", agentId, trader.id);
+    else await runtime.agents.subagents.updateSection("owner", agentId, trader.id, "triggers", { triggers: reason === "inbox disabled" ? defaultWorkerTriggers : inbox() });
+    await runtime.agents.subagents.tick();
+    expect((await requests())[0]!.discarded_reason).toBe(reason === "permission removed" ? "Trigger/delegation permission removed" : "Worker inbox disabled or archived");
+    expect((await runtime.notifications.list(agentId)).items).toMatchObject([{ title: "Worker assignment discarded before starting", subagentId: trader.id }]);
+    expect(await runs(trader.id)).toHaveLength(0);
   });
 
   it("publishes research and its handoff atomically, even for no-opportunity reports", async () => {

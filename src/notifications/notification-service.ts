@@ -14,7 +14,7 @@ import { NotificationDeliveryError, type NotificationSender } from "./delivery.j
 const columns = `id,agent_id AS agentId,category,title,body,severity,source,subagent_id AS subagentId,run_id AS runId,
   conversation_id AS conversationId,order_request_id AS orderRequestId,created_at AS createdAt,delivery,attempts,sent_at AS sentAt,error`;
 interface SettingsRow { enabled: number; submissions: number; fills: number; enabled_since: number; fills_since: number }
-interface Origin { source: string; subagentId?: string | null; runId?: string | null; conversationId?: number | null; orderRequestId?: string | null }
+export interface NotificationProvenance { source: string; subagentId?: string | null; runId?: string | null; conversationId?: number | null; orderRequestId?: string | null }
 interface DeliveryRow extends NotificationRecord { chatId: number; botTokenHash: string; messageIds: string }
 
 function input(value: NotificationInput): Required<NotificationInput> {
@@ -63,7 +63,7 @@ export class NotificationService {
     this.changed(agentId);
     return { enabled: settings.enabled, submissions: settings.submissions, fills: settings.fills };
   }
-  private async queueTx(tx: SqliteExecutor, agentId: string, eventKey: string, category: NotificationCategory, value: NotificationInput, provenance: Origin): Promise<NotificationResult> {
+  private async queueTx(tx: SqliteExecutor, agentId: string, eventKey: string, category: NotificationCategory, value: NotificationInput, provenance: NotificationProvenance): Promise<NotificationResult> {
     const existing = await tx.get<{ id: string }>("SELECT id FROM hv_notifications WHERE agent_id=? AND event_key=?", agentId, eventKey);
     if (existing) return { status: "queued", id: existing.id };
     const skipped = await tx.get("SELECT 1 FROM hv_notification_operations WHERE agent_id=? AND operation_key=?", agentId, `skipped:${eventKey}`);
@@ -75,14 +75,31 @@ export class NotificationService {
     }
     const agent = await tx.get<{ state: string }>("SELECT state FROM hv_agents WHERE id=?", agentId);
     if (!agent || ["stopping", "stopped"].includes(agent.state)) return { status: "disabled" };
+    const id = await this.persistTx(tx, agentId, eventKey, category, value, provenance, true);
+    return { status: "queued", id };
+  }
+  private async persistTx(tx: SqliteExecutor, agentId: string, eventKey: string, category: NotificationCategory, value: NotificationInput, provenance: NotificationProvenance, deliver: boolean): Promise<string> {
     const message = input(value), now = this.clock(), id = randomUUID();
-    const gateway = await tx.get<{ chat_id: number | null; bot_token_hash: string }>("SELECT chat_id,bot_token_hash FROM hv_gateways WHERE agent_id=? AND type='telegram'", agentId);
+    const gateway = deliver ? await tx.get<{ chat_id: number | null; bot_token_hash: string }>("SELECT chat_id,bot_token_hash FROM hv_gateways WHERE agent_id=? AND type='telegram'", agentId) : undefined;
     const connected = gateway?.chat_id !== null && gateway?.chat_id !== undefined;
     await tx.run(`INSERT INTO hv_notifications(id,agent_id,event_key,category,title,body,severity,source,subagent_id,run_id,conversation_id,order_request_id,created_at,delivery,chat_id,bot_token_hash,next_attempt_at)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, agentId, eventKey, category, message.title, message.body, message.severity, provenance.source,
       provenance.subagentId ?? null, provenance.runId ?? null, provenance.conversationId ?? null, provenance.orderRequestId ?? null, now,
       connected ? "pending" : "web_only", gateway?.chat_id ?? null, connected ? gateway!.bot_token_hash : null, now);
-    return { status: "queued", id };
+    return id;
+  }
+  /** Always records a system event. The caller must call changed(agentId) after the transaction commits. */
+  async systemWarningTx(tx: SqliteExecutor, agentId: string, eventKey: string, value: NotificationInput, provenance: NotificationProvenance): Promise<{ id: string; created: boolean }> {
+    input(value);
+    if (!eventKey.trim() || eventKey.length > 200) throw new AgentError("Invalid notification event key.");
+    const key = `system:${eventKey}`;
+    const existing = await tx.get<{ id: string }>("SELECT id FROM hv_notifications WHERE agent_id=? AND event_key=?", agentId, key);
+    if (existing) return { id: existing.id, created: false };
+    const settings = await this.settingsTx(tx, agentId);
+    const agent = await tx.get<{ state: string }>("SELECT state FROM hv_agents WHERE id=?", agentId);
+    const deliver = Boolean(settings.enabled) && !!agent && !["stopping", "stopped"].includes(agent.state);
+    const id = await this.persistTx(tx, agentId, key, "message", value, provenance, deliver);
+    return { id, created: true };
   }
   /** Trusted backend entry point. The key identifies one logical application event. */
   async send(agentId: string, eventKey: string, value: NotificationInput): Promise<NotificationResult> {

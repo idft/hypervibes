@@ -25,7 +25,7 @@ describe("domain query ownership", () => {
     const row: SubagentRow = { ...draft, triggers: workerTriggers(draft.triggers), id: "worker", agentId: "agent", kind: "worker", archived: false, conversationId: null, nextRunAt: null, templateOrigin: null, createdAt: 1, updatedAt: 1 };
     const detailKey = subagentQueryOptions("agent", row.id).queryKey;
     const listKey = subagentsQueryOptions("agent").queryKey;
-    const history: SubagentDetail = { definition: row, runs: [], pagination: runPagination(0), inbox: [], workers: [{ id: "other", name: "Other", archived: true, tools: [] }], schedulerError: null };
+    const history: SubagentDetail = { definition: row, runs: [], pagination: runPagination(0), workers: [{ id: "other", name: "Other", archived: true, tools: [] }], schedulerError: null };
     client.setQueryData(detailKey, history);
     client.setQueryData(listKey, [row]);
     client.setQueryData(dashboardSubagentsQueryOptions("agent").queryKey, []);

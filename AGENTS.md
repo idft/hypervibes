@@ -108,6 +108,8 @@ The dev database is a single SQLite file (no containers):
 * Frontend build: `pnpm build:app` (Vite/TanStack Start). Don't test web UI
   changes with browser-mcp; the user will test.
 * Buttons should change the cursor on mouseover.
+* Do not add descriptive subtext under UI headings or sections. Use concise labels
+  without explanatory descriptions unless the user explicitly requests them.
 
 ## Testing
 

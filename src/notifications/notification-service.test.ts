@@ -20,6 +20,8 @@ import { NotificationDeliveryError } from "./delivery.js";
 const account = `0x${"ab".repeat(20)}`;
 const message = { title: "Daily review", body: "A crafted summary. Full review: m1." };
 const enabled = { enabled: true, submissions: true, fills: true };
+const warning = { title: "Worker paused", body: "The worker reached its failure limit.", severity: "warning" as const };
+const provenance = { source: "Orchestrator", subagentId: "root", runId: "worker-run", conversationId: 1 };
 function fill(tid: number, time: number, oid = 123): JournalEvent {
   return fillEvent({ coin: "BTC", px: "100000.12345", sz: "0.001", side: "B", time, startPosition: "0", dir: "Open Long", closedPnl: "0", hash: `0x${tid}`, oid, crossed: true, fee: "0.01", tid, feeToken: "USDC", twapId: null });
 }
@@ -95,6 +97,98 @@ describe("Agent notification inbox and Telegram outbox", () => {
     expect(await service.sendFromTool(actor, message, execution)).toEqual({ status: "disabled" });
     expect(await service.send("agent", "disabled", message)).toEqual({ status: "disabled" });
     expect((await rows()).total).toBe(1);
+  });
+
+  it.each([
+    { state: "ready", master: false, linked: true },
+    { state: "stopping", master: true, linked: true },
+    { state: "stopped", master: true, linked: true },
+    { state: "stopped", master: false, linked: true },
+    { state: "ready", master: true, linked: false },
+  ])("persists system warnings as web-only for $state, enabled=$master, linked=$linked", async ({ state, master, linked }) => {
+    await db.run("UPDATE hv_agents SET state=? WHERE id='agent'", state);
+    await service.saveSettings("agent", { ...enabled, enabled: master });
+    if (linked) await link();
+    const sender = vi.fn(async () => 42); service.installSender(sender);
+    const result = await db.transaction((tx) => service.systemWarningTx(tx, "agent", "worker:root:paused", warning, provenance));
+    expect(result).toEqual({ id: expect.any(String), created: true });
+    expect(await service.get("agent", result.id)).toMatchObject({ ...warning, ...provenance, category: "message", delivery: "web_only", attempts: 0 });
+    expect(await db.get("SELECT chat_id,bot_token_hash FROM hv_notifications WHERE id=?", result.id)).toEqual({ chat_id: null, bot_token_hash: null });
+    expect(await db.all("SELECT * FROM hv_notification_operations")).toEqual([]);
+    await service.flush(); expect(sender).not.toHaveBeenCalled();
+    await db.run("UPDATE hv_agents SET state='ready' WHERE id='agent'");
+    await service.saveSettings("agent", enabled); await link();
+    await service.flush(); expect(sender).not.toHaveBeenCalled();
+    expect(await db.transaction((tx) => service.systemWarningTx(tx, "agent", "worker:root:paused", warning, provenance))).toEqual({ id: result.id, created: false });
+    expect((await rows()).total).toBe(1);
+    expect((await rows()).items[0]!.delivery).toBe("web_only");
+  });
+
+  it("delivers system warnings independently of order notification selections and deduplicates across restarts", async () => {
+    await link();
+    await service.saveSettings("agent", { enabled: true, submissions: false, fills: false });
+    const result = await db.transaction((tx) => service.systemWarningTx(tx, "agent", "worker:root:paused", warning, provenance));
+    expect(result.created).toBe(true);
+    expect((await rows()).items[0]!.delivery).toBe("pending");
+    await service.close(); service = new NotificationService(db, "http://localhost:3003", undefined, () => now);
+    expect(await db.transaction((tx) => service.systemWarningTx(tx, "agent", "worker:root:paused", { ...warning, body: "Replay" }, provenance))).toEqual({ id: result.id, created: false });
+    expect((await rows()).items[0]!.body).toBe(warning.body);
+    const sender = vi.fn(async () => 42); service.installSender(sender); await service.flush();
+    expect(sender).toHaveBeenCalledOnce();
+    expect((await rows()).items[0]!.delivery).toBe("sent");
+    const other = await db.transaction((tx) => service.systemWarningTx(tx, "other", "worker:root:paused", warning, { source: "Worker" }));
+    expect(other).toEqual({ id: expect.any(String), created: true });
+    expect(other.id).not.toBe(result.id);
+  });
+
+  it.each(["disabled", "stopping", "stopped"])("rechecks %s before delivering pending system warnings", async (state) => {
+    await link();
+    await db.transaction((tx) => service.systemWarningTx(tx, "agent", "worker:root:paused", warning, provenance));
+    if (state === "disabled") await service.saveSettings("agent", { ...enabled, enabled: false });
+    else await db.run("UPDATE hv_agents SET state=? WHERE id='agent'", state);
+    const sender = vi.fn(async () => 42); service.installSender(sender); await service.flush();
+    expect(sender).not.toHaveBeenCalled();
+    expect((await rows()).items[0]!.delivery).toBe("suppressed");
+  });
+
+  it("keeps system event keys separate from disabled backend receipts and preserves ordinary lifecycle rules", async () => {
+    await service.saveSettings("agent", { ...enabled, enabled: false });
+    expect(await service.send("agent", "worker:root:paused", message)).toEqual({ status: "disabled" });
+    const result = await db.transaction((tx) => service.systemWarningTx(tx, "agent", "worker:root:paused", warning, provenance));
+    expect(result.created).toBe(true);
+    await service.saveSettings("agent", enabled);
+    expect(await service.send("agent", "worker:root:paused", message)).toEqual({ status: "disabled" });
+    await db.run("UPDATE hv_agents SET state='stopped' WHERE id='agent'");
+    expect(await service.send("agent", "stopped", message)).toEqual({ status: "disabled" });
+    expect((await rows()).total).toBe(1);
+  });
+
+  it("validates system warnings and rolls them back with their source transaction", async () => {
+    for (const eventKey of [" ", "x".repeat(201)]) {
+      await expect(db.transaction((tx) => service.systemWarningTx(tx, "agent", eventKey, warning, provenance))).rejects.toThrow("event key");
+    }
+    await expect(db.transaction((tx) => service.systemWarningTx(tx, "agent", "bad", { ...warning, title: " " }, provenance))).rejects.toThrow("title");
+    await expect(db.transaction((tx) => service.systemWarningTx(tx, "agent", "bad", { ...warning, body: "x".repeat(12001) }, provenance))).rejects.toThrow("body");
+    await expect(db.transaction((tx) => service.systemWarningTx(tx, "missing", "event", warning, provenance))).rejects.toMatchObject({ status: 404 });
+    await expect(db.transaction(async (tx) => {
+      await service.systemWarningTx(tx, "agent", "worker:root:paused", warning, provenance);
+      throw new Error("Rollback");
+    })).rejects.toThrow("Rollback");
+    expect((await rows()).total).toBe(0);
+    expect(await db.all("SELECT * FROM hv_notification_settings")).toEqual([]);
+    const result = await db.transaction((tx) => service.systemWarningTx(tx, "agent", "worker:root:paused", warning, provenance));
+    expect(result.created).toBe(true);
+  });
+
+  it("publishes a system warning only when the caller signals the committed change", async () => {
+    const controller = new AbortController(), publish = vi.fn();
+    const watching = service.watch("agent", controller.signal, publish);
+    try {
+      await db.transaction((tx) => service.systemWarningTx(tx, "agent", "worker:root:paused", warning, provenance));
+      expect(publish).toHaveBeenCalledOnce();
+      service.changed("agent");
+      await vi.waitFor(() => expect(publish).toHaveBeenCalledTimes(2));
+    } finally { controller.abort(); await watching; }
   });
 
   it("enforces trusted tool permissions, returns one receipt across restarts, and rejects changed replay arguments", async () => {

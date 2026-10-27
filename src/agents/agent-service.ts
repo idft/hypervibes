@@ -174,7 +174,7 @@ export class AgentService {
     this.subagents = new SubagentService(db, database, providers, {
       owned: (userId, id) => this.owned(userId, id), models: (userId) => this.models(userId), changed: (id) => this.notify(id), signal: (id) => this.signal(id),
       recoverParkedMain: (id) => this.recoverParkedMain(id),
-    }, this.execution, Boolean(options.models), options.logger?.child({ component: "scheduler" }));
+    }, this.execution, this.notifications, Boolean(options.models), options.logger?.child({ component: "scheduler" }));
   }
   /** Ends every agent-scoped UI subscription when deletion begins. */
   signal(id: string): AbortSignal {

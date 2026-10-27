@@ -281,6 +281,37 @@ describe("Agent settings", () => {
     expect(container.querySelector("a")).toBeNull();
     expect(eventSource).not.toHaveBeenCalled();
   });
+  it("hides notification controls until Telegram is connected", async () => {
+    expect(container.querySelector("#notifications")).toBeNull();
+    await act(async () => queryClient.setQueryData(["gateway", initial.agent.id], { hasToken: true, connected: false, botUsername: "my_bot", chatId: null, chatUsername: null }));
+    expect(container.querySelector("#notifications")).toBeNull();
+  });
+  it("groups notification controls inside connected Telegram without descriptive subtext", async () => {
+    await act(async () => queryClient.setQueryData(["gateway", initial.agent.id], { hasToken: true, connected: true, botUsername: "my_bot", chatId: 7, chatUsername: "operator" }));
+    const telegram = container.querySelector('section[aria-label="Telegram"]')!;
+    const notifications = telegram.querySelector('section[aria-label="Notifications"]')!;
+    expect(notifications.id).toBe("notifications");
+    expect(notifications.querySelector("h3")?.textContent).toBe("Notifications");
+    expect(notifications.querySelector("input")?.labels?.[0]?.textContent).toBe("Enable Telegram notifications");
+    expect(telegram.querySelector("h2")?.nextElementSibling?.tagName).toBe("DIV");
+    expect(notifications.querySelector("h3")?.nextElementSibling?.tagName).toBe("FORM");
+    expect(container.querySelectorAll('section[aria-label="Notifications"]')).toHaveLength(1);
+    expect(telegram.textContent).not.toContain("Bridge this Agent");
+  });
+  it.each(["stopping", "stopped"] as const)("hides notification controls for %s agents but keeps Telegram available", async (state) => {
+    await act(async () => queryClient.setQueryData(["gateway", initial.agent.id], { hasToken: true, connected: true, botUsername: "my_bot", chatId: 7, chatUsername: "operator" }));
+    await act(async () => root.render(<AgentSettingsPage initial={{ ...initial, agent: { ...initial.agent, state } }} />));
+    const telegram = container.querySelector('section[aria-label="Telegram"]')!;
+    expect(telegram).not.toBeNull();
+    expect(telegram.textContent).toContain("Disconnect Telegram");
+    expect(container.querySelector("#notifications")).toBeNull();
+    expect(container.querySelector("#risk-management")).toBeNull();
+  });
+  it("keeps connected notification controls available when the agent is disabled", async () => {
+    await act(async () => queryClient.setQueryData(["gateway", initial.agent.id], { hasToken: true, connected: true, botUsername: "my_bot", chatId: 7, chatUsername: "operator" }));
+    await act(async () => root.render(<AgentSettingsPage initial={{ ...initial, agent: { ...initial.agent, enabled: false } }} />));
+    expect(container.querySelector('#telegram #notifications input[type="checkbox"]')).not.toBeNull();
+  });
   it("completes the Telegram setup flow inside the connect dialog", async () => {
     const configured = { hasToken: true, connected: false, botUsername: "my_bot", chatId: null, chatUsername: null };
     mocks.addToken.mockResolvedValue(configured);
@@ -317,6 +348,7 @@ describe("Agent settings", () => {
       // The parent section stays in sync with the connected chat.
       await act(async () => {});
       expect(queryClient.getQueryData(["gateway", initial.agent.id])).toMatchObject({ connected: true, chatId: 7 });
+      expect(container.querySelector("#notifications h3")?.textContent).toBe("Notifications");
     } finally { vi.useRealTimers(); }
   });
   it("shows the connected chat and disconnects Telegram", async () => {
@@ -329,6 +361,7 @@ describe("Agent settings", () => {
     await act(async () => [...container.querySelectorAll("button")].find((button) => button.textContent === "Disconnect Telegram")!.click());
     expect(mocks.disconnect).toHaveBeenCalledWith({ data: { id: initial.agent.id } });
     expect(queryClient.getQueryData(["gateway", initial.agent.id])).toEqual(removed);
+    expect(container.querySelector("#notifications")).toBeNull();
     expect([...container.querySelectorAll("button")].find((button) => button.textContent === "Connect Telegram")).toBeDefined();
   });
   it("reports Telegram failures inside the dialog without losing the draft", async () => {
