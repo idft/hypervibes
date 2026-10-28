@@ -13,6 +13,16 @@ import { createTestQueryClient, withTestQueryClient } from "../test/query.js";
 const Navbar = withTestQueryClient(NavbarComponent, createTestQueryClient);
 
 describe("Navbar", () => {
+  it("uses the horizontal wordmark as the accessible home link", () => {
+    const container = document.createElement("div");
+    container.innerHTML = renderToStaticMarkup(<Navbar walletAddress="0xfixture" />);
+    const logo = container.querySelector('img[alt="HyperVibes"]')!;
+    expect(logo.getAttribute("src")).toBe("/static/hypervibes.png");
+    expect(logo.closest("a")?.getAttribute("href")).toBe("/agents");
+    expect(logo.parentElement?.textContent).toBe("");
+    expect(container.querySelector('img[src="/static/logo.png"]')).toBeNull();
+  });
+
   it("links the amber trading-disabled warning beside the picker to the selected Agent's risk settings", () => {
     const container = document.createElement("div");
     container.innerHTML = renderToStaticMarkup(<Navbar walletAddress="0xfixture" agents={[{ id: "one", name: "Research", enabled: true, tradingEnabled: false }]} selectedAgentId="one" />);

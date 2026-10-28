@@ -63,7 +63,7 @@ export async function buildScreenshot(directory, signal) {
   });
   signal?.throwIfAborted();
   await mkdir(join(directory, "static"), { recursive: true });
-  for (const asset of ["logo.png", "github.svg"]) {
+  for (const asset of ["hypervibes.png", "github.svg"]) {
     await copyFile(resolve(repository, "static", asset), join(directory, "static", asset));
   }
   await mkdir(join(directory, "currency"), { recursive: true });

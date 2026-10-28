@@ -302,7 +302,7 @@ test("CLI defaults, help, screen selection, and output validation", { timeout },
 test("pre-resolution boundaries replace JS and TS imports before runtime code can load", { timeout }, () => {
   const plugin = screenshotBoundariesPlugin();
   const importer = resolve(repository, "src/components/dashboard-chat.tsx");
-  for (const name of ["agents", "subagents", "indicators", "auth-client"]) {
+  for (const name of ["agents", "subagents", "indicators", "auth-client", "risk"]) {
     for (const extension of ["js", "ts"]) {
       assert.equal(plugin.resolveId(`../web/${name}.${extension}`, importer), resolve(repository, "src/screenshot/screenshot-boundaries.ts"));
       assert.equal(plugin.resolveId(resolve(repository, `src/web/${name}.${extension}`), importer), resolve(repository, "src/screenshot/screenshot-boundaries.ts"));
@@ -314,6 +314,7 @@ test("pre-resolution boundaries replace JS and TS imports before runtime code ca
   assert.equal(plugin.resolveId("../web/agents.js?test", importer), resolve(repository, "src/screenshot/screenshot-boundaries.ts"));
   assert.equal(plugin.resolveId("../hyperliquid/decimal.js", importer), null);
   assert.equal(plugin.resolveId("../web/random-uuid.js", importer), null);
+  assert.equal(plugin.resolveId("../web/risk-queries.js", importer), null);
   for (const specifier of ["node:sqlite", "fs", "node:http", "@tanstack/react-start", "@earendil-works/pi-durable", "@nktkas/hyperliquid", "better-auth/react", "../runtime.js", "../main.js", "../db/database.js", "../web/app.js", "../hyperliquid/service.js", "../agents/agent-service.js"]) {
     assert.throws(() => plugin.resolveId(specifier, importer), /rejects/);
   }
@@ -384,7 +385,7 @@ test("the standalone Vite build contains only the browser fixture and required a
   const assets = await loadScreenshotAssets(build);
   assert.ok(assets.has("/screenshot"));
   assert.ok(assets.has("/currency/BTC.svg"));
-  assert.deepEqual((await readdir(join(build, "static"))).sort(), ["github.svg", "logo.png"]);
+  assert.deepEqual((await readdir(join(build, "static"))).sort(), ["github.svg", "hypervibes.png"]);
   assert.ok([...assets.keys()].some((path) => path.startsWith("/assets/") && path.endsWith(".js")));
   assert.ok(![...assets.keys()].some((path) => /server|runtime|\.map$/.test(path)));
   const html = assets.get("/screenshot").body.toString();

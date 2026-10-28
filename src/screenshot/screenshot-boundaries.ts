@@ -9,6 +9,7 @@ export {
   unavailable as getAgentChat,
   unavailable as getAgentChatHistory,
   unavailable as getAgentDashboard,
+  unavailable as getRiskSettings,
   unavailable as getTradingAccountChoices,
   unavailable as closeAgentPosition,
   unavailable as sendAgentMessage,
