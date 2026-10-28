@@ -159,17 +159,15 @@ pre code {
 }
 
 .hero-title {
-  display: flex;
-  gap: 0.85rem;
-  align-items: center;
-  justify-content: center;
+  width: min(100%, 48rem);
+  margin: 0;
+  line-height: 1;
 }
 
 .hero-title img {
-  width: clamp(3rem, 5vw, 4.6rem);
-  height: clamp(3rem, 5vw, 4.6rem);
-  border-radius: 1rem;
-  box-shadow: 0 1rem 2.5rem rgba(124, 58, 237, 0.2);
+  display: block;
+  width: 100%;
+  height: auto;
 }
 
 .eyebrow {
@@ -190,17 +188,6 @@ pre code {
   border-radius: 999px;
   background: #34d399;
   box-shadow: 0 0 0 4px rgba(52, 211, 153, 0.1);
-}
-
-.hero h1 {
-  max-width: 42rem;
-  margin: 0;
-  color: #fafafa;
-  font-family: var(--ifm-font-family-base);
-  font-size: clamp(3.1rem, 5vw, 5rem);
-  font-weight: 500;
-  letter-spacing: -0.05em;
-  line-height: 1;
 }
 
 .hero-summary {
@@ -546,10 +533,6 @@ pre code {
   .workflow-section {
     padding-right: 1rem;
     padding-left: 1rem;
-  }
-
-  .hero h1 {
-    font-size: clamp(3rem, 13vw, 4rem);
   }
 
   .product-preview {

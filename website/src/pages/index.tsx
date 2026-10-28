@@ -18,16 +18,10 @@ export default function Home() {
       <main className="homepage">
         <section className="hero">
           <div className="hero-copy">
-            <div className="hero-title">
-              <img src="/img/logo.png" alt="" aria-hidden="true" />
-              <h1>HyperVibes</h1>
-            </div>
-            <p className="hero-summary">
-              Open-source Agentic Trading Harness for{' '}
-              <a className="hyperliquid-link" href="https://app.hyperliquid.xyz/trade" target="_blank" rel="noreferrer">
-                <img src="/img/hyperliquid.png" alt="" aria-hidden="true" /> Hyperliquid
-              </a>
-            </p>
+            <h1 className="hero-title">
+              <img src="/img/hypervibes.png" alt="HyperVibes" width="2172" height="724" />
+            </h1>
+            <p className="hero-summary">Agentic Trading Harness</p>
             <div className="hero-actions">
               <a className="button button--primary" href="#quick-start">Self-Host</a>
               <Link className="button button--secondary" to="/docs/">Documentation</Link>
@@ -47,15 +41,14 @@ export default function Home() {
 
         <section className="workflow-section">
           <div>
-            <p className="eyebrow">FEATURES</p>
-            <h2>Agents for the full trading loop.</h2>
+            <h2>An Agentic Trading Harness</h2>
           </div>
           <ol className="workflow-list">
-            <li><span>01</span><div><strong>Run agents on candle close</strong><p>Schedule analysis exactly where your strategy starts: on the close of the candle that matters.</p></div></li>
-            <li><span>02</span><div><strong>Agent self-review and improvement</strong><p>Give agents a durable memory of their decisions, outcomes, and next adjustments.</p></div></li>
-            <li><span>03</span><div><strong>Custom strategy code generation</strong><p>Turn a trading idea into strategy code your agent can inspect and evolve.</p></div></li>
-            <li><span>04</span><div><strong>Trade via chat</strong><p>Ask questions, review context, and take action without leaving the conversation.</p></div></li>
-            <li><span>05</span><div><strong>Use any model</strong><p>Choose any model from any AI provider.</p></div></li>
+            <li><span>01</span><div><strong>Batteries included</strong><p>Built-in tools for trading, research, technical analysis, and strategy development.</p></div></li>
+            <li><span>02</span><div><strong>Agents that work together</strong><p>Create specialized agents to analyze markets, manage trades, and review results.</p></div></li>
+            <li><span>03</span><div><strong>Built on Pi Durable</strong><p>Persistent agent sessions, scheduled work, and memory that survives restarts.</p></div></li>
+            <li><span>04</span><div><strong>Your keys. Your coins.</strong><p>Self-hosted and Open Source. Connect your own wallet and AI providers. Stay in control of your trading account.</p></div></li>
+            <li><span>05</span><div><strong>Trade on Hyperliquid</strong><p>Connect your agents directly to the Hyperliquid decentralized exchange.</p></div></li>
           </ol>
         </section>
 

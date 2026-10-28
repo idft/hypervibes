@@ -7,7 +7,7 @@ slug: /quick-start
 ## Run HyperVibes
 
 Run `pnpm install` and `pnpm start` in the source checkout, then open
-<http://localhost:3003>. See [Installation](Installation.md) for requirements and
+[http://localhost:3003](http://localhost:3003). See [Installation](Installation.md) for requirements and
 private LAN setup. NPX packages and desktop builds are coming soon.
 
 ## Set up your account

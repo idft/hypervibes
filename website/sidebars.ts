@@ -7,7 +7,7 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'Get started',
       collapsed: false,
-      items: ['Installation', 'QuickStart', 'Hyperliquid', 'Providers', 'Architecture', 'Testing'],
+      items: ['Installation', 'QuickStart', 'Configuration', 'Hyperliquid', 'Providers', 'Architecture', 'Testing'],
     },
     {
       type: 'category',

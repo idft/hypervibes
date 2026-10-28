@@ -16,7 +16,7 @@ pnpm start
 ```
 
 Keep development dependencies installed: startup builds fresh production assets.
-Open <http://localhost:3003>. No `.env` file is required. The first start creates
+Open [http://localhost:3003](http://localhost:3003). No `.env` file is required. The first start creates
 private secrets in your per-user `config.json`. Back up that file with your
 database. Keep existing encryption keys when upgrading.
 
@@ -53,7 +53,7 @@ After that release is published, use `compose.yaml` from this repository:
 docker compose up -d
 ```
 
-Open <http://localhost:3003>. The example exposes only the host loopback address.
+Open [http://localhost:3003](http://localhost:3003). The example exposes only the host loopback address.
 For remote access, use a private connection or an HTTPS reverse proxy and set
 `APP_ORIGIN` to the exact browser URL. The app listens on `0.0.0.0` inside the
 container; this does not require exposing the host port publicly.

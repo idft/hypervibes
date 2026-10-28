@@ -1,70 +1,97 @@
-# HyperVibes
+<h1 align="center">HyperVibes</h1>
 
-[![Website](https://img.shields.io/badge/Website-hypervibes.ai-0f766e?logo=googlechrome&logoColor=white)](https://hypervibes.ai) [![Documentation](https://img.shields.io/badge/Documentation-2563eb?logo=readthedocs&logoColor=white)](https://hypervibes.ai/docs/) [![Discord](https://img.shields.io/badge/Discord-5865f2?logo=discord&logoColor=white)](https://discord.gg/Up39Qvqmkh) [![X](https://img.shields.io/badge/X-000000?logo=x&logoColor=white)](https://x.com/HyperVibesAI)
+---
+
+<p align="center">
+  Agentic Trading Harness, built on <a href="https://earendil.com/posts/pi-durable/">Pi Durable</a>
+</p>
+
+<p align="center">
+  <a href="https://hypervibes.ai"><img src="https://img.shields.io/badge/Website-hypervibes.ai-0f766e?logo=googlechrome&logoColor=white" alt="Website"></a>
+  <a href="https://hypervibes.ai/docs/"><img src="https://img.shields.io/badge/Documentation-2563eb?logo=readthedocs&logoColor=white" alt="Documentation"></a>
+  <a href="https://discord.gg/Up39Qvqmkh"><img src="https://img.shields.io/badge/Discord-5865f2?logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="https://x.com/HyperVibesAI"><img src="https://img.shields.io/badge/X-000000?logo=x&logoColor=white" alt="X"></a>
+</p>
+
+![HyperVibes dashboard](website/static/img/dashboard.png)
+
+## Quick start
 
 HyperVibes is a self-hosted app for running AI trading agents on Hyperliquid.
-Choose your models, give agents instructions, and review their work in one place.
+Install Node.js 22.23.3 or newer and pnpm, then run:
+
+```sh
+git clone https://github.com/idft/hypervibes.git
+cd hypervibes
+pnpm install
+pnpm start
+```
+
+Open <http://localhost:3003>. No `.env` file is required.
+
+1. Sign in with the browser wallet that owns your Hyperliquid account.
+2. Open Account to generate or import a Hyperliquid API key and approve the builder fee. Never import your main wallet's private key.
+3. Connect an AI provider, create an agent, and review its instructions and risk settings.
 
 Agents can place real orders. AI can make mistakes, and trading can lose money.
 Start with trading disabled while you check your setup.
 
-## Run from source
+See the [quick start guide](docs/QuickStart.md) for your first agent.
 
-HyperVibes requires Node.js 22.23.3 or newer and pnpm.
+## Features
 
-1. Install dependencies.
+- **Batteries included:** agent tools for research, analysis, and trading, ready to use.
+- **Self-hosted:** run on your own hardware and keep your data under your control.
+- **Decentralized:** trade on Hyperliquid with just an Ethereum account.
+- **Built on [Pi Durable](https://earendil.com/posts/pi-durable/):** durable agent execution that survives restarts.
 
-   ```sh
-   pnpm install
-   ```
+Explore the [user guide](https://hypervibes.ai/docs/) for more.
 
-2. Build and start the app. No `.env` file is required.
+## Installation
 
-   ```sh
-   pnpm start
-   ```
+- **From source — available now:** clone the repository, run `pnpm install`, then `pnpm start`. See [Quick start](#quick-start).
+- **NPX — coming soon:** run the published npm package without cloning or building the source. The launch command will be added when the package is available.
+- **Global npm install — coming soon:** install the published package once and launch it with the `hypervibes` command.
+- **Docker Compose — coming with v0.4.0:** run `ghcr.io/idft/hypervibes` on Linux AMD64 or ARM64 using the included [`compose.yaml`](compose.yaml).
+- **Desktop download — coming soon:** planned builds for macOS, Windows, and Linux.
+- **Local release package:** run `pnpm pack` from a source checkout to build an npm tarball. See [Build](#build).
+- **Local container build:** run `pnpm pack --out artifacts/hypervibes.tgz`, then `docker build -f Containerfile -t hypervibes:local .`.
 
-Each start builds fresh production assets before serving. Install development
-dependencies too: the source build needs them. Use `pnpm dev` instead
-for development with hot reload. `pnpm start:built` serves an existing compiled
-build without rebuilding.
+See the [installation guide](docs/Installation.md) for setup, persistent storage,
+and remote access.
 
-Open <http://localhost:3003>. The SQLite database is created
-automatically on first start. Authentication and credential-encryption secrets are
-generated once and saved privately outside the project:
+## Configuration
 
-- Linux: `$XDG_CONFIG_HOME/hypervibes/config.json`, or `~/.config/hypervibes/config.json`.
-- macOS: `~/Library/Application Support/HyperVibes/config.json`.
-- Windows: `%APPDATA%\HyperVibes\config.json`, or the home `AppData\Roaming` equivalent.
+HyperVibes keeps its SQLite database (`hypervibes.sqlite`) and secrets file
+(`config.json`) outside the project:
 
-Back up this file with your database. Losing the encryption key prevents recovery
-of stored credentials. Existing installations without this file must supply their
-original `AGENTS_ENCRYPTION_KEY`; startup never silently replaces a missing key.
+| OS | Database directory | Config directory |
+| --- | --- | --- |
+| Linux | `~/.local/share/hypervibes/` | `~/.config/hypervibes/` |
+| macOS | `~/Library/Application Support/HyperVibes/` | Same as database |
+| Windows | `%APPDATA%\HyperVibes\` | Same as database |
 
-Environment variables override saved settings. Later secret overrides are not
-saved, so back them up too. An optional `.env` file is loaded by the development
-and server commands; see `.env.example`. Keep existing secrets when upgrading.
-Disposable caches use your OS user-cache directory; `APP_CACHE_DIR` overrides it.
+Linux respects `XDG_DATA_HOME` and `XDG_CONFIG_HOME` when set to absolute paths.
+Back up both files together; losing the encryption key prevents recovery of stored credentials.
 
-For access from another device, prefer HTTPS through a reverse proxy and set
-`APP_ORIGIN` to the exact browser URL. Private LAN HTTP requires an explicit
-opt-in in `.env`, for example:
+See [Configuration](docs/Configuration.md) for all file settings, environment
+variables, and path overrides.
 
-```dotenv
-APP_HOST=0.0.0.0
-APP_ORIGIN=http://10.16.20.111:3003
-APP_ALLOW_INSECURE_HTTP=true
+## Development
+
+Install Node.js 22.23.3 or newer and pnpm.
+
+```sh
+git clone https://github.com/idft/hypervibes.git
+cd hypervibes
+pnpm install
+pnpm dev
 ```
 
-Open that exact URL, not `localhost` or another hostname. HTTP sends sessions
-and app data without transport encryption. Use it only on a trusted private
-network, never directly on the public internet. Some browser wallets require
-HTTPS and may not work over LAN HTTP.
+Open <http://localhost:3003>. The development server supports hot reload.
+See [`AGENTS.md`](AGENTS.md) for architecture and project conventions.
 
-See `docs/` for the user guide and `AGENTS.md` for architecture and project
-conventions.
-
-## Build a release package
+### Build
 
 ```sh
 pnpm build          # Compiled backend, frontend, and runtime resources
@@ -72,42 +99,12 @@ pnpm start:built    # Run that build without rebuilding
 pnpm pack           # Rebuild and create a local npm tarball
 ```
 
-The package exposes the `hypervibes` executable and runs with Node.js and runtime
-dependencies only; it does not need pnpm or TypeScript to launch. Run
-`node bin/hypervibes.js --help` for usage. Public npm releases are coming soon.
+`pnpm start` builds fresh production assets before serving. Keep development
+dependencies installed for source builds. The release package exposes the
+`hypervibes` executable and needs only Node.js and runtime dependencies to launch.
+Run `node bin/hypervibes.js --help` for usage. Public npm releases are coming soon.
 
-## Containers
-
-The rewritten container image is coming with release `v0.4.0` at
-`ghcr.io/idft/hypervibes`, for Linux AMD64 and ARM64. See
-[container setup](docs/Installation.md#containers) and `compose.yaml`.
-
-Build locally from the same release package used by npm installations:
-
-```sh
-pnpm pack --out artifacts/hypervibes.tgz
-docker build -f Containerfile -t hypervibes:local .
-```
-
-## Screenshots
-
-Capture the dashboard with anonymous sample account data and the current React UI:
-
-```sh
-pnpm exec playwright install chromium  # Once
-pnpm screenshot --screen dashboard --output artifacts/dashboard-screenshot.png
-```
-
-The command builds a separate screenshot page, serves `/screenshot` temporarily
-on a loopback-only port, captures it, and closes the server. Each capture fetches
-a fresh public Coinbase BTC-USD quote for the synthetic position and exit prices;
-it stops if a fresh quote is unavailable. The account data stays fictitious, and
-the browser makes no external requests. No running app, login, database, or
-exchange credentials are needed. Normal development and production do not include
-this route. Dashboard fixtures live in `src/screenshot/`; future screens can reuse
-the capture runner.
-
-## Checks
+### Checks
 
 ```sh
 pnpm typecheck:server
@@ -116,18 +113,15 @@ pnpm test
 ```
 
 `pnpm test` runs application, startup, container health-check, and screenshot-tool
-tests without building the trading app or requiring Docker or Chromium. For release checks, run `pnpm build`,
-`pnpm test:build`, and `pnpm test:package`; package testing performs a clean install.
+tests without building the trading app or requiring Docker or Chromium.
+For release checks, run `pnpm build`, `pnpm test:build`, and `pnpm test:package`;
+package testing performs a clean install.
 
-GitHub Actions runs validation on pull requests, pushes to `master` and `v*`
-branches, and manual runs. It builds one npm tarball and tests that artifact on
-Linux, macOS, and Windows with runtime dependencies only. The workflow uploads
-the tarball for inspection and validates non-root containers on native AMD64
-and ARM64 runners without opening application listeners. Validation does not
-publish anything. Publishing a GitHub release runs validation again, then
-promotes the tested images to GHCR with version, minor-version, commit, and
-`latest` tags. Prereleases receive no minor-version or `latest` tags. Tag pushes
-only create draft releases; branch pushes do not publish images.
+GitHub Actions validates pull requests, pushes to `master` and `v*` branches,
+and manual runs. It tests the release package on Linux, macOS, and Windows,
+and non-root containers on native AMD64 and ARM64 runners.
+Publishing a GitHub release validates again before publishing images to GHCR.
+Tag pushes only create draft releases; branch pushes do not publish images.
 
 ## License
 
