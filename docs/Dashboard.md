@@ -24,5 +24,12 @@ trying again.
 Closing does not stop the agent, which may reopen the position. Use
 [Emergency stop](Agents.md#emergency-stop-and-re-enable) first to halt its activity.
 
+## Cancel an order
+
+Use **Cancel** beside an open order, then confirm. This cancels only the selected
+order and also works while the agent is disabled. Canceling a parent order can
+also cancel its attached TP/SL protection. Check the result before trying again
+if the outcome is uncertain.
+
 Use [Transactions](Transactions.md) for trade history and
 [Charts](Charts.md) for market analysis.

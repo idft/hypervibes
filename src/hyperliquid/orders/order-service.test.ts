@@ -97,6 +97,92 @@ describe("durable order gateway", () => {
     await expect(service.closePosition("owner", agentId, "ETH", "manual-close")).rejects.toMatchObject({ status: 409 });
   });
 
+  it("cancels one external order while paused and deduplicates concurrent requests and restarts", async () => {
+    await applicationDatabase(database).update(hvAgents).set({ enabled: false }).where(eq(hvAgents.id, agentId)).run();
+    status.mockResolvedValue({ status: "order", order: { order: remote(), status: "open", statusTimestamp: 1 } });
+    exchange.mockResolvedValue(receipt(["success"], "cancel"));
+    const cancel = () => service.cancelOrder("owner", agentId, "BTC", "123", "manual-cancel");
+    const [first, second] = await Promise.all([cancel(), cancel()]);
+    expect(first).toEqual(second);
+    expect(first).toMatchObject({ requestId: "manual-cancel", kind: "cancel", uncertain: false,
+      results: [{ symbol: "BTC", exchangeOid: "123", commandStatus: "accepted", orderStatus: "canceled" }] });
+    expect(exchanges[0]).toMatchObject({ vaultAddress: account, action: { type: "cancel", cancels: [{ a: 0, o: 123 }] } });
+    expect(bindings.authority).toHaveBeenCalledWith("owner", agentId, expect.any(AbortSignal), false);
+    expect(openOrders).not.toHaveBeenCalled();
+    expect(status).toHaveBeenCalledWith({ type: "orderStatus", user: account, oid: 123 });
+    await expect(service.cancelOrder("owner", agentId, "BTC", "456", "manual-cancel")).rejects.toMatchObject({ status: 409 });
+    await expect(service.cancelOrder("owner", agentId, "ETH", "123", "manual-cancel")).rejects.toMatchObject({ status: 409 });
+    await service.close(); service = new OrderService(database, transport(), bindings); await service.recover(); service.start();
+    expect(await cancel()).toEqual(first);
+    expect(exchange).toHaveBeenCalledOnce();
+    expect(status).toHaveBeenCalledOnce();
+    bindings.account = vi.fn(async () => owner);
+    await expect(cancel()).rejects.toMatchObject({ status: 409 });
+    expect(exchange).toHaveBeenCalledOnce();
+  });
+
+  it("queues operator cancellation behind agent submissions and seals it for deletion", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    exchange.mockImplementationOnce(async () => { await held; return receipt([{ resting: { oid: 123 } }]); });
+    const submitting = submit();
+    await vi.waitFor(() => expect(exchange).toHaveBeenCalledOnce());
+    status.mockResolvedValue({ status: "order", order: { order: remote(), status: "open", statusTimestamp: 1 } });
+    exchange.mockResolvedValue(receipt(["success"], "cancel"));
+    const canceling = service.cancelOrder("owner", agentId, "BTC", "123", "queued-cancel");
+    try {
+      // Let independent promise work finish; target lookup must stay behind the held submission.
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+      expect(status).not.toHaveBeenCalled();
+      expect(exchange).toHaveBeenCalledOnce();
+    } finally { release(); }
+    await submitting;
+    expect(await canceling).toMatchObject({ results: [{ commandStatus: "accepted", orderStatus: "canceled" }] });
+    await service.stopAgent(agentId);
+    await expect(service.cancelOrder("owner", agentId, "BTC", "123", "after-delete")).rejects.toThrow("being deleted");
+    expect(exchange).toHaveBeenCalledTimes(2);
+  });
+
+  it("replays an existing cancellation through the operator path without submitting again", async () => {
+    status.mockResolvedValue({ status: "order", order: { order: remote(), status: "open", statusTimestamp: 1 } });
+    exchange.mockRejectedValue(new Error("lost cancel response"));
+    const first = await service.cancel("owner", agentId, { request_id: "shared-cancel", orders: [{ symbol: "BTC", oid: "123" }] });
+    await applicationDatabase(database).update(hvAgents).set({ enabled: false }).where(eq(hvAgents.id, agentId)).run();
+    const retried = await service.cancelOrder("owner", agentId, "BTC", "123", "shared-cancel");
+    expect(retried).toMatchObject({ operationId: first.operationId, uncertain: true, results: [{ commandStatus: "unknown" }] });
+    status.mockResolvedValue({ status: "order", order: { order: remote(), status: "canceled", statusTimestamp: 2 } });
+    expect(await service.cancelOrder("owner", agentId, "BTC", "123", "shared-cancel")).toMatchObject({ operationId: first.operationId, uncertain: false, results: [{ commandStatus: "reconciled", orderStatus: "canceled" }] });
+    expect(exchange).toHaveBeenCalledOnce();
+  });
+
+  it("validates the operator cancellation target before preparing or signing", async () => {
+    const cancel = (symbol: string, oid: string) => service.cancelOrder("owner", agentId, symbol, oid, randomUUID());
+    for (const symbol of ["@107", "PURR/USDC", "xyz:BTC", "DEAD", "missing"]) await expect(cancel(symbol, "123")).rejects.toThrow("unsupported");
+    for (const oid of ["0", "-1", "1.5", "00123", "9007199254740992", "abc"]) await expect(cancel("BTC", oid)).rejects.toThrow("order ID");
+    expect(status).not.toHaveBeenCalled();
+    await expect(cancel("BTC", "123")).rejects.toMatchObject({ status: 409 });
+    status.mockResolvedValue({ status: "order", order: { order: remote(123, "ETH"), status: "open", statusTimestamp: 1 } });
+    await expect(cancel("BTC", "123")).rejects.toMatchObject({ status: 409 });
+    status.mockResolvedValue({ status: "order", order: { order: remote(456), status: "open", statusTimestamp: 1 } });
+    await expect(cancel("BTC", "123")).rejects.toMatchObject({ status: 409 });
+    expect(status).toHaveBeenCalledWith({ type: "orderStatus", user: account, oid: 123 });
+    expect(exchange).not.toHaveBeenCalled();
+    expect(await database.all("SELECT * FROM hv_order_requests")).toEqual([]);
+  });
+
+  it("rejects invalid operator request IDs and missing or changed account authority", async () => {
+    for (const key of ["", "with spaces", "a".repeat(121)]) {
+      expect(() => service.cancelOrder("owner", agentId, "BTC", "123", key)).toThrow("stable request_id");
+    }
+    bindings.account = vi.fn(async () => null);
+    await expect(service.cancelOrder("owner", agentId, "BTC", "123", "no-account")).rejects.toMatchObject({ status: 409 });
+    bindings.account = vi.fn(async () => account);
+    bindings.authority = vi.fn(async () => ({ account: owner, privateKey, builder }));
+    await expect(service.cancelOrder("owner", agentId, "BTC", "123", "changed-account")).rejects.toThrow("Account assignment changed");
+    expect(infoCalls).toEqual([]);
+    expect(exchange).not.toHaveBeenCalled();
+  });
+
   it("cancels only the selected market's exchange orders before closing and reports known partial fills", async () => {
     positions = [{ coin: "BTC", szi: "0.002" }];
     let orders = [remote(), remote(456, "ETH")];
@@ -271,6 +357,7 @@ describe("durable order gateway", () => {
       () => service.submit("other", agentId, { request_id: "x", orders: [order] }),
       () => service.cancel("other", agentId, { request_id: "x", orders: [{ symbol: "BTC", oid: "123" }] }),
       () => service.cancelAll("other", agentId, { request_id: "x" }),
+      () => service.cancelOrder("other", agentId, "BTC", "123", "x"),
       () => service.list("other", agentId, {}), () => service.get("other", agentId, "123"), () => service.request("other", agentId, "x"),
     ]) await expect(operation()).rejects.toMatchObject({ status: 404 });
     expect(infoCalls).toEqual([]); expect(exchange).not.toHaveBeenCalled();

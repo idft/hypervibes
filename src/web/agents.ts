@@ -176,6 +176,16 @@ export const setAgentEnabled = createServerFn({ method: "POST" })
     return agentOperation(() => context.runtime.agents.setEnabled(user.id, data.id, data.enabled));
   });
 
+export const cancelAgentOrder = createServerFn({ method: "POST" })
+  .validator((data: unknown) => ({ id: field(data, "id"), symbol: field(data, "symbol"), oid: field(data, "oid"), requestId: field(data, "requestId") }))
+  .handler(async ({ context, data }) => {
+    const user = await agentUser(context.runtime, getRequestHeaders(), true);
+    return agentOperation(async () => {
+      await context.runtime.agents.owned(user.id, data.id);
+      return context.runtime.orders.cancelOrder(user.id, data.id, data.symbol, data.oid, data.requestId);
+    });
+  });
+
 export const closeAgentPosition = createServerFn({ method: "POST" })
   .validator((data: unknown) => ({ id: field(data, "id"), symbol: field(data, "symbol"), requestId: field(data, "requestId") }))
   .handler(async ({ context, data }) => {

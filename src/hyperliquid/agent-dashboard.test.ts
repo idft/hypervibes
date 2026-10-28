@@ -48,6 +48,14 @@ describe("Agent dashboard snapshots", () => {
       { id: 2, coin: "BTC", side: "Buy", size: "0.02", price: "90000", type: "Limit", triggerPrice: "95000.00001", positionTpsl: true },
     ]);
   });
+  it("preserves exchange timestamps for live and snapshot orders, including children", () => {
+    const base = (fixtures.frontendOpenOrders as FrontendOpenOrdersResponse)[0]!;
+    const timestamp = 1_780_000_000_000;
+    const result = dashboardOrders([{ ...base, timestamp, children: [{ ...base, oid: 456, timestamp: timestamp - 1000 }] }]);
+    expect(result.orders[0]?.timestamp).toBe(timestamp);
+    expect(result.orders[0]?.children?.[0]?.timestamp).toBe(timestamp - 1000);
+    expect(dashboardOrders([base]).orders[0]?.timestamp).toBeUndefined();
+  });
   it("reports unavailable sections as unknown, not empty or zero, while preserving successful sections", async () => {
     mockFetch("clearinghouseState");
     const result = await loadAgentDashboard(new HttpTransport(), address);

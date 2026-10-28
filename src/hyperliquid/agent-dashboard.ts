@@ -9,6 +9,7 @@ export interface DashboardOrder {
   id: number; coin: string; side: string; size: string; price: string; type: string;
   /** Trigger orders must be plotted at the trigger, not their execution limit. */
   triggerPrice?: string;
+  timestamp?: number;
   positionTpsl?: true;
   children?: DashboardOrder[];
 }
@@ -48,6 +49,7 @@ export function dashboardSpot(state: SpotClearinghouseStateResponse) {
 }
 export function dashboardOrders(orders: FrontendOpenOrdersResponse) {
   const convert = (order: FrontendOpenOrdersResponse[number]): DashboardOrder => ({ id: order.oid, coin: order.coin, side: order.side === "B" ? "Buy" : "Sell", size: order.sz, price: order.limitPx, type: order.orderType,
+    ...(Number.isFinite(order.timestamp) ? { timestamp: order.timestamp } : {}),
     ...(order.isTrigger ? { triggerPrice: order.triggerPx } : {}), ...(order.isPositionTpsl ? { positionTpsl: true as const } : {}),
     ...(order.children?.length ? { children: order.children.map(convert) } : {}),
   });

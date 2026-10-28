@@ -146,6 +146,12 @@ export class OrderService {
       return this.prepareCancel(authority.account, input.request_id, orders.map((order) => ({ symbol: order.coin, oid: String(order.oid) })), abort);
     }, execution);
   }
+  /** Operator-only single-order cancellation; mutate owns the per-agent lock and replay. */
+  cancelOrder(userId: string, agentId: string, symbol: string, oid: string, key: string): Promise<OperationResult> {
+    const input: CancelInput = { request_id: key, orders: [{ symbol, oid }] };
+    return this.mutate(userId, agentId, key, "cancel", input, undefined,
+      (authority, signal) => this.prepareCancel(authority.account, key, input.orders, signal), undefined, { operator: true });
+  }
   /** Operator-only exit. Browser/model input never supplies side, size, or signing authority. */
   closePosition(userId: string, agentId: string, symbol: string, key: string) {
     this.admit(); this.requestKey(key);

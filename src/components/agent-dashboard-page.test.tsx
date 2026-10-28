@@ -6,7 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentDashboard } from "../hyperliquid/agent-dashboard.js";
 const mocks = vi.hoisted(() => ({ sendAgentMessage: vi.fn(), runSubagent: vi.fn(), navigate: vi.fn(), saveSubagentSection: vi.fn(), invalidate: vi.fn().mockResolvedValue(undefined) }));
-vi.mock("../web/agents.js", () => ({ sendAgentMessage: mocks.sendAgentMessage, closeAgentPosition: vi.fn() }));
+vi.mock("../web/agents.js", () => ({ sendAgentMessage: mocks.sendAgentMessage, closeAgentPosition: vi.fn(), cancelAgentOrder: vi.fn() }));
 vi.mock("../web/subagents.js", () => ({ runSubagent: mocks.runSubagent, saveSubagentSection: mocks.saveSubagentSection }));
 vi.mock("@tanstack/react-router", () => ({ useRouter: () => ({ navigate: mocks.navigate, invalidate: mocks.invalidate }) }));
 import { AgentDashboardPage as AgentDashboardPageComponent } from "./agent-dashboard-page.js";
@@ -342,6 +342,27 @@ describe("Agent dashboard", () => {
     expect([...container.querySelectorAll("tbody img")].map((image) => image.getAttribute("src"))).toEqual(["/currency/BTC.svg", "/currency/ETH.svg"]);
     expect(container.textContent).toContain("@107");
   });
+  it("shows relative order timestamps and toggles each timestamp to UTC and back", async () => {
+    const timestamp = Date.now() - 120_000;
+    const exact = new Date(timestamp).toISOString();
+    await act(async () => source().send({ ...initial, orders: [
+      { id: 1, coin: "BTC", side: "Buy", type: "Limit", size: "1", price: "100", timestamp },
+      { id: 2, coin: "ETH", side: "Buy", type: "Limit", size: "1", price: "100" },
+    ] }));
+    const section = [...container.querySelectorAll("section")].find((section) => section.querySelector("h3")?.textContent === "Open orders")!;
+    expect([...section.querySelectorAll("th")].map((header) => header.textContent)).toEqual(["Market", "Timestamp", "Side", "Type", "Size", "Price / trigger", "Actions"]);
+    expect(section.querySelector('button[aria-label="Cancel BTC order 1"]')).not.toBeNull();
+    const button = section.querySelector<HTMLButtonElement>('button[aria-label="Show UTC order timestamp"]')!;
+    expect(button.textContent).toContain("ago");
+    expect(button.classList.contains("cursor-pointer")).toBe(true);
+    expect(button.querySelector("time")?.dateTime).toBe(exact);
+    await act(async () => button.click());
+    expect(button.textContent).toBe(`${exact.replace("T", " ").slice(0, 19)} UTC`);
+    expect(button.getAttribute("aria-label")).toBe("Show relative order time");
+    await act(async () => button.click());
+    expect(button.textContent).toContain("ago");
+    expect(section.querySelectorAll("tbody tr")[1]?.querySelectorAll("td")[1]?.textContent).toBe("—");
+  });
   it("shows TP/SL trigger prices with financial formatting and exact fractions", async () => {
     await act(async () => source().send({ ...initial, orders: [
       { id: 1, coin: "BTC", side: "Sell", type: "Stop Market", size: "0.00024", triggerPrice: "83880.0", price: "75492.0" },
@@ -353,9 +374,9 @@ describe("Agent dashboard", () => {
     expect(section.querySelector("thead")?.textContent).toContain("Price / trigger");
     expect(section.textContent).not.toContain("Execution limit");
     const rows = [...section.querySelectorAll("tbody tr")];
-    expect(rows.map((row) => row.querySelectorAll("td")[4]!.querySelector("span")?.textContent)).toEqual(["83,880.00", "86,420.00", "80,000.1234", "83,000.1234"]);
-    expect(rows.map((row) => row.querySelectorAll("td")[3]!.querySelector("span")?.textContent)).toEqual(["0.00024", "0.00024", "0.00024", "0.00024"]);
-    for (const row of rows) for (const index of [3, 4]) expect(row.querySelectorAll("td")[index]!.querySelector("span")?.className).toContain("font-mono");
+    expect(rows.map((row) => row.querySelectorAll("td")[5]!.querySelector("span")?.textContent)).toEqual(["83,880.00", "86,420.00", "80,000.1234", "83,000.1234"]);
+    expect(rows.map((row) => row.querySelectorAll("td")[4]!.querySelector("span")?.textContent)).toEqual(["0.00024", "0.00024", "0.00024", "0.00024"]);
+    for (const row of rows) for (const index of [4, 5]) expect(row.querySelectorAll("td")[index]!.querySelector("span")?.className).toContain("font-mono");
   });
   it("formats position sizes, prices and P&L with separators and monospaced digits", async () => {
     await act(async () => source().send({ ...initial, positions: [

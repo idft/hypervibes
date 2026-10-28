@@ -13,7 +13,7 @@ vi.mock("@tanstack/react-start", () => {
   });
   return { createServerFn: () => builder() };
 });
-import { closeAgentPosition, setAgentEnabled } from "./agents.js";
+import { cancelAgentOrder, closeAgentPosition, setAgentEnabled } from "./agents.js";
 import { beginProviderLogin, getModelChoices, getProviderSettings, refreshProviderModels } from "./providers.js";
 import { approveApiWallet, getAccount, setupApiWallet } from "./account.js";
 import { listSubagents, saveSubagentSection } from "./subagents.js";
@@ -120,6 +120,48 @@ describe("throwing domain server functions", () => {
     mocks.user.mockResolvedValue(null);
     mocks.headers.mockReturnValue(new Headers({ origin: runtime.origin }));
     expect(isRedirect(await invoke(setAgentEnabled, app, { id: "agent", enabled: false }).catch((error: unknown) => error))).toBe(true);
+  });
+
+  it("checks cancellation ownership and returns the operator result with the original request ID", async () => {
+    const owned = vi.fn().mockRejectedValue(new AgentError("Agent not found", 404));
+    const cancelOrder = vi.fn();
+    const app = { ...runtime, agents: { owned }, orders: { cancelOrder } } as unknown as AppRuntime;
+    const input = { id: "agent", symbol: "BTC", oid: "123", requestId: "cancel-1" };
+    await expect(invoke(cancelAgentOrder, app, input)).rejects.toMatchObject({ status: 404 });
+    expect(owned).toHaveBeenCalledWith("owner", "agent");
+    expect(cancelOrder).not.toHaveBeenCalled();
+    owned.mockResolvedValue({ id: "agent", enabled: false });
+    const result = { operationId: "operation", requestId: "cancel-1", kind: "cancel", results: [], uncertain: false, warnings: [] };
+    cancelOrder.mockResolvedValue(result);
+    for (let retry = 0; retry < 2; retry++) {
+      expect(await invoke(cancelAgentOrder, app, { ...input, account: "foreign", operator: false })).toEqual(result);
+    }
+    expect(cancelOrder).toHaveBeenCalledTimes(2);
+    expect(cancelOrder).toHaveBeenLastCalledWith("owner", "agent", "BTC", "123", "cancel-1");
+    const conflict = new HyperliquidError("Cancellation target was not found", 409);
+    cancelOrder.mockRejectedValue(conflict);
+    await expect(invoke(cancelAgentOrder, app, input)).rejects.toBe(conflict);
+    cancelOrder.mockRejectedValue(new Error("private signing details"));
+    await expect(invoke(cancelAgentOrder, app, input)).rejects.toMatchObject({ message: "Agent operation failed. Please try again.", status: 500 });
+  });
+
+  it("rejects invalid cancellation fields, cross-origin requests, and unauthenticated callers before service calls", async () => {
+    const owned = vi.fn(), cancelOrder = vi.fn();
+    const app = { ...runtime, agents: { owned }, orders: { cancelOrder } } as unknown as AppRuntime;
+    const input = { id: "agent", symbol: "BTC", oid: "123", requestId: "cancel-1" };
+    for (const field of ["id", "symbol", "oid", "requestId"]) {
+      expect(() => invoke(cancelAgentOrder, app, { ...input, [field]: 123 })).toThrow("Invalid request");
+      expect(() => invoke(cancelAgentOrder, app, { ...input, [field]: undefined })).toThrow("Invalid request");
+    }
+    for (const headers of [new Headers({ origin: "https://evil.example" }), new Headers()]) {
+      mocks.headers.mockReturnValue(headers);
+      await expect(invoke(cancelAgentOrder, app, input)).rejects.toMatchObject({ status: 403 });
+    }
+    mocks.headers.mockReturnValue(new Headers({ origin: runtime.origin }));
+    mocks.user.mockResolvedValue(null);
+    expect(isRedirect(await invoke(cancelAgentOrder, app, input).catch((error: unknown) => error))).toBe(true);
+    expect(owned).not.toHaveBeenCalled();
+    expect(cancelOrder).not.toHaveBeenCalled();
   });
 
   it("keeps authentication redirects out of the service boundary", async () => {
