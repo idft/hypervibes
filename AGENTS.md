@@ -2,6 +2,8 @@
 
 HyperVibes is a framework for AI agents to trade crypto on Hyperliquid exchange.
 
+If `.pi/AGENTS.md` exists, read it for additional machine-local instructions.
+
 ## Current application
 
 HyperVibes is a TypeScript application built with TanStack Start, Fastify, and
