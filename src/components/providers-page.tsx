@@ -186,7 +186,7 @@ export function ProvidersPage() {
     // connected providers and the search box stay visible while the full
     // provider list scrolls inside its own section.
     <div className="mx-auto flex h-[calc(100dvh-6.5rem)] max-w-4xl flex-col gap-6 overflow-hidden">
-      <header className="shrink-0"><h1 className="text-3xl font-semibold text-white">Providers</h1><p className="mt-2 text-sm text-zinc-400">Connect your AI accounts. Credentials are encrypted and private to your user.</p></header>
+      <header className="shrink-0"><h1 className="text-3xl font-semibold text-white">Providers</h1><p className="mt-2 text-sm text-zinc-400">Connect your AI accounts.</p></header>
       {!settings.storageReady && <p role="status" className="shrink-0 text-sm text-amber-200">Provider setup requires AGENTS_ENCRYPTION_KEY on the server.</p>}
       <SetupChecklist state={{ ...setup, providerConnected: connected.length > 0 }} agentCount={agentCount} />
       {error && <p role="alert" className="shrink-0 text-sm text-red-300">{error}</p>}
@@ -197,7 +197,7 @@ export function ProvidersPage() {
       <section aria-labelledby="all-providers-heading" className="flex min-h-0 flex-1 flex-col gap-3">
         <h2 id="all-providers-heading" className="shrink-0 text-lg font-semibold text-white">All Providers</h2>
         <div className="flex shrink-0 flex-wrap gap-3">
-          <input aria-label="Search providers" placeholder="Search providers…" className={`${input} flex-1`} value={search} onChange={(event) => setSearch(event.target.value)} />
+          <input autoFocus aria-label="Search providers" placeholder="Search providers…" className={`${input} flex-1`} value={search} onChange={(event) => setSearch(event.target.value)} />
           <button className={button} disabled={pending || active} onClick={() => mutation.mutate({ type: "refresh" })}>Refresh models</button>
         </div>
         <div className="min-h-0 flex-1 divide-y divide-zinc-800 overflow-y-auto rounded-xl border border-zinc-800">
