@@ -6,9 +6,9 @@ import { accountPriceLines, tradeMarkers } from "./trading-overlays.js";
 const fill = (id: string, time: number, side: ChartFill["side"] = "Buy", price = "100"): ChartFill => ({ id, time, side, price, size: "0.00000001" });
 const candle = (time: number) => ({ time, open: 100, close: 101, high: 102, low: 99, volume: 1 });
 const order = (id: number, overrides: Partial<DashboardOrder> = {}): DashboardOrder => ({ id, coin: "BTC", side: "Sell", price: "80", size: "0.1", type: "Stop Market", triggerPrice: "90", ...overrides });
-const account = (): AgentDashboard => ({ address: "0xaccount", fetchedAt: 1, perpEquity: "1000", spotUsdc: "0", errors: [],
+const account = (): AgentDashboard => ({ address: "0xaccount", accountAbstraction: "disabled", fetchedAt: 1, perpEquity: "1000", spotUsdc: "0", errors: [],
   positions: [{ coin: "BTC", size: "-0.00000001", entryPrice: "100.00000001", unrealizedPnl: "-1.23456789", liquidationPrice: null, leverage: 2 }], orders: [],
-  live: { status: "connected", sections: { perps: { fresh: true, updatedAt: 1 }, orders: { fresh: true, updatedAt: 1 }, spot: { fresh: false, updatedAt: null } } },
+  live: { status: "connected", sections: { perps: { fresh: true, updatedAt: 1 }, orders: { fresh: true, updatedAt: 1 }, spot: { fresh: false, updatedAt: null }, mode: { fresh: true, updatedAt: 1 } } },
 });
 
 describe("read-only trading overlays", () => {

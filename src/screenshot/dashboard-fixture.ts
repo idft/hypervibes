@@ -45,10 +45,10 @@ export function dashboardFixture(btcPrice: string, now = Date.now()) {
     balance: realizedBalance.add(amount(String(offset))).toString(),
   }));
   const dashboard: AgentDashboard = {
-    address: screenshotAddress, fetchedAt: now, perpEquity: equity, spotUsdc: "0", spotUsdcHold: "0", errors: [],
+    address: screenshotAddress, accountAbstraction: "disabled", fetchedAt: now, perpEquity: equity, spotUsdc: "0", spotUsdcHold: "0", errors: [],
     balanceHistory: { day: history(dayOffsets, 86_400_000), month: history(monthOffsets, 30 * 86_400_000) },
     live: { status: "connected", sections: {
-      perps: { updatedAt: now, fresh: true }, spot: { updatedAt: now, fresh: true }, orders: { updatedAt: now, fresh: true },
+      perps: { updatedAt: now, fresh: true }, spot: { updatedAt: now, fresh: true }, orders: { updatedAt: now, fresh: true }, mode: { updatedAt: now, fresh: true },
     } },
     positions: [{ coin: "BTC", size, leverage: 5, entryPrice, unrealizedPnl, liquidationPrice }],
     orders: [

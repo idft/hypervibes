@@ -50,10 +50,10 @@ const stream = () => FakeEventSource.instances.at(-1)!;
 const streamParams = (url: string) => new URL(url, "http://localhost").searchParams;
 const sendChart = (snapshot: ChartSnapshot) => stream().send(snapshot);
 const sendDashboard = (snapshot: AgentDashboard) => stream().dashboard(snapshot);
-const snapshot = (): AgentDashboard => ({ address: "0xaccount", fetchedAt: 0, perpEquity: "100", spotUsdc: "0", errors: [],
+const snapshot = (): AgentDashboard => ({ address: "0xaccount", accountAbstraction: "disabled", fetchedAt: 0, perpEquity: "100", spotUsdc: "0", errors: [],
   positions: [{ coin: "BTC", size: "1", entryPrice: "11", unrealizedPnl: "2", liquidationPrice: null, leverage: 2 }],
   orders: [{ id: 1, coin: "BTC", side: "Buy", type: "Limit", price: "10", size: "0.5" }, { id: 2, coin: "BTC", side: "Sell", type: "Stop Market", price: "6", triggerPrice: "9", size: "1" }],
-  live: { status: "connected", sections: { perps: { fresh: true, updatedAt: 1 }, spot: { fresh: true, updatedAt: 1 }, orders: { fresh: true, updatedAt: 1 } } },
+  live: { status: "connected", sections: { perps: { fresh: true, updatedAt: 1 }, spot: { fresh: true, updatedAt: 1 }, orders: { fresh: true, updatedAt: 1 }, mode: { fresh: true, updatedAt: 1 } } },
 });
 describe("annotated market chart", () => {
   let root: Root, container: HTMLDivElement, chartMount: HTMLDivElement, statusHost: HTMLDivElement, handle: MarketChartHandle | null;

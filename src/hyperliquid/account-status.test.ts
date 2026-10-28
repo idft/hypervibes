@@ -7,9 +7,9 @@ const address = `0x${"ab".repeat(20)}`;
 function snapshot(): AgentDashboard {
   const updatedAt = Date.now();
   return {
-    address, fetchedAt: updatedAt, perpEquity: "9007199254740993.123456", positions: [], spotUsdc: "1234.567890123456789", spotUsdcHold: "12.34",
+    address, accountAbstraction: "unifiedAccount", fetchedAt: updatedAt, perpEquity: "9007199254740993.123456", positions: [], spotUsdc: "1234.567890123456789", spotUsdcHold: "12.34",
     orders: [{ id: 1, coin: "ETH", side: "Buy", size: "0.001", price: "1000", type: "Limit" }, { id: 2, coin: "@107", side: "Buy", size: "1", price: "10", type: "Limit" }, { id: 3, coin: "PURR/USDC", side: "Buy", size: "1", price: "10", type: "Limit" }],
-    errors: [], live: { status: "connected", sections: { perps: { updatedAt, fresh: true }, orders: { updatedAt, fresh: true }, spot: { updatedAt, fresh: true } } },
+    errors: [], live: { status: "connected", sections: { perps: { updatedAt, fresh: true }, orders: { updatedAt, fresh: true }, spot: { updatedAt, fresh: true }, mode: { updatedAt, fresh: true } } },
   };
 }
 const transport = () => new HttpTransport();

@@ -18,7 +18,7 @@ function Page(props: DashboardProps) {
   return <AgentEventsProvider agentId={props.id}><AgentDashboardPage {...props} /></AgentEventsProvider>;
 }
 const topicsOf = (url: string) => new URL(url, "http://localhost").searchParams.get("topics");
-const initial: AgentDashboard = { address: `0x${"12".repeat(20)}`, fetchedAt: 0, perpEquity: "12.5", spotUsdc: "3", positions: [], orders: [], errors: [] };
+const initial: AgentDashboard = { address: `0x${"12".repeat(20)}`, fetchedAt: 0, accountAbstraction: "disabled", perpEquity: "12.5", spotUsdc: "3", positions: [], orders: [], errors: [] };
 const stream = () => FakeEventSource.instances.find((source) => source.url.includes("/stream"))!;
 const source = () => stream();
 const workerSource = () => stream();
@@ -298,7 +298,7 @@ describe("Agent dashboard", () => {
     expect(container.querySelector("[role=alert]")?.textContent).toContain("not current");
     expect(container.textContent).toContain("15.50");
     await act(async () => connection.send({ ...initial, live: { status: "reconnecting", sections: {
-      perps: { updatedAt: 0, fresh: false }, spot: { updatedAt: null, fresh: false }, orders: { updatedAt: 0, fresh: false },
+      mode: { updatedAt: 0, fresh: false }, perps: { updatedAt: 0, fresh: false }, spot: { updatedAt: null, fresh: false }, orders: { updatedAt: 0, fresh: false },
     } } }));
     expect(container.querySelector("[role=alert]")).toBeNull();
     expect(container.querySelector("[role=status]")?.textContent).toBe("Disconnected");
@@ -306,7 +306,7 @@ describe("Agent dashboard", () => {
   });
   it("shows green when current, yellow when connected but stale, and red when the browser stream disconnects", async () => {
     const live: NonNullable<AgentDashboard["live"]> = { status: "connected", sections: {
-      perps: { updatedAt: 0, fresh: true }, spot: { updatedAt: 0, fresh: true }, orders: { updatedAt: 0, fresh: true },
+      mode: { updatedAt: 0, fresh: true }, perps: { updatedAt: 0, fresh: true }, spot: { updatedAt: 0, fresh: true }, orders: { updatedAt: 0, fresh: true },
     } };
     await act(async () => source().send({ ...initial, live }));
     expect(container.querySelector("[role=status]")?.textContent).toBe("Connected");
@@ -314,19 +314,45 @@ describe("Agent dashboard", () => {
     await act(async () => source().send({ ...initial, live: { ...live, sections: { ...live.sections, spot: { updatedAt: 0, fresh: false } } } }));
     expect(container.querySelector("[role=status]")?.textContent).toBe("Connected · Data stale");
     expect(container.querySelector("[role=status] .bg-amber-400")).not.toBeNull();
+    await act(async () => source().send({ ...initial, live: { ...live, sections: { ...live.sections, mode: { updatedAt: 0, fresh: false } } } }));
+    expect(container.querySelector("[role=status]")?.textContent).toBe("Connected · Data stale");
+    expect(container.querySelector("[role=status] .bg-amber-400")).not.toBeNull();
     await act(async () => source().onerror?.());
     expect(container.querySelector("[role=status]")?.textContent).toBe("Disconnected");
     expect(container.querySelector("[role=status] .bg-red-400")).not.toBeNull();
   });
-  it("combines equity exactly, hides removed account details, and treats an incomplete total as unavailable", async () => {
-    await act(async () => source().send({ ...initial, perpEquity: "0.1", spotUsdc: "0.2" }));
+  it.each(["disabled", "default"] as const)("combines main-DEX equity and USDC exactly in %s mode and treats an incomplete total as unavailable", async (accountAbstraction) => {
+    await act(async () => source().send({ ...initial, accountAbstraction, perpEquity: "0.1", spotUsdc: "0.2" }));
     const overview = container.querySelector('[aria-label="Account overview"]')!;
     expect(overview.textContent).toContain("Total equity0.3000");
     expect(overview.textContent).not.toContain(initial.address);
     expect(overview.textContent).not.toMatch(/Last updated|Read-only|Spot USDC|Perpetual equity/);
     expect(overview.querySelector("time")).toBeNull();
-    await act(async () => source().send({ ...initial, spotUsdc: null }));
+    await act(async () => source().send({ ...initial, accountAbstraction, spotUsdc: null }));
     expect(overview.textContent).toContain("Total equityUnavailable");
+    await act(async () => source().send({ ...initial, accountAbstraction, perpEquity: null }));
+    expect(overview.textContent).toContain("Total equityUnavailable");
+  });
+  it("does not count unified collateral twice when there are no positions", async () => {
+    await act(async () => source().send({ ...initial, accountAbstraction: "unifiedAccount", spotUsdc: "186.061799", perpEquity: "20.298475" }));
+    const overview = container.querySelector('[aria-label="Account overview"]')!;
+    expect(overview.textContent).toContain("Total equity186.0618");
+    expect(overview.textContent).not.toContain("206.3603");
+    expect(container.textContent).toContain("No open positions.");
+    await act(async () => source().onerror?.());
+    expect(overview.textContent).toContain("Total equity186.0618");
+    expect(overview.querySelector('[role="alert"]')?.textContent).toContain("not current");
+    for (const perpEquity of ["999999.99", null]) {
+      await act(async () => source().send({ ...initial, accountAbstraction: "unifiedAccount", spotUsdc: "186.061799", perpEquity }));
+      expect(overview.textContent).toContain("Total equity186.0618");
+      expect(overview.querySelector('[role="alert"]')).toBeNull();
+    }
+  });
+  it.each([null, "portfolioMargin"] as const)("shows unavailable total equity for mode %s", async (accountAbstraction) => {
+    await act(async () => source().send({ ...initial, accountAbstraction }));
+    const overview = container.querySelector('[aria-label="Account overview"]')!;
+    expect(overview.textContent).toContain("Total equityUnavailable");
+    expect(overview.textContent).not.toContain("15.50");
   });
   it("does not represent unavailable sections as empty", async () => {
     await act(async () => source().send({ ...initial, positions: null, orders: null }));

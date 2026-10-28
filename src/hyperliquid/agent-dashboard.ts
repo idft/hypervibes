@@ -1,4 +1,4 @@
-import { InfoClient, type ClearinghouseStateResponse, type FrontendOpenOrdersResponse, type SpotClearinghouseStateResponse, type HttpTransport } from "@nktkas/hyperliquid";
+import { InfoClient, type ClearinghouseStateResponse, type FrontendOpenOrdersResponse, type SpotClearinghouseStateResponse, type HttpTransport, type UserAbstractionResponse } from "@nktkas/hyperliquid";
 import { compareDecimals } from "./decimal.js";
 
 export interface DashboardPosition {
@@ -18,10 +18,13 @@ export interface BalanceHistory {
   day: BalancePoint[];
   month: BalancePoint[];
 }
+export type DashboardSection = "perps" | "spot" | "orders" | "mode";
 export interface AgentDashboard {
+  accountAbstraction: UserAbstractionResponse | null;
   balanceHistory?: BalanceHistory | null;
   address: string | null;
   fetchedAt: number;
+  /** Raw main-DEX summary; not separate equity in unified/portfolio modes. */
   perpEquity: string | null;
   spotUsdc: string | null;
   spotUsdcHold?: string | null;
@@ -30,7 +33,7 @@ export interface AgentDashboard {
   errors: string[];
   live?: {
     status: "connecting" | "connected" | "reconnecting" | "stopped";
-    sections: Record<"perps" | "spot" | "orders", { updatedAt: number | null; fresh: boolean }>;
+    sections: Record<DashboardSection, { updatedAt: number | null; fresh: boolean }>;
   };
 }
 
@@ -58,15 +61,16 @@ export function dashboardOrders(orders: FrontendOpenOrdersResponse) {
 
 /** Read-only main-DEX snapshots. No signer, persistence, or trading authority. */
 export async function loadAgentDashboard(transport: HttpTransport, address: string | null, cancellation?: AbortSignal): Promise<AgentDashboard> {
-  const result: AgentDashboard = { address, fetchedAt: Date.now(), perpEquity: null, spotUsdc: null, positions: null, orders: null, errors: [] };
+  const result: AgentDashboard = { address, accountAbstraction: null, fetchedAt: Date.now(), perpEquity: null, spotUsdc: null, positions: null, orders: null, errors: [] };
   if (!address) return result;
   const client = new InfoClient({ transport });
   const user = address as `0x${string}`;
   const signal = AbortSignal.any([AbortSignal.timeout(8_000), ...(cancellation ? [cancellation] : [])]);
-  const [perps, spot, orders] = await Promise.allSettled([
+  const [perps, spot, orders, mode] = await Promise.allSettled([
     client.clearinghouseState({ user }, signal),
     client.spotClearinghouseState({ user }, signal),
     client.frontendOpenOrders({ user }, signal),
+    client.userAbstraction({ user }, signal),
   ]);
   if (perps.status === "fulfilled") {
     Object.assign(result, dashboardPerps(perps.value));
@@ -75,6 +79,8 @@ export async function loadAgentDashboard(transport: HttpTransport, address: stri
   else result.errors.push("Spot USDC balance is temporarily unavailable.");
   if (orders.status === "fulfilled") Object.assign(result, dashboardOrders(orders.value));
   else result.errors.push("Open orders are temporarily unavailable.");
+  if (mode.status === "fulfilled") result.accountAbstraction = mode.value;
+  else result.errors.push("Account mode is temporarily unavailable; total equity cannot be determined.");
   result.fetchedAt = Date.now();
   return result;
 }

@@ -1,8 +1,8 @@
 import { HttpTransport, SubscriptionClient, WebSocketTransport } from "@nktkas/hyperliquid";
-import { dashboardOrders, dashboardPerps, dashboardSpot, loadAgentDashboard, type AgentDashboard } from "./agent-dashboard.js";
+import { dashboardOrders, dashboardPerps, dashboardSpot, loadAgentDashboard, type AgentDashboard, type DashboardSection } from "./agent-dashboard.js";
 
-type Section = "perps" | "spot" | "orders";
-type Patch = Partial<Pick<AgentDashboard, "perpEquity" | "positions" | "spotUsdc" | "spotUsdcHold" | "orders">>;
+type Section = DashboardSection;
+type Patch = Partial<Pick<AgentDashboard, "perpEquity" | "positions" | "spotUsdc" | "spotUsdcHold" | "orders" | "accountAbstraction">>;
 export interface AccountFeedEvents {
   connected(): void;
   disconnected(): void;
@@ -16,7 +16,9 @@ export const openAccountFeed = (address: string, events: AccountFeedEvents, shar
   const transport = sharedTransport ?? new WebSocketTransport();
   const client = new SubscriptionClient({ transport });
   const abort = new AbortController();
-  const connected = () => events.connected();
+  let modeSeen = false;
+  let lastMode: AgentDashboard["accountAbstraction"] = null;
+  const connected = () => { modeSeen = false; events.connected(); };
   const disconnected = () => events.disconnected();
   transport.socket.addEventListener("open", connected);
   transport.socket.addEventListener("close", disconnected);
@@ -33,6 +35,15 @@ export const openAccountFeed = (address: string, events: AccountFeedEvents, shar
     client.openOrders({ user, dex: "" }, (event) => {
       if (event.user.toLowerCase() === address && event.dex === "") events.update("orders", dashboardOrders(event.orders));
     }, options),
+    client.webData3({ user }, (event) => {
+      if (event.userState.user.toLowerCase() !== address) return;
+      const mode = event.userState.abstraction ?? null;
+      // Omitted abstraction is unknown. Repair it once, not on every user event.
+      if (modeSeen && mode === lastMode) return;
+      modeSeen = true;
+      lastMode = mode;
+      events.update("mode", { accountAbstraction: mode });
+    }, options),
   ];
   for (const task of tasks) void task.catch(() => { if (!abort.signal.aborted) events.failed(); });
   return { async close() {
@@ -45,7 +56,7 @@ export const openAccountFeed = (address: string, events: AccountFeedEvents, shar
   } };
 };
 
-const sections: Section[] = ["perps", "spot", "orders"];
+const sections: Section[] = ["perps", "spot", "orders", "mode"];
 interface Account {
   snapshot: AgentDashboard;
   listeners: Set<(snapshot: AgentDashboard) => void>;
@@ -105,12 +116,12 @@ export class LiveDashboards {
     if (existing) return existing;
     const account: Account = {
       snapshot: {
-        address, fetchedAt: Date.now(), perpEquity: null, spotUsdc: null, positions: null, orders: null, errors: [],
+        address, accountAbstraction: null, fetchedAt: Date.now(), perpEquity: null, spotUsdc: null, positions: null, orders: null, errors: [],
         live: { status: "connecting", sections: {
-          perps: { updatedAt: null, fresh: false }, spot: { updatedAt: null, fresh: false }, orders: { updatedAt: null, fresh: false },
+          perps: { updatedAt: null, fresh: false }, spot: { updatedAt: null, fresh: false }, orders: { updatedAt: null, fresh: false }, mode: { updatedAt: null, fresh: false },
         } },
       },
-      listeners: new Set(), revision: { perps: 0, spot: 0, orders: 0 }, generation: 0, abort: new AbortController(),
+      listeners: new Set(), revision: { perps: 0, spot: 0, orders: 0, mode: 0 }, generation: 0, abort: new AbortController(),
     };
     this.accounts.set(address, account);
     this.connect(account);
@@ -125,15 +136,51 @@ export class LiveDashboards {
     if (account.abort.signal.aborted) return;
     const generation = ++account.generation;
     let epoch = 0;
+    let repairRunning = false;
+    let repairRequested = false;
     const update = (section: Section, patch: Patch) => {
+      const modeChanged = section === "mode" && patch.accountAbstraction !== account.snapshot.accountAbstraction;
+      if (modeChanged) {
+        // Balances observed before this boundary cannot establish current equity.
+        for (const balance of ["perps", "spot"] as const) {
+          account.snapshot.live!.sections[balance].fresh = false;
+          account.revision[balance]++;
+        }
+      }
       Object.assign(account.snapshot, patch);
       account.revision[section]++;
       const now = Date.now();
       account.snapshot.fetchedAt = now;
-      account.snapshot.live!.sections[section] = { updatedAt: now, fresh: true };
+      account.snapshot.live!.sections[section] = { updatedAt: now, fresh: section !== "mode" || account.snapshot.accountAbstraction !== null };
       this.publish(account);
+      if (modeChanged || (section === "mode" && account.snapshot.accountAbstraction === null)) requestRepair();
     };
     const active = () => !account.abort.signal.aborted && generation === account.generation;
+    const requestRepair = () => {
+      repairRequested = true;
+      if (repairRunning || !active() || account.snapshot.live!.status !== "connected") return;
+      repairRequested = false;
+      repairRunning = true;
+      const connectionEpoch = epoch;
+      const revision = { ...account.revision };
+      const refresh = loadAgentDashboard(this.transport, account.snapshot.address, account.abort.signal).then((snapshot) => {
+        if (!active() || connectionEpoch !== epoch || account.snapshot.live!.status !== "connected") return;
+        // Apply mode first. A changed mode invalidates this request's balances
+        // and schedules a post-boundary repair, even for an idle account.
+        if (account.revision.mode === revision.mode && snapshot.accountAbstraction !== null) update("mode", { accountAbstraction: snapshot.accountAbstraction });
+        for (const section of ["perps", "spot", "orders"] as const) {
+          if (account.revision[section] !== revision[section]) continue;
+          if (section === "perps" && snapshot.perpEquity !== null && snapshot.positions !== null) update(section, { perpEquity: snapshot.perpEquity, positions: snapshot.positions });
+          if (section === "spot" && snapshot.spotUsdc !== null) update(section, { spotUsdc: snapshot.spotUsdc, spotUsdcHold: snapshot.spotUsdcHold ?? null });
+          if (section === "orders" && snapshot.orders !== null) update(section, { orders: snapshot.orders });
+        }
+        this.publish(account);
+      }).catch(() => { /* Unknown sections remain explicitly stale. */ }).finally(() => {
+        repairRunning = false;
+        if (repairRequested && active() && account.snapshot.live!.status === "connected") requestRepair();
+      });
+      this.track(refresh);
+    };
     const invalidate = () => {
       ++epoch;
       account.snapshot.live!.status = "reconnecting";
@@ -156,21 +203,9 @@ export class LiveDashboards {
           if (!active()) return;
           account.snapshot.live!.status = "connected";
           this.publish(account);
-          // HTTP repairs initial/reconnect state. Revisions prevent a slow HTTP
-          // response from overwriting a newer WebSocket section.
-          const connectionEpoch = ++epoch;
-          const revision = { ...account.revision };
-          const refresh = loadAgentDashboard(this.transport, account.snapshot.address, account.abort.signal).then((snapshot) => {
-            if (!active() || connectionEpoch !== epoch || account.snapshot.live!.status !== "connected") return;
-            for (const section of sections) {
-              if (account.revision[section] !== revision[section]) continue;
-              if (section === "perps" && snapshot.perpEquity !== null && snapshot.positions !== null) update(section, { perpEquity: snapshot.perpEquity, positions: snapshot.positions });
-              if (section === "spot" && snapshot.spotUsdc !== null) update(section, { spotUsdc: snapshot.spotUsdc, spotUsdcHold: snapshot.spotUsdcHold ?? null });
-              if (section === "orders" && snapshot.orders !== null) update(section, { orders: snapshot.orders });
-            }
-            this.publish(account);
-          }).catch(() => { /* Unknown sections remain explicitly stale. */ });
-          this.track(refresh);
+          // Only connection and mode events trigger HTTP repair; never polling.
+          ++epoch;
+          requestRepair();
         },
         disconnected: () => { if (active()) invalidate(); },
         update: (section, patch) => { if (active()) update(section, patch); },

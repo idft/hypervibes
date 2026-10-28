@@ -257,6 +257,11 @@ describe("Agent multiplexed event stream", () => {
     const initial = await readEvent<AgentDashboard>(reader, buffer);
     expect(initial.event).toBe("dashboard");
     expect(initial.data.perpEquity).toBeNull();
+    expect(initial.data.accountAbstraction).toBeNull();
+    feedEvents!.update("mode", { accountAbstraction: "unifiedAccount" });
+    const mode = await readEvent<AgentDashboard>(reader, buffer);
+    expect(mode.data.accountAbstraction).toBe("unifiedAccount");
+    expect(mode.data.live?.sections.mode.fresh).toBe(true);
     feedEvents!.update("perps", { perpEquity: "9007199254740993.12", positions: [] });
     const updated = await readEvent<AgentDashboard>(reader, buffer);
     expect(updated.data.perpEquity).toBe("9007199254740993.12");
@@ -267,6 +272,7 @@ describe("Agent multiplexed event stream", () => {
     const reopened = await streams.open(streamRequest(agent.id, ["dashboard"]), agent.id);
     const reopenedReader = reopened.body!.getReader();
     const cached = await readEvent<AgentDashboard>(reopenedReader, { text: "" });
+    expect(cached.data.accountAbstraction).toBe("unifiedAccount");
     expect(cached.data.spotUsdc).toBe("23");
     expect(cached.data.perpEquity).toBe("9007199254740993.12");
     await reopenedReader.cancel();

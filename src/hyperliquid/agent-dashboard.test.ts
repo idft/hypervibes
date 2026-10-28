@@ -10,6 +10,7 @@ const fixtures: Record<string, unknown> = {
   ] },
   spotClearinghouseState: { balances: [{ coin: "USDC", total: "10.0000001" }] },
   frontendOpenOrders: [{ oid: 123, coin: "BTC", side: "B", sz: "0.02", limitPx: "99000", orderType: "Limit" }],
+  userAbstraction: "unifiedAccount",
 };
 afterEach(() => vi.unstubAllGlobals());
 describe("Agent dashboard snapshots", () => {
@@ -25,20 +26,48 @@ describe("Agent dashboard snapshots", () => {
   }
   it("does not make exchange calls when a development row has no address", async () => {
     const calls = mockFetch();
-    expect(await loadAgentDashboard(new HttpTransport(), null)).toMatchObject({ address: null, positions: null, orders: null });
+    expect(await loadAgentDashboard(new HttpTransport(), null)).toMatchObject({ address: null, accountAbstraction: null, perpEquity: null, spotUsdc: null, positions: null, orders: null });
     expect(calls).toHaveLength(0);
   });
   it("reads only the linked account and preserves decimal strings without aggregating balances", async () => {
     const calls = mockFetch();
     const result = await loadAgentDashboard(new HttpTransport(), address);
-    expect(calls).toHaveLength(3);
+    expect(calls).toHaveLength(4);
     expect(calls.every((call) => call.user === address)).toBe(true);
     expect(calls.map((call) => call.type).sort()).toEqual(Object.keys(fixtures).sort());
+    expect(result.accountAbstraction).toBe("unifiedAccount");
     expect(result.perpEquity).toBe("9007199254740993.123456");
     expect(result.spotUsdc).toBe("10.0000001");
     expect(result.positions).toEqual([{ coin: "BTC", size: "-0.01", entryPrice: "100000", unrealizedPnl: "-1.123456", liquidationPrice: null, leverage: 2 }]);
     expect(result.orders).toEqual([{ id: 123, coin: "BTC", side: "Buy", size: "0.02", price: "99000", type: "Limit" }]);
     expect(result.errors).toEqual([]);
+  });
+  it.each(["unifiedAccount", "disabled", "default", "portfolioMargin"])("preserves the explicit %s account mode", async (mode) => {
+    mockFetch();
+    vi.mocked(fetch).mockImplementation(async (_input, init) => {
+      const { type } = JSON.parse(String(init?.body)) as { type: string };
+      return Response.json(type === "userAbstraction" ? mode : fixtures[type]);
+    });
+    expect((await loadAgentDashboard(new HttpTransport(), address)).accountAbstraction).toBe(mode);
+  });
+  it("starts all four independent HTTP requests before any request completes", async () => {
+    const pending: { type: string; resolve: (response: Response) => void }[] = [];
+    vi.stubGlobal("fetch", vi.fn((_input: unknown, init: RequestInit) => new Promise<Response>((resolve) => {
+      pending.push({ type: (JSON.parse(String(init.body)) as { type: string }).type, resolve });
+    })));
+    const snapshot = loadAgentDashboard(new HttpTransport(), address);
+    await vi.waitFor(() => expect(pending).toHaveLength(4));
+    for (const request of pending) request.resolve(Response.json(fixtures[request.type]));
+    expect((await snapshot).accountAbstraction).toBe("unifiedAccount");
+  });
+  it("keeps account mode unknown when its request fails without discarding balances", async () => {
+    mockFetch("userAbstraction");
+    const result = await loadAgentDashboard(new HttpTransport(), address);
+    expect(result.accountAbstraction).toBeNull();
+    expect(result.perpEquity).toBe("9007199254740993.123456");
+    expect(result.spotUsdc).toBe("10.0000001");
+    expect(result.orders).toHaveLength(1);
+    expect(result.errors).toEqual(["Account mode is temporarily unavailable; total equity cannot be determined."]);
   });
   it("retains trigger prices and nested TP/SL on both HTTP and live order projections", () => {
     const base = (fixtures.frontendOpenOrders as FrontendOpenOrdersResponse)[0]!;
@@ -60,6 +89,7 @@ describe("Agent dashboard snapshots", () => {
     mockFetch("clearinghouseState");
     const result = await loadAgentDashboard(new HttpTransport(), address);
     expect(result.perpEquity).toBeNull(); expect(result.positions).toBeNull();
+    expect(result.accountAbstraction).toBe("unifiedAccount");
     expect(result.spotUsdc).toBe("10.0000001"); expect(result.orders).toHaveLength(1);
     expect(result.errors).toEqual(["Perpetual balances and positions are temporarily unavailable."]);
   });

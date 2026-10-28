@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useAgentEvent, useAgentEventsStatus } from "./agent-events.js";
 import type { AgentDashboard } from "../hyperliquid/agent-dashboard.js";
+import { dashboardTotalEquity } from "../hyperliquid/dashboard-equity.js";
 import { addDecimals, compareDecimals, formatAmountText, formatMoneyText } from "../hyperliquid/decimal.js";
 import { InstrumentLabel } from "./instrument-label.js";
 import type { DashboardSubagent } from "../agents/subagent-dashboard.js";
@@ -68,7 +69,7 @@ export function AgentDashboardPage({ id, initial, enabled = true, tradingEnabled
   const current = connected && Object.values(snapshot.live!.sections).every((section) => section.fresh) && snapshot.errors.length === 0;
   const connectionLabel = current ? "Connected" : connected ? "Connected · Data stale" : "Disconnected";
   const connectionColor = current ? "bg-emerald-400" : connected ? "bg-amber-400" : "bg-red-400";
-  const totalEquity = snapshot.perpEquity === null || snapshot.spotUsdc === null ? null : addDecimals(snapshot.perpEquity, snapshot.spotUsdc);
+  const totalEquity = dashboardTotalEquity(snapshot);
   const unrealizedPnl = snapshot.positions?.reduce<string | null>((total, position) => total === null ? null : addDecimals(total, position.unrealizedPnl), "0") ?? null;
   return <div className="flex h-[calc(100dvh-4.5rem)] min-h-0 w-full flex-col gap-2 overflow-hidden sm:h-[calc(100dvh-5rem)]">
     <h2 className="sr-only">Dashboard</h2>
