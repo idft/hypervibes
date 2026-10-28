@@ -58,8 +58,9 @@ describe("subagent runner Durable 1.4 compatibility", () => {
     expect(f.service.finish).not.toHaveBeenCalled();
   });
 
-  it("aborts the child and disarms the timer when the deadline wins", async () => {
+  it.each([[10, "10-second"], [60, "1-minute"], [900, "15-minute"]] as const)("reports the configured %s-second limit when the deadline wins", async (timeoutSeconds, timeLimit) => {
     const f = fixture();
+    f.run.config.timeoutSeconds = timeoutSeconds;
     f.wait.mockImplementationOnce(() => new Promise(() => {}));
     const executing = f.execute();
     await vi.waitFor(() => expect(f.runtime.setTimer).toHaveBeenCalledOnce());
@@ -67,7 +68,7 @@ describe("subagent runner Durable 1.4 compatibility", () => {
     await executing;
     expect(f.cancel).toHaveBeenCalledOnce();
     expect(f.child.abort).toHaveBeenCalledWith(context, { background: true });
-    expect(f.service.finish).toHaveBeenCalledWith("run", "failed", "Assignment timed out. Existing exchange orders were not cancelled.");
+    expect(f.service.finish).toHaveBeenCalledWith("run", "failed", `Run stopped after reaching its ${timeLimit} time limit. The agent had not finished.`);
   });
 
   it("does not submit an assignment whose deadline has passed", async () => {

@@ -195,6 +195,44 @@ describe("sub-agent run history and details", () => {
     expect(panel.textContent).toContain("Script failed");
     expect(panel.textContent).toContain("Script timed out");
   });
+  it("shows the assignment failure reason even when no transcript exists", async () => {
+    const result = "Assignment timed out. Existing exchange orders were not cancelled.";
+    await act(async () => root.render(<SubagentRunPage initial={{ ...initial, entries: [], run: { ...run, status: "failed", result } }} />));
+    const errors = container.querySelector('[aria-label="Run error"]')!;
+    expect(errors.querySelector("h2")?.textContent).toBe("Run error");
+    expect(errors.className).toContain("max-h-[40%]");
+    expect(errors.className).toContain("overflow-y-auto");
+    expect(errors.parentElement?.className).toContain("min-h-0 flex-1");
+    expect(errors.parentElement).toBe(container.querySelector('[aria-label="Conversation transcript"]')?.parentElement);
+    expect(errors.textContent).toContain(result);
+    expect(errors.textContent).not.toContain("Earlier assignment");
+    expect(container.querySelector('[aria-label="Conversation transcript"]')?.textContent).toContain("No transcript entries yet.");
+  });
+  it.each(["completed", "running", "queued", "cancelled", "skipped"] as const)("does not show a run error for %s runs with tool or provider failures", async (status) => {
+    const failed = entry(31, "pi.tool-result", [{ role: "toolResult", toolCallId: "script", toolName: "codemode", content: [{ type: "text", text: 'Unknown indicator input: "length"' }], isError: true, details: { calls: [{ id: 1, name: "indicator_run", status: "error", error: 'Unknown indicator input: "length"' }] }, timestamp: 1 }]);
+    const provider = entry(32, "pi.assistant", [fauxAssistantMessage("", { stopReason: "error", errorMessage: "Provider rate limit reached" })]);
+    await act(async () => root.render(<SubagentRunPage initial={{ ...initial, entries: [failed, provider], run: { ...run, status } }} />));
+    expect(container.querySelector('[aria-label="Run error"]')).toBeNull();
+  });
+  it("shows only the run failure reason through the existing live stream", async () => {
+    await act(async () => root.render(<SubagentRunPage initial={initial} />));
+    expect(container.querySelector('[aria-label="Run error"]')).toBeNull();
+    const failure = entry(40, "pi.tool-result", [{ role: "toolResult", toolCallId: "script", toolName: "codemode", content: [{ type: "text", text: "Script error details" }], isError: true, timestamp: 1 }]);
+    const result = "Assignment timed out. Existing exchange orders were not cancelled.";
+    const updated = { ...initial, entries: [...initial.entries, failure], run: { ...run, status: "failed", result } };
+    const source = RunSource.instances.at(-1)!;
+    await act(async () => source.dispatchEvent(new MessageEvent("run", { data: JSON.stringify(updated) })));
+    const errors = container.querySelector('[aria-label="Run error"]')!;
+    expect(errors.textContent).toContain(result);
+    expect(errors.textContent).not.toContain("Script error details");
+    expect(errors.textContent).not.toContain("codemode");
+    await act(async () => source.dispatchEvent(new MessageEvent("run", { data: JSON.stringify(initial) })));
+    expect(container.querySelector('[aria-label="Run error"]')).toBeNull();
+  });
+  it("shows a fallback for failed runs without a recorded reason", async () => {
+    await act(async () => root.render(<SubagentRunPage initial={{ ...initial, run: { ...run, status: "failed", result: "" } }} />));
+    expect(container.querySelector('[aria-label="Run error"]')?.textContent).toContain("No failure details recorded.");
+  });
   it("renders a one-line breadcrumb to the sub-agent and live-updates without refresh controls", async () => {
     await act(async () => root.render(<SubagentRunPage initial={initial} />));
     const nav = container.querySelector("nav")!;

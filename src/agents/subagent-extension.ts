@@ -90,7 +90,8 @@ export function createSubagentExtension(service: ExecutionService, agentId: stri
         }
         if (settled === null) {
           await child.abort(context, { background: true });
-          await service.finish(run.id, "failed", "Assignment timed out. Existing exchange orders were not cancelled.");
+          const timeLimit = run.config.timeoutSeconds % 60 === 0 ? `${run.config.timeoutSeconds / 60}-minute` : `${run.config.timeoutSeconds}-second`;
+          await service.finish(run.id, "failed", `Run stopped after reaching its ${timeLimit} time limit. The agent had not finished.`);
         } else if (settled.status === "done" && settled.type === "input") {
           let answer = "";
           // A parent's transcript cannot see a child's entries. Read the answer
