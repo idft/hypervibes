@@ -72,6 +72,23 @@ describe("orchestrator insight injection", () => {
     expect((await runtime.agents.chat("owner", agentId)).messages.map((entry) => entry.text)).toEqual(["Hello", "Empty observed", "Hello", "Guidance observed"]);
   });
 
+  it("provides shared UTC guidance and a current host clock with no selected tools", async () => {
+    const before = Date.now();
+    faux.setResponses([capture("Time observed"), capture("Time refreshed")]);
+    await send(); await send();
+    for (const request of requests) {
+      const sections = request.filter((message) => message.role === "system").map((message) => message.sections);
+      expect(sections.some((value) => value?.time_handling?.includes("Use UTC for all dates"))).toBe(true);
+      expect(sections.some((value) => value?.time_handling?.includes("previous UTC calendar day"))).toBe(true);
+      const clock = sections.map((value) => value?.current_time).filter((value): value is string => typeof value === "string").at(-1)!;
+      const timestamp = Number(clock.match(/currentTimeMs: (\d+)/)?.[1]);
+      expect(timestamp).toBeGreaterThanOrEqual(before);
+      expect(timestamp).toBeLessThanOrEqual(Date.now());
+      expect(clock).toContain(new Date(timestamp).toISOString());
+    }
+    expect((await main.agent(context)).tools).toEqual([]);
+  });
+
   it("reuses identical prompt text, replaces obsolete active blocks, and preserves the historical audit", async () => {
     await replace("OLD guidance", 0);
     faux.setResponses([capture("One"), capture("Two"), capture("Three"), capture("Cleared")]);
@@ -196,6 +213,8 @@ describe("orchestrator insight injection", () => {
     expect(requests).toHaveLength(3);
     expect(blocks(requests[1]!)).toEqual([]);
     expect(JSON.stringify(requests[1])).toContain("WORKER ONLY guidance");
+    expect(requests[1]!.some((message) => message.role === "system" && message.sections?.time_handling?.includes("Use UTC for all dates"))).toBe(true);
+    expect(requests[1]!.some((message) => message.role === "system" && message.sections?.current_time?.includes("Host currentTimeMs:"))).toBe(true);
     expect(blocks(requests[2]!)).toHaveLength(1);
     expect(blocks(requests[2]!)[0]).toContain("Wake-up shared");
     expect(JSON.stringify(requests[2])).not.toContain("WORKER ONLY guidance");

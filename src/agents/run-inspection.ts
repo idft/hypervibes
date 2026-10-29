@@ -13,10 +13,12 @@ const object = { additionalProperties: false } as const;
 const id = Type.String({ minLength: 1, maxLength: 128 });
 const time = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
 export const RunListInputSchema = Type.Object({
-  start: time, end: time, subagent_id: Type.Optional(id),
+  start: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: "Inclusive admission-time window start in UTC epoch milliseconds. Compute the requested duration from a single end timestamp." }),
+  end: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: "Exclusive admission-time window end in UTC epoch milliseconds. Must be after start, with a window of at most 90 days. Keep start/end unchanged when paginating." }),
+  subagent_id: Type.Optional(id),
   status: Type.Optional(Type.Union(["queued", "running", "completed", "failed", "cancelled", "skipped"].map((value) => Type.Literal(value)))),
-  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })),
-  before: Type.Optional(Type.Object({ time, id }, object)),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, description: "Run metadata records per page: 1–100, default 25. Use 100 for the largest page; follow next to retrieve more." })),
+  before: Type.Optional(Type.Object({ time, id }, { ...object, description: "Omit on the first page. For the next page, copy the previous result’s non-null next cursor exactly; preserve start/end and all filters." })),
 }, object);
 export const RunReadInputSchema = Type.Object({
   run_id: id,
@@ -29,7 +31,7 @@ export const RunReadInputSchema = Type.Object({
 const nullableText = Type.Union([Type.String(), Type.Null()]);
 const record = Type.Record(Type.String(), Type.Unknown());
 const runBase = { id: Type.String(), subagentId: Type.String(), name: Type.String(), source: Type.String(), status: Type.String(), createdAt: time, finishedAt: Type.Union([time, Type.Null()]) };
-export const RunListResultSchema = Type.Object({ start: time, end: time, next: Type.Union([Type.Object({ time, id: Type.String() }), Type.Null()]), coverage: Type.String(), items: Type.Array(Type.Object({ ...runBase, name: nullableText, taskPreview: Type.String(), publicationCount: time }), { maxItems: 50 }) });
+export const RunListResultSchema = Type.Object({ start: time, end: time, next: Type.Union([Type.Object({ time, id: Type.String() }), Type.Null()]), coverage: Type.String(), items: Type.Array(Type.Object({ ...runBase, name: nullableText, taskPreview: Type.String(), publicationCount: time }), { maxItems: 100 }) });
 export const RunReadResultSchema = Type.Union([
   Type.Object({ request: Type.Object({ id: Type.String(), subagentId: Type.String(), createdAt: time, discardedReason: nullableText }), run: Type.Null() }),
   Type.Object({ ...runBase, requestId: Type.Optional(Type.String()), section: Type.Optional(Type.String()),
@@ -44,7 +46,7 @@ export async function listRuns(db: SharedDatabase, agentId: string, value: unkno
   if (end <= start || end - start > 90 * 86400_000) throw new AgentError("Use a positive run window of at most 90 days");
   if (input.subagent_id !== undefined && (typeof input.subagent_id !== "string" || input.subagent_id.length > 128)) throw new AgentError("Invalid worker ID");
   if (input.status !== undefined && !["queued", "running", "completed", "failed", "cancelled", "skipped"].includes(String(input.status))) throw new AgentError("Invalid run status");
-  const limit = input.limit === undefined ? 25 : integer(input.limit, 1, 50, "run page size");
+  const limit = input.limit === undefined ? 25 : integer(input.limit, 1, 100, "run page size");
   const before = input.before === undefined ? null : fields(input.before, ["time", "id"]);
   if (before && (typeof before.id !== "string" || !before.id || before.id.length > 128)) throw new AgentError("Invalid run cursor");
   const time = before ? timestamp(before.time) : end, key = before ? String(before.id) : "";

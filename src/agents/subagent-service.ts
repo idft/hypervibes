@@ -28,6 +28,7 @@ import { requestBatch, inboxAssignment } from "./worker-inbox.js";
 import { inspectRun, listRuns } from "./run-inspection.js";
 import { assertActiveActor, type MemoryActor } from "../memory/operations.js";
 import { assignment, defaultMainInstructions, mainToolNames, nextCandleRun, normalizeDelegationTools, subagentInput, type AssignmentSettings } from "./subagent-input.js";
+import { timeGuidanceExtension } from "./time-guidance.js";
 
 interface Binding extends SubagentExtension { harness: Harness; main: Conversation; hyperliquid: Extension; capabilities: readonly Extension[]; orchestratorInsights: Extension; userId: string }
 export interface SubagentHost { owned(userId: string, id: string): Promise<AgentRow>; models(userId: string): Promise<Models>; changed(id: string): void; signal(id: string): AbortSignal; recoverParkedMain?(agentId: string): Promise<void> }
@@ -193,7 +194,7 @@ export class SubagentService {
   }
   private async applyMain(binding: Binding, row: SubagentRow) {
     const available = [...(binding.hyperliquid.tools ?? []), ...(binding.extension.tools ?? []), ...binding.capabilities.flatMap((extension) => extension.tools ?? [])];
-    await binding.main.configure({ model: { provider: row.provider, modelId: row.modelId }, thinkingLevel: this.thinking(row.thinkingLevel), extensions: [binding.hyperliquid, binding.extension, ...binding.capabilities.filter((extension) => extension.tools?.some((tool) => row.tools.includes(tool.name))), binding.orchestratorInsights], tools: available.filter((tool) => row.tools.includes(tool.name)), modelTools: null, instructions: row.instructions }, context);
+    await binding.main.configure({ model: { provider: row.provider, modelId: row.modelId }, thinkingLevel: this.thinking(row.thinkingLevel), extensions: [timeGuidanceExtension, binding.hyperliquid, binding.extension, ...binding.capabilities.filter((extension) => extension.tools?.some((tool) => row.tools.includes(tool.name))), binding.orchestratorInsights], tools: available.filter((tool) => row.tools.includes(tool.name)), modelTools: null, instructions: row.instructions }, context);
   }
   async list(userId: string, agentId: string): Promise<SubagentRow[]> {
     await this.host.owned(userId, agentId);

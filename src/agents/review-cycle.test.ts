@@ -12,6 +12,7 @@ import { fillEvent, type JournalEvent } from "../hyperliquid/journal-model.js";
 import { templateDraft } from "./subagent-templates.js";
 import type { SubagentInput } from "./subagent-input.js";
 import { researchInput } from "../memory/test-fixture.js";
+import { RunListInputSchema, RunListResultSchema } from "./run-inspection.js";
 
 const account = `0x${"ab".repeat(20)}`;
 const settings = (patch: Partial<SubagentInput> = {}): SubagentInput => ({ name: "Worker", description: "Evidence", instructions: "Observe only", provider: "faux", modelId: "faux-1", thinkingLevel: "", tools: [], enabled: false, persistent: false, delegatable: true, schedule: "", delaySeconds: 1, timeoutSeconds: 900, completion: "save", ...patch });
@@ -73,6 +74,13 @@ describe("review evidence and automatic learning cycle", () => {
     expect(listed.items).toHaveLength(1); expect(listed.next).not.toBeNull();
     const next = await runtime.agents.subagents.listRunEvidence(agentId, { start: first.run.createdAt, end: Date.now() + 1, limit: 1, before: listed.next });
     expect(next.items).toHaveLength(1); expect(next.items[0]!.id).not.toBe(listed.items[0]!.id);
+    const window = { start: first.run.createdAt, end: Date.now() + 1 };
+    const largestPage = await runtime.agents.subagents.listRunEvidence(agentId, { ...window, limit: 100 });
+    expect(largestPage.items).toHaveLength(2);
+    expect(largestPage.next).toBeNull();
+    expect(RunListInputSchema.properties.limit).toMatchObject({ maximum: 100 });
+    expect(RunListResultSchema.properties.items).toMatchObject({ maxItems: 100 });
+    await expect(runtime.agents.subagents.listRunEvidence(agentId, { ...window, limit: 101 })).rejects.toThrow("run page size");
     await expect(runtime.agents.subagents.readRunEvidence("foreign-agent", first.run.id, { run_id: first.run.id })).rejects.toThrow("not found");
     expect((await runtime.agents.subagents.listRunEvidence("foreign-agent", { start: Date.now() - 86400_000, end: Date.now() })).items).toEqual([]);
   });

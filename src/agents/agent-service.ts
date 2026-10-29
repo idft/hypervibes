@@ -29,6 +29,7 @@ import { SubagentService } from "./subagent-service.js";
 import { insertDefaultSubagents } from "./default-subagents.js";
 import { hvSubagents } from "../db/subagent-schema.js";
 import { defaultMainInstructions, mainToolNames } from "./subagent-input.js";
+import { timeGuidanceExtension } from "./time-guidance.js";
 import { createMemoryExtension } from "../memory/durable-extension.js";
 import { ExecutionContextService } from "./execution-context.js";
 import { createOrchestratorInsightsExtension } from "./orchestrator-insights.js";
@@ -291,6 +292,7 @@ export class AgentService {
       await this.db.update(hvAgents).set({ state: "provisioning", error: null, updatedAt: Date.now() }).where(and(eq(hvAgents.id, agent.id), inArray(hvAgents.state, ["provisioning", "ready", "failed"]))).run();
       this.notify(agent.id);
       const registry = createRegistry();
+      registry.install(timeGuidanceExtension);
       const hyperliquid = createHyperliquidExtension(this.hyperliquid, agent.userId, agent.id, this.orders);
       registry.install(hyperliquid);
       const capabilities = [createNotificationExtension(agent.id, this.notifications, this.execution), createMemoryExtension(agent.id, this.execution, this.database), ...this.research.extensions(agent.id), createIndicatorExtension(agent.id, this.indicators, this.execution, createResearchResponder(this.research.artifacts, agent.id, true)), createChartExtension(agent.id, this.charts, this.execution)];

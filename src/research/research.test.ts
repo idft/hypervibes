@@ -8,6 +8,7 @@ import { testConfig } from "../test-config.js";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxProvider, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { CodemodeSandbox } from "@earendil-works/pi-codemode";
+import { timeCodeExamples } from "../agents/time-guidance.js";
 import { createRegistry, Harness, LiveDoc, MemoryStorage } from "@earendil-works/pi-durable";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { toolActivity } from "./tool-activity.js";
@@ -143,6 +144,25 @@ describe("Code Mode research and artifacts", () => {
     const result = entries.flatMap((entry) => entry.model ?? []).find((message) => message.role === "toolResult");
     expect(result).toMatchObject({ isError: true });
     expect(JSON.stringify(result)).toContain("Exchange size precision unavailable");
+  });
+  it("executes the shared UTC time examples in real Code Mode", async () => {
+    const entries = await execute(`${timeCodeExamples}
+      if (!Number.isFinite(scriptTimeMs) || scriptTimeMs <= 0) throw new Error('Missing script clock');
+      const anchor = fromUtcIso('2026-03-01T06:30:00.000Z');
+      const rolling = windowForHours(anchor, 7);
+      if (toUtcIso(rolling.start) !== '2026-02-28T23:30:00.000Z' || rolling.end !== anchor) throw new Error('Wrong rolling window');
+      const day = previousUtcDay(anchor);
+      if (toUtcIso(day.start) !== '2026-02-28T00:00:00.000Z' || toUtcIso(day.end) !== '2026-03-01T00:00:00.000Z') throw new Error('Wrong UTC day');
+      const leapDay = previousUtcDay(fromUtcIso('2024-03-01T00:00:00.000Z'));
+      if (toUtcIso(leapDay.start) !== '2024-02-29T00:00:00.000Z') throw new Error('Wrong leap day');
+      if (Number.isFinite(fromUtcIso('invalid'))) throw new Error('Invalid date accepted');
+      store('window', rolling);
+      if (load('window').start !== rolling.start) throw new Error('Window changed');
+      text('UTC examples passed');
+    `, ["codemode"]);
+    const result = entries.flatMap((entry) => entry.model ?? []).find((message) => message.role === "toolResult");
+    expect(result).toMatchObject({ isError: false });
+    expect(JSON.stringify(result)).toContain("UTC examples passed");
   });
   it("runs real QuickJS, shares root-Agent artifacts, and retains nested-call summaries without an env", async () => {
     const entries = await execute(`const report = await tools.artifact_create({title:'Worker report',mediaType:'text/markdown',content:'# BTC',retained:true}); text(report.id); text((await tools.artifact_read({id:report.id})).content);`);

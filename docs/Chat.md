@@ -7,6 +7,9 @@ slug: /concepts/chat
 Chat is the agent's main conversation. Use it to ask about markets, review
 account activity, or request work from sub-agents.
 
+Agents use UTC for dates and time windows. “Yesterday” means the previous UTC
+calendar day, not the last 24 hours.
+
 ## Conversation controls
 
 - Send a message or queue one while the agent is busy.
