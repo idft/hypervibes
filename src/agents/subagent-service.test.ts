@@ -119,6 +119,10 @@ describe("subagent definitions, execution and scheduling", () => {
     const worker = await createWorker(agent.id, { enabled: false });
     const unused = await createWorker(agent.id, { name: "Unused" });
     const archived = await createWorker(agent.id, { name: "Archived" });
+    // Creation can occur within the same millisecond; set distinct timestamps
+    // so this test does not depend on the random ID tie-breaker.
+    await runtime.db.update(hvSubagents).set({ createdAt: 100 }).where(eq(hvSubagents.id, worker.id)).run();
+    await runtime.db.update(hvSubagents).set({ createdAt: 200 }).where(eq(hvSubagents.id, unused.id)).run();
     await runtime.agents.subagents.archive("owner", agent.id, archived.id);
     await runtime.db.insert(hvSubagentRuns).values(Array.from({ length: 7 }, (_, index) => ({
       id: `dashboard-run-${index}`, agentId: agent.id, subagentId: worker.id, requestId: randomUUID(),
@@ -144,6 +148,19 @@ describe("subagent definitions, execution and scheduling", () => {
     const completed = await runtime.agents.subagents.dashboard("owner", agent.id);
     expect(completed[0]?.runs.map((run) => [run.id, run.result])).toEqual([["dashboard-running", "New summary"]]);
     await expect(runtime.agents.subagents.dashboard("other", agent.id)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("orders dashboard workers by creation time and then ID for ties", async () => {
+    const agent = await createAgent();
+    const workers = await Promise.all([createWorker(agent.id), createWorker(agent.id), createWorker(agent.id)]);
+    const byId = [...workers].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+    // Put the largest ID first by time; the remaining workers share a timestamp.
+    await runtime.db.update(hvSubagents).set({ createdAt: 100 }).where(eq(hvSubagents.id, byId[2]!.id)).run();
+    for (const worker of byId.slice(0, 2)) {
+      await runtime.db.update(hvSubagents).set({ createdAt: 200 }).where(eq(hvSubagents.id, worker.id)).run();
+    }
+    expect((await runtime.agents.subagents.dashboard("owner", agent.id)).map((row) => row.id))
+      .toEqual([byId[2]!.id, byId[0]!.id, byId[1]!.id]);
   });
 
   it("unarchives workers paused, preserves history and settings, and safely retries", async () => {
