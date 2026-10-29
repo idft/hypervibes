@@ -2,7 +2,7 @@
 slug: /operation/hyperliquid
 ---
 
-# Hyperliquid account
+# Hyperliquid
 
 Open Account to manage the wallet approvals HyperVibes needs for trading.
 Sign in with the wallet that owns your Hyperliquid account.

@@ -4,21 +4,24 @@ slug: /installation
 
 # Installation
 
-HyperVibes can run from source. Release packages are not available yet.
+HyperVibes runs from the published npm package or from source. Desktop builds and
+the rewritten container image are coming soon.
 
-## From source
+## NPX
 
-Install Node.js 22.23.3 or newer and pnpm. In the source checkout, run:
+NPX is the quickest way to run HyperVibes on your own computer. Install
+Node.js 22.23.3 or newer, then run:
 
 ```sh
-pnpm install
-pnpm start
+npx hypervibes@beta
 ```
 
-Keep development dependencies installed: startup builds fresh production assets.
-Open [http://localhost:3003](http://localhost:3003). No `.env` file is required. The first start creates
+Open [http://localhost:3003](http://localhost:3003). The first start creates
 private secrets in your per-user `config.json`. Back up that file with your
 database. Keep existing encryption keys when upgrading.
+
+To install it once instead, run `npm install -g hypervibes@beta` and start it
+with `hypervibes`.
 
 For another device, prefer HTTPS and set `APP_ORIGIN` to its exact browser URL.
 Private LAN HTTP requires these optional `.env` settings (replace the IP):
@@ -34,12 +37,16 @@ on a trusted private network. Some browser wallets require HTTPS.
 
 Continue with [Quick start](QuickStart.md) after opening the app.
 
-## NPX
+## From source
 
-NPX will be the preferred way to run HyperVibes on your own computer.
+Install Node.js 22.23.3 or newer and pnpm. In the source checkout, run:
 
-Coming soon. The package name, required Node.js version, and launch command
-will be added when the package is ready.
+```sh
+pnpm install
+pnpm start
+```
+
+Keep development dependencies installed: startup builds fresh production assets.
 
 ## Containers
 

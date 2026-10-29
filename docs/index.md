@@ -8,11 +8,10 @@ Start with trading disabled while you check your setup.
 
 ## Get started
 
-- [Installation](Installation.md) covers the planned NPX and desktop releases, plus server hosting.
+- [Installation](Installation.md) covers NPX, source, container, and desktop options, plus server hosting.
 - [Quick start](QuickStart.md) walks through account setup and your first agent.
-- [Hyperliquid account](Hyperliquid.md) covers trading keys, approvals, and accounts.
+- [Hyperliquid](Hyperliquid.md) covers trading keys, approvals, and accounts.
 - [AI providers](Providers.md) explains how to connect a model provider.
-- [Check your setup](Testing.md) helps you resolve common setup issues.
 
 ## App features
 
@@ -31,4 +30,3 @@ Start with trading disabled while you check your setup.
 - [Settings](Settings.md): control trading permissions and risk limits.
 - [Telegram bridge](Telegram.md): chat with an agent and receive notifications in Telegram.
 
-[How agents work](Architecture.md) explains how the main conversation and sub-agents work together.

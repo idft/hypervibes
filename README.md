@@ -18,13 +18,10 @@
 ## Quick start
 
 HyperVibes is a self-hosted app for running AI trading agents on Hyperliquid.
-Install Node.js 22.23.3 or newer and pnpm, then run:
+Install Node.js 22.23.3 or newer, then run:
 
 ```sh
-git clone https://github.com/idft/hypervibes.git
-cd hypervibes
-pnpm install
-pnpm start
+npx hypervibes@beta
 ```
 
 Open <http://localhost:3003>. No `.env` file is required.
@@ -40,7 +37,7 @@ See the [quick start guide](docs/QuickStart.md) for your first agent.
 
 ## Features
 
-- **Batteries included:** agent tools for research, analysis, and trading, ready to use.
+- **Batteries included:** agent tools for research, analysis, trading, and accounting, ready to use.
 - **Self-hosted:** run on your own hardware and keep your data under your control.
 - **Decentralized:** trade on Hyperliquid with just an Ethereum account.
 - **Built on [Pi Durable](https://earendil.com/posts/pi-durable/):** durable agent execution that survives restarts.
@@ -49,10 +46,10 @@ Explore the [user guide](https://hypervibes.ai/docs/) for more.
 
 ## Installation
 
-- **From source — available now:** clone the repository, run `pnpm install`, then `pnpm start`. See [Quick start](#quick-start).
-- **NPX — coming soon:** run the published npm package without cloning or building the source. The launch command will be added when the package is available.
-- **Global npm install — coming soon:** install the published package once and launch it with the `hypervibes` command.
-- **Docker Compose — coming with v0.4.0:** run `ghcr.io/idft/hypervibes` on Linux AMD64 or ARM64 using the included [`compose.yaml`](compose.yaml).
+- **NPX:** `npx hypervibes@beta` runs the published beta without cloning or building the source.
+- **Global npm install:** `npm install -g hypervibes@beta`, then run `hypervibes`.
+- **From source:** clone the repository, run `pnpm install`, then `pnpm start`. See [Development](#development).
+- **Docker Compose — coming soon.**
 - **Desktop download — coming soon:** planned builds for macOS, Windows, and Linux.
 - **Local release package:** run `pnpm pack` from a source checkout to build an npm tarball. See [Build](#build).
 - **Local container build:** run `pnpm pack --out artifacts/hypervibes.tgz`, then `docker build -f Containerfile -t hypervibes:local .`.
@@ -102,7 +99,8 @@ pnpm pack           # Rebuild and create a local npm tarball
 `pnpm start` builds fresh production assets before serving. Keep development
 dependencies installed for source builds. The release package exposes the
 `hypervibes` executable and needs only Node.js and runtime dependencies to launch.
-Run `node bin/hypervibes.js --help` for usage. Public npm releases are coming soon.
+Run `node bin/hypervibes.js --help` for usage. The npm package is published as
+`hypervibes`; use the `beta` tag for the current beta release.
 
 ### Checks
 

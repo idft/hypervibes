@@ -74,6 +74,7 @@ const config: Config = {
     },
     navbar: {
       title: 'HyperVibes',
+      logo: {alt: 'HyperVibes logo', src: 'img/logo.png'},
       items: [
         {to: '/docs/', label: 'Documentation', position: 'left'},
         {

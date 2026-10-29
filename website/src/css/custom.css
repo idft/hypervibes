@@ -47,20 +47,15 @@ body:has(.homepage) .navbar {
   letter-spacing: -0.025em;
 }
 
-.navbar__title::before {
-  display: inline-grid;
-  width: 1.55rem;
-  height: 1.55rem;
-  margin-right: 0.5rem;
-  border: 1px solid #71717a;
-  border-radius: 0.45rem;
-  background: linear-gradient(145deg, #27272a, #111214);
-  color: #ddd6fe;
-  content: "H";
-  font-family: var(--ifm-font-family-monospace);
-  font-size: 0.72rem;
-  place-items: center;
-  vertical-align: -0.16rem;
+.navbar__logo {
+  width: 2rem;
+  height: 2rem;
+}
+
+.navbar__logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .navbar__link {

@@ -6,9 +6,9 @@ slug: /quick-start
 
 ## Run HyperVibes
 
-Run `pnpm install` and `pnpm start` in the source checkout, then open
-[http://localhost:3003](http://localhost:3003). See [Installation](Installation.md) for requirements and
-private LAN setup. NPX packages and desktop builds are coming soon.
+Install Node.js 22.23.3 or newer, then run `npx hypervibes@beta` and open
+[http://localhost:3003](http://localhost:3003). See [Installation](Installation.md) for other ways to run,
+requirements, and private LAN setup.
 
 ## Set up your account
 
@@ -18,7 +18,7 @@ private LAN setup. NPX packages and desktop builds are coming soon.
 4. Review and approve the builder fee shown on the Account page.
 5. Open Providers and connect an AI provider.
 
-[Hyperliquid account](Hyperliquid.md) and [AI providers](Providers.md) explain these steps.
+[Hyperliquid](Hyperliquid.md) and [AI providers](Providers.md) explain these steps.
 
 ## Create your first agent
 

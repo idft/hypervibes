@@ -5,7 +5,7 @@ slug: /concepts/agents
 # Agents
 
 An agent has a main conversation, a linked Hyperliquid account, and its own
-sub-agents and saved work.
+sub-agents.
 
 ## Create an agent
 
