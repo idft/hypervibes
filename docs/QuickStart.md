@@ -12,6 +12,10 @@ requirements, and private LAN setup.
 
 ## Set up your account
 
+HyperVibes supports browser wallet sign-in, not Hyperliquid email sign-in.
+You must use the wallet that owns your Hyperliquid account. If you use email
+on Hyperliquid, see [Hyperliquid](Hyperliquid.md) for the wallet requirement.
+
 1. Sign in with your browser wallet. Use the wallet that owns your Hyperliquid account.
 2. Open Account. If Hyperliquid needs account activation, follow the link to complete it first.
 3. Generate or import a Hyperliquid API key and approve it with your wallet. Never import your main wallet's private key.

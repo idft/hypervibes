@@ -5,7 +5,12 @@ slug: /operation/hyperliquid
 # Hyperliquid
 
 Open Account to manage the wallet approvals HyperVibes needs for trading.
-Sign in with the wallet that owns your Hyperliquid account.
+Sign in with the wallet that owns your Hyperliquid account. HyperVibes does
+not support signing in directly with a Hyperliquid email account.
+
+If you use email on Hyperliquid, you can [export your email wallet](https://hyperliquid.gitbook.io/hyperliquid-docs/onboarding/export-your-email-wallet)
+and import it into a browser wallet to sign in. Exporting a private key is
+security-sensitive. Never share it or enter it into HyperVibes.
 
 ## Activate your account
 
