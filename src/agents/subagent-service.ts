@@ -471,6 +471,8 @@ export class SubagentService {
       if (patch && ("enabled" in patch || "delegatable" in patch || "schedule" in patch) && current.kind === "orchestrator") throw new AgentError("The orchestrator cannot be paused or have assignment or schedule settings.", 409);
       const input = subagentInput(patch ? { ...current, ...patch } : data, current.kind === "orchestrator");
       const pausing = patch && "enabled" in patch && !input.enabled;
+      // Instruction-only edits affect future jobs; admitted jobs own frozen snapshots.
+      const editingInstructions = patch && "instructions" in patch;
       if (!pausing) await this.validateModel(userId, input, input.thinkingLevel);
       await this.validateTriggers(agentId, id, workerTriggers(input.triggers), input, current.kind === "orchestrator", current.triggers);
       const binding = this.binding(agentId);
@@ -483,7 +485,7 @@ export class SubagentService {
             throw new AgentError("This conversation contains images. Reset context before switching to a text-only model; earlier messages remain available.", 409);
           }
         }
-      } else if (!pausing && await this.db.select().from(hvSubagentRuns).where(and(eq(hvSubagentRuns.subagentId, id), inArray(hvSubagentRuns.status, active))).get()) throw new AgentError("Stop or finish the active assignment before editing this worker.", 409);
+      } else if (!pausing && !editingInstructions && await this.db.select().from(hvSubagentRuns).where(and(eq(hvSubagentRuns.subagentId, id), inArray(hvSubagentRuns.status, active))).get()) throw new AgentError("Stop or finish the active assignment before editing this worker.", 409);
       const now = Date.now();
       const contextSettings = {
         delegatable: input.delegatable, persistent: input.persistent, timeoutSeconds: input.timeoutSeconds,

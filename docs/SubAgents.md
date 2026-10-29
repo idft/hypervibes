@@ -16,6 +16,9 @@ to configure them and the main conversation.
 - Reuse a persistent conversation or start fresh for each assignment.
 - Set an assignment timeout.
 
+You can save worker instructions while a job is active. New jobs use the saved
+instructions; already queued or running jobs keep their original instructions.
+
 The optional default workers are a Technical Analyst, Trader, and Daily Reviewer.
 They start paused so you can review their configuration first.
 

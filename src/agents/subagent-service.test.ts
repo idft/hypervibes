@@ -562,7 +562,7 @@ describe("subagent definitions, execution and scheduling", () => {
     await expect(runtime.agents.subagents.run("owner", agent.id, worker.id, "Other task", randomUUID())).rejects.toMatchObject({ status: 409 });
     await expect(runtime.agents.subagents.update("owner", agent.id, worker.id, worker)).rejects.toMatchObject({ status: 409 });
     await expect(runtime.agents.subagents.updateAssignments("owner", agent.id, worker.id, { enabled: true, delegatable: true, persistent: false, timeoutSeconds: 600 })).rejects.toMatchObject({ status: 409 });
-    await expect(runtime.agents.subagents.updateSection("owner", agent.id, worker.id, "instructions", { instructions: "Not while running" })).rejects.toMatchObject({ status: 409 });
+    await expect(runtime.agents.subagents.updateSection("owner", agent.id, worker.id, "instructions", { instructions: "Use these instructions for the next assignment" })).resolves.toMatchObject({ instructions: "Use these instructions for the next assignment" });
     await expect(runtime.agents.subagents.updateSection("owner", agent.id, worker.id, "enabled", { enabled: false })).resolves.toMatchObject({ enabled: false });
     await expect(runtime.agents.subagents.archive("owner", agent.id, worker.id)).rejects.toMatchObject({ status: 409 });
     await runtime.agents.stop("owner", agent.id);
@@ -572,6 +572,96 @@ describe("subagent definitions, execution and scheduling", () => {
     await runtime.agents.subagents.archive("owner", agent.id, worker.id);
     await expect(runtime.agents.subagents.run("owner", agent.id, worker.id, "No", randomUUID())).rejects.toMatchObject({ status: 409 });
   }, 15000);
+
+  it.each([
+    { status: "queued", persistent: false }, { status: "running", persistent: false },
+    { status: "queued", persistent: true }, { status: "running", persistent: true },
+  ] as const)("saves instructions during a $status job without changing frozen context (persistent=$persistent)", async ({ status, persistent }) => {
+    const agent = await createAgent();
+    const originalInstructions = "ORIGINAL worker instructions: inspect the frozen evidence.";
+    const savedInstructions = "UPDATED worker instructions: inspect the next assignment.";
+    const worker = await createWorker(agent.id, { instructions: originalInstructions, persistent, tools: ["get_account"], schedule: "1h" });
+    let releaseStart!: () => void, releaseResponse!: () => void;
+    const startGate = { promise: new Promise<void>((resolve) => { releaseStart = resolve; }), resolve: () => releaseStart() };
+    const responseGate = { promise: new Promise<void>((resolve) => { releaseResponse = resolve; }), resolve: () => releaseResponse() };
+    const service = runtime.agents.subagents;
+    const started = service.started.bind(service);
+    // Hold a real admitted job before its running transition, not a synthetic database row.
+    const starting = vi.spyOn(service, "started").mockImplementation(async (...args) => {
+      if (status === "queued") await startGate.promise;
+      return started(...args);
+    });
+    const prompts: string[] = [];
+    faux.setResponses([
+      async (request) => {
+        prompts.push(JSON.stringify(request.messages.filter((message) => message.role === "system")));
+        await responseGate.promise;
+        return fauxAssistantMessage("Frozen assignment complete");
+      },
+      (request) => {
+        prompts.push(JSON.stringify(request.messages.filter((message) => message.role === "system")));
+        return fauxAssistantMessage("Updated assignment complete");
+      },
+    ]);
+    try {
+      const admitted = await service.run("owner", agent.id, worker.id, "Original assignment", randomUUID());
+      await vi.waitFor(() => expect(starting).toHaveBeenCalledOnce());
+      if (status === "running") await vi.waitFor(() => expect(prompts).toHaveLength(1));
+      const beforeRun = await service.internalRun(agent.id, admitted.id);
+      const beforeDefinition = (await detail(agent.id, worker.id)).definition;
+      const frozen = await runtime.agents.execution.runContext(agent.id, beforeRun);
+      expect(beforeRun.status).toBe(status);
+      expect(beforeRun.config).toEqual(worker);
+      expect(frozen.instructions).toContain(originalInstructions);
+      expect(frozen.insightStatus).toBe("snapshot");
+      if (status === "queued") expect(prompts).toEqual([]);
+
+      const saved = await service.updateSection("owner", agent.id, worker.id, "instructions", {
+        instructions: ` ${savedInstructions} `, tools: [], persistent: !persistent, schedule: "", name: "Ignored",
+      });
+      expect(saved).toEqual({ ...beforeDefinition, instructions: savedInstructions, updatedAt: expect.any(Number) });
+      expect((await detail(agent.id, worker.id)).definition).toEqual(saved);
+      expect(await service.internalRun(agent.id, admitted.id)).toEqual(beforeRun);
+      expect(await runtime.agents.execution.runContext(agent.id, beforeRun)).toEqual(frozen);
+
+      await expect(service.update("owner", agent.id, worker.id, { ...saved, instructions: "Full saves remain blocked" })).rejects.toMatchObject({ status: 409 });
+      await expect(service.updateAssignments("owner", agent.id, worker.id, { enabled: true, delegatable: true, persistent, timeoutSeconds: 600 })).rejects.toMatchObject({ status: 409 });
+      await expect(service.updateTools("owner", agent.id, worker.id, [])).rejects.toMatchObject({ status: 409 });
+      await expect(service.updateIdentity("owner", agent.id, worker.id, "Changed", "Changed description")).rejects.toMatchObject({ status: 409 });
+      for (const [section, patch] of [
+        ["model", { provider: worker.provider, modelId: worker.modelId, thinkingLevel: "" }],
+        ["schedule", { schedule: "15m", delaySeconds: 10, completion: "save" }],
+        ["triggers", { triggers: worker.triggers }],
+        ["enabled", { enabled: true }],
+      ] as const) await expect(service.updateSection("owner", agent.id, worker.id, section, patch)).rejects.toMatchObject({ status: 409 });
+      await expect(service.run("owner", agent.id, worker.id, "Overlapping assignment", randomUUID())).rejects.toMatchObject({ status: 409 });
+      await expect(service.archive("owner", agent.id, worker.id)).rejects.toMatchObject({ status: 409 });
+      expect((await detail(agent.id, worker.id)).definition).toEqual(saved);
+
+      startGate.resolve(); responseGate.resolve();
+      const first = await completed(agent.id, worker.id);
+      expect(first.id).toBe(admitted.id);
+      expect(first.config).toEqual(beforeRun.config);
+      expect(await runtime.agents.execution.runContext(agent.id, first)).toEqual(frozen);
+      expect(prompts[0]).toContain(originalInstructions);
+      expect(prompts[0]).not.toContain(savedInstructions);
+
+      await service.run("owner", agent.id, worker.id, "Next assignment", randomUUID());
+      const next = await completed(agent.id, worker.id);
+      expect(next.id).not.toBe(first.id);
+      expect(next.config.instructions).toBe(savedInstructions);
+      const nextContext = await runtime.agents.execution.runContext(agent.id, next);
+      expect(nextContext.instructions).toContain(savedInstructions);
+      expect(nextContext.instructions).not.toContain(originalInstructions);
+      expect(prompts).toHaveLength(2);
+      expect(prompts[1]).toContain(savedInstructions);
+      expect(next.conversationId === first.conversationId).toBe(persistent);
+      expect((await service.internalRun(agent.id, first.id)).config).toEqual(beforeRun.config);
+      expect(await runtime.agents.execution.runContext(agent.id, first)).toEqual(frozen);
+    } finally {
+      startGate.resolve(); responseGate.resolve();
+    }
+  });
 
   it("aligns hourly/daily closes in UTC, deduplicates due runs and skips overlaps and downtime", async () => {
     const at = Date.parse("2026-10-16T10:12:00Z");

@@ -28,7 +28,10 @@ export function SubagentDetailPage({ agentId, subagentId, choices }: { agentId: 
   const definition = initial.definition;
   const [form, setForm] = useState<SubagentInput>(initial.definition);
   const [task, setTask] = useState("");
-  const mutation = useMutation({ mutationFn: (operation: () => Promise<void>) => operation() });
+  const mutation = useMutation({
+    mutationFn: (operation: () => Promise<void>) => operation(),
+    onError: (error) => toast.error(error.message || "Unable to complete the operation. Please retry."),
+  });
   const pending = mutation.isPending;
   const error = mutation.error?.message ?? refreshError?.message;
   const [archiveOpen, setArchiveOpen] = useState(false);
@@ -158,10 +161,10 @@ export function SubagentDetailPage({ agentId, subagentId, choices }: { agentId: 
           <button type="button" disabled={!form.instructions.trim()} onClick={() => { void saveInstructions(); }} className={button}>Save instructions</button>
         </div>}
       </fieldset>
+      {error && <p role="alert" className="mt-4 text-sm text-red-300">{error}</p>}
     </form>
     {runOpen && !main && <RunSubagentDialog task={task} onTaskChange={setTask} onCancel={() => setRunOpen(false)} onRun={startRun} />}
     {!main && <section className={panel}><header className="flex items-center justify-between"><h3 className="font-medium text-white">Run history</h3></header>{schedulerError && <p role="alert" className="text-sm text-red-300">{schedulerError}</p>}{connectionError && <p role="status" className="text-sm text-amber-200">{connectionError}</p>}<SubagentRunHistory agentId={agentId} runs={runs} pending={pending} onStop={(id) => { void perform("stop", id); }} pagination={pagination} loading={loading} onPage={setPage} /></section>}
     {archiveOpen && !main && <ArchiveSubagentDialog name={definition.name} onCancel={() => setArchiveOpen(false)} onConfirm={() => { setArchiveOpen(false); void perform("archive"); }} />}
-    {error && <p role="alert" className="text-sm text-red-300">{error}</p>}
   </div>;
 }
