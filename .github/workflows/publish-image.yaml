@@ -42,6 +42,31 @@ jobs:
     needs: release-tag
     uses: ./.github/workflows/validate.yml
 
+  publish-npm:
+    name: Publish tested npm package
+    needs: validate
+    # Prerelease publication is not configured; never promote one to latest.
+    if: ${{ !github.event.release.prerelease && !contains(github.event.release.tag_name, '-') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-package
+          path: artifacts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Check npm trusted publishing support
+        run: |
+          node -e 'const [major, minor, patch] = require("node:child_process").execFileSync("npm", ["--version"], { encoding: "utf8" }).trim().split(".").map(Number); if (major < 11 || (major === 11 && (minor < 5 || (minor === 5 && patch < 1)))) throw new Error("npm 11.5.1 or newer is required");'
+      - name: Publish tested tarball
+        run: npm publish artifacts/hypervibes.tgz --ignore-scripts --tag latest
+
   publish:
     name: Publish tested ${{ matrix.arch }} image
     needs: validate

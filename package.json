@@ -1,7 +1,11 @@
 {
   "name": "hypervibes",
-  "version": "0.4.0-beta",
+  "version": "0.4.0",
   "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/idft/hypervibes.git"
+  },
   "type": "module",
   "engines": {
     "node": ">=22.23.3"
