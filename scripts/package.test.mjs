@@ -489,6 +489,7 @@ test("real npm tarball runs with runtime dependencies outside the repository", {
       const contents = archiveMembers(await execute("tar", ["-tzf", tarball], { label: "inspect tarball" }));
       for (const path of contents) {
         assert.match(path, /^package\/(?:bin\/|dist\/|\.build\/(?:client|server)\/|static\/|scripts\/check-node\.mjs$|package\.json$|README\.md$|LICENSE$)/, path);
+        assert.doesNotMatch(path, /^package\/static\/dist\//, path);
         assert.doesNotMatch(path, /(?:\.env(?:\.|$)|\.sqlite|\.db$|\.test\.|\.map$|\.ts$|memory-review|pi\.md|config\.json$)/, path);
       }
       assert.ok(contents.some((path) => /dist\/db\/migrations\/.+\/migration\.sql$/.test(path)));

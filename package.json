@@ -15,6 +15,7 @@
     ".build/server/",
     ".build/client/",
     "static/",
+    "!static/dist/",
     "scripts/check-node.mjs"
   ],
   "scripts": {
