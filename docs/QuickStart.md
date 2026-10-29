@@ -6,7 +6,7 @@ slug: /quick-start
 
 ## Run HyperVibes
 
-Install Node.js 22.23.3 or newer, then run `npx hypervibes@beta` and open
+Install Node.js 22.23.3 or newer, then run `npx hypervibes` and open
 [http://localhost:3003](http://localhost:3003). See [Installation](Installation.md) for other ways to run,
 requirements, and private LAN setup.
 

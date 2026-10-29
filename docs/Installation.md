@@ -4,8 +4,7 @@ slug: /installation
 
 # Installation
 
-HyperVibes runs from the published npm package or from source. Desktop builds and
-the rewritten container image are coming soon.
+HyperVibes runs from the published npm package, a container image, or source.
 
 ## NPX
 
@@ -13,14 +12,14 @@ NPX is the quickest way to run HyperVibes on your own computer. Install
 Node.js 22.23.3 or newer, then run:
 
 ```sh
-npx hypervibes@beta
+npx hypervibes
 ```
 
 Open [http://localhost:3003](http://localhost:3003). The first start creates
 private secrets in your per-user `config.json`. Back up that file with your
 database. Keep existing encryption keys when upgrading.
 
-To install it once instead, run `npm install -g hypervibes@beta` and start it
+To install it once instead, run `npm install -g hypervibes` and start it
 with `hypervibes`.
 
 For another device, prefer HTTPS and set `APP_ORIGIN` to its exact browser URL.
@@ -50,11 +49,11 @@ Keep development dependencies installed: startup builds fresh production assets.
 
 ## Containers
 
-The rewritten Linux AMD64 and ARM64 image is coming with release `v0.4.0` at
+The Linux AMD64 and ARM64 image is available at
 `ghcr.io/idft/hypervibes:0.4.0`. Earlier images use the legacy application and
 are not interchangeable with this setup.
 
-After that release is published, use `compose.yaml` from this repository:
+Use `compose.yaml` from this repository:
 
 ```sh
 docker compose up -d
@@ -89,7 +88,7 @@ Desktop builds are planned for:
 - Windows
 - Linux
 
-Coming soon. Downloads and installation steps are not available yet.
+Downloads and installation steps are not available.
 
 ## Server hosting
 

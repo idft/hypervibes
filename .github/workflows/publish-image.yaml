@@ -65,7 +65,7 @@ jobs:
         run: |
           node -e 'const [major, minor, patch] = require("node:child_process").execFileSync("npm", ["--version"], { encoding: "utf8" }).trim().split(".").map(Number); if (major < 11 || (major === 11 && (minor < 5 || (minor === 5 && patch < 1)))) throw new Error("npm 11.5.1 or newer is required");'
       - name: Publish tested tarball
-        run: npm publish artifacts/hypervibes.tgz --ignore-scripts --tag latest
+        run: npm publish ./artifacts/hypervibes.tgz --ignore-scripts --tag latest
 
   publish:
     name: Publish tested ${{ matrix.arch }} image

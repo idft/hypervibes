@@ -21,7 +21,7 @@ HyperVibes is a self-hosted app for running AI trading agents on Hyperliquid.
 Install Node.js 22.23.3 or newer, then run:
 
 ```sh
-npx hypervibes@beta
+npx hypervibes
 ```
 
 Open <http://localhost:3003>. No `.env` file is required.
@@ -46,11 +46,11 @@ Explore the [user guide](https://hypervibes.ai/docs/) for more.
 
 ## Installation
 
-- **NPX:** `npx hypervibes@beta` runs the published beta without cloning or building the source.
-- **Global npm install:** `npm install -g hypervibes@beta`, then run `hypervibes`.
+- **NPX:** `npx hypervibes` runs the published package without cloning or building the source.
+- **Global npm install:** `npm install -g hypervibes`, then run `hypervibes`.
 - **From source:** clone the repository, run `pnpm install`, then `pnpm start`. See [Development](#development).
-- **Docker Compose — coming soon.**
-- **Desktop download — coming soon:** planned builds for macOS, Windows, and Linux.
+- **Docker Compose:** use `compose.yaml` from this repository. See the [installation guide](docs/Installation.md#containers).
+- **Desktop download:** builds for macOS, Windows, and Linux are not available.
 - **Local release package:** run `pnpm pack` from a source checkout to build an npm tarball. See [Build](#build).
 - **Local container build:** run `pnpm pack --out artifacts/hypervibes.tgz`, then `docker build -f Containerfile -t hypervibes:local .`.
 
@@ -100,7 +100,7 @@ pnpm pack           # Rebuild and create a local npm tarball
 dependencies installed for source builds. The release package exposes the
 `hypervibes` executable and needs only Node.js and runtime dependencies to launch.
 Run `node bin/hypervibes.js --help` for usage. The npm package is published as
-`hypervibes`; use the `beta` tag for the current beta release.
+`hypervibes`.
 
 ### Checks
 
