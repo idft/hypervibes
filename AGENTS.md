@@ -96,7 +96,6 @@ The dev database is a single SQLite file (no containers):
 ## Running and building
 
 * Backend dev server: `pnpm dev` (port 3003, loads `.env`).
-  **Never start the dev webserver yourself; the user will run it.**
 * Source startup: `pnpm start` builds and runs the compiled application.
   `pnpm start:built` runs an existing build. `pnpm build` creates frontend assets
   in `.build/` and structure-preserving backend JavaScript in `dist/`.
