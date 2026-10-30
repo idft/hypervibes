@@ -7,6 +7,7 @@ describe("Agent management", () => {
     const html = renderToStaticMarkup(<AgentsPage agents={[]} />);
     expect(html).toContain("Agents</h1>");
     expect(html).toContain("No agents yet");
+    expect(html).toContain("Unknown build");
     expect(html).toContain("Create a new agent");
     expect(html).toContain("agents/new");
     expect(html).toContain("cursor-pointer");

@@ -3,7 +3,7 @@ import { SetupChecklist, type SetupState } from "./setup-checklist.js";
 
 export function AgentsPage({ agents, setup }: { agents: AgentRow[]; setup?: SetupState }) {
   return (
-    <div className="mx-auto max-w-[1400px]">
+    <div className="mx-auto flex min-h-[calc(100dvh-6.5rem)] max-w-[1400px] flex-col">
       <header className="flex items-center justify-between gap-4 border-b border-zinc-800 pb-6">
         <h1 className="text-3xl font-semibold tracking-tight text-white">Agents</h1>
         <a href="/agents/new" className="cursor-pointer rounded-full bg-violet-600 px-5 py-2 text-sm font-medium text-white hover:bg-violet-500">Create a new agent</a>
@@ -20,6 +20,8 @@ export function AgentsPage({ agents, setup }: { agents: AgentRow[]; setup?: Setu
               : <p className="mt-1 text-xs text-zinc-500">Chat only</p>}
           </a>
         </li>)}</ul>}
+      <div className="min-h-8 flex-1" />
+      <footer className="border-t border-zinc-800 pt-4 text-xs text-zinc-500">{import.meta.env.VITE_APP_BUILD_LABEL ?? "Unknown build"}</footer>
     </div>
   );
 }
