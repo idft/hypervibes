@@ -20,6 +20,8 @@ import { toolActivity, type ToolActivity } from "../research/tool-activity.js";
 import type { ExecutionContextService } from "./execution-context.js";
 import type { RunContext } from "./execution-context-contracts.js";
 import { chartToolNames } from "../charts/contracts.js";
+import { configurationToolNames } from "./configuration-contracts.js";
+import { documentationToolNames } from "../documentation/contracts.js";
 import { bodyHash, canonical } from "../canonical.js";
 import { subagentTemplate } from "./subagent-templates.js";
 import { workerTriggers, type WorkerRequestPayload, type WorkerTriggers } from "./worker-triggers.js";
@@ -63,6 +65,16 @@ export const ChartToolsUpgradeDoc = defineDoc<{ applied: boolean }>({
   kind: "hv.chart-tools-upgrade", version: 1, scope: "conversation", history: "latest", fork: "initial", initial: () => ({ applied: false }), checkpointWhen: () => false,
 });
 
+export const DocumentationToolsUpgradeDoc = defineDoc<{ applied: boolean }>({
+  kind: "hv.documentation-tools-upgrade", version: 1, scope: "conversation", history: "latest", fork: "initial",
+  initial: () => ({ applied: false }), checkpointWhen: () => false,
+});
+
+export const NotificationToolsUpgradeDoc = defineDoc<{ applied: boolean }>({
+  kind: "hv.notification-tools-upgrade", version: 1, scope: "conversation", history: "latest", fork: "initial",
+  initial: () => ({ applied: false }), checkpointWhen: () => false,
+});
+
 /** Definitions and run intents belong to the app; Durable owns execution and reporting. */
 export class SubagentService {
   private readonly bindings = new Map<string, Binding>();
@@ -103,7 +115,7 @@ export class SubagentService {
     const binding = { harness, main, hyperliquid, capabilities, orchestratorInsights, ...execution, userId: agent.userId };
     // Normalize saved selections at startup; historical run snapshots stay immutable.
     for (const saved of await this.db.select().from(hvSubagents).where(eq(hvSubagents.agentId, agent.id)).all()) {
-      const tools = normalizeDelegationTools(saved.tools);
+      const tools = normalizeDelegationTools(saved.kind === "orchestrator" ? [...new Set([...saved.tools, ...configurationToolNames])] : saved.tools);
       if (canonical(tools) !== canonical(saved.tools)) await this.db.update(hvSubagents).set({ tools, updatedAt: now }).where(eq(hvSubagents.id, saved.id)).run();
     }
     const row = (await this.db.select().from(hvSubagents).where(and(eq(hvSubagents.agentId, agent.id), eq(hvSubagents.kind, "orchestrator"))).get())!;
@@ -121,6 +133,27 @@ export class SubagentService {
       row.tools = [...new Set([...row.tools, ...chartToolNames])];
       await this.db.update(hvSubagents).set({ tools: row.tools, updatedAt: now }).where(eq(hvSubagents.id, row.id)).run();
       await main.commit(async (tx) => { (await tx.doc(ChartToolsUpgradeDoc, main.id)).applied = true; }, context);
+    }
+    if (!await main.commit(async (tx) => (await tx.doc(DocumentationToolsUpgradeDoc, main.id)).applied, context)) {
+      row.tools = [...new Set([...row.tools, ...documentationToolNames])];
+      await this.db.update(hvSubagents).set({ tools: row.tools, updatedAt: now }).where(eq(hvSubagents.id, row.id)).run();
+      await main.commit(async (tx) => { (await tx.doc(DocumentationToolsUpgradeDoc, main.id)).applied = true; }, context);
+    }
+    if (!await main.commit(async (tx) => (await tx.doc(NotificationToolsUpgradeDoc, main.id)).applied, context)) {
+      // Upgrade only the existing root and bundled review workers. Keep every
+      // other choice, including later explicit notification deselections.
+      const definitions = await this.db.select().from(hvSubagents).where(eq(hvSubagents.agentId, agent.id)).all();
+      for (const saved of definitions) {
+        if (saved.kind !== "orchestrator" && saved.templateOrigin?.id !== "basic-review") continue;
+        if (!saved.tools.includes("send_notification")) {
+          const tools = [...saved.tools, "send_notification"];
+          await this.db.update(hvSubagents).set({ tools, updatedAt: now }).where(eq(hvSubagents.id, saved.id)).run();
+          if (saved.id === row.id) row.tools = tools;
+        }
+      }
+      // Do not nest application SQL inside Durable's commit queue. Repeating
+      // the append after a crash is safe until the marker commits.
+      await main.commit(async (tx) => { (await tx.doc(NotificationToolsUpgradeDoc, main.id)).applied = true; }, context);
     }
     await this.applyMain(binding, row);
     await this.recoverParkedRuns(agent.id, binding, true);
@@ -406,9 +439,10 @@ export class SubagentService {
       return rows;
     });
   }
-  async create(userId: string, agentId: string, data: unknown, creationId: string, templateId = "") {
+  async create(userId: string, agentId: string, data: unknown, creationId: string, templateId = "", actor?: MemoryActor) {
     await this.host.owned(userId, agentId); requestId(creationId);
     return this.serial(agentId, async () => {
+      if (actor) await this.authorizeConfiguration(agentId, actor, "create_worker");
       const input = subagentInput(data); await this.validateModel(userId, input, input.thinkingLevel);
       await this.validateTriggers(agentId, `worker:${creationId}`, workerTriggers(input.triggers), input);
       const template = templateId ? subagentTemplate(templateId) : null;
@@ -435,41 +469,54 @@ export class SubagentService {
       if (source.id === id || source.kind !== "worker" || source.archived) throw new AgentError("Select another non-archived worker from this Agent");
     }
   }
-  async updateTools(userId: string, agentId: string, id: string, tools: unknown) {
-    return this.updateSettings(userId, agentId, id, undefined, { tools });
+  private checkUpdatedAt(row: SubagentRow, expectedUpdatedAt?: number) {
+    if (expectedUpdatedAt !== undefined && (!Number.isSafeInteger(expectedUpdatedAt) || expectedUpdatedAt !== row.updatedAt)) throw new AgentError("Configuration changed; read the current settings before editing again.", 409);
   }
-  async updateIdentity(userId: string, agentId: string, id: string, name: unknown, description: unknown) {
-    return this.updateSettings(userId, agentId, id, undefined, { name, description });
+  private async authorizeConfiguration(agentId: string, actor: MemoryActor, capability: "update_agent_configuration" | "create_worker" | "archive_worker") {
+    if (actor.agentId !== agentId || actor.runId !== null || actor.subagentId !== `main:${agentId}` || actor.conversationId !== this.binding(agentId).main.id || actor.toolTaskId === null) throw new AgentError("Only this Agent's active root orchestrator can change configuration", 403);
+    await this.database.transaction(async (tx) => {
+      await assertActiveActor(tx, actor);
+      await this.execution.authorize(tx, actor, capability);
+    });
   }
-  async updateAssignments(userId: string, agentId: string, id: string, data: unknown) {
+  async updateTools(userId: string, agentId: string, id: string, tools: unknown, actor?: MemoryActor, expectedUpdatedAt?: number) {
+    return this.updateSettings(userId, agentId, id, undefined, { tools }, actor, expectedUpdatedAt);
+  }
+  async updateIdentity(userId: string, agentId: string, id: string, name: unknown, description: unknown, actor?: MemoryActor, expectedUpdatedAt?: number) {
+    return this.updateSettings(userId, agentId, id, undefined, { name, description }, actor, expectedUpdatedAt);
+  }
+  async updateAssignments(userId: string, agentId: string, id: string, data: unknown, actor?: MemoryActor, expectedUpdatedAt?: number) {
     if (!data || typeof data !== "object") throw new AgentError("Invalid assignment settings.");
     return this.updateSettings(userId, agentId, id, undefined, {
       delegatable: Reflect.get(data, "delegatable") as unknown,
       persistent: Reflect.get(data, "persistent") as unknown, timeoutSeconds: Reflect.get(data, "timeoutSeconds") as unknown,
-    });
+    }, actor, expectedUpdatedAt);
   }
-  async updateSection(userId: string, agentId: string, id: string, section: string, data: unknown) {
+  async updateSection(userId: string, agentId: string, id: string, section: string, data: unknown, actor?: MemoryActor, expectedUpdatedAt?: number) {
     if (!data || typeof data !== "object") throw new AgentError("Invalid settings.");
     const get = (key: string): unknown => Reflect.get(data, key);
     switch (section) {
-      case "enabled": return this.updateSettings(userId, agentId, id, undefined, { enabled: get("enabled") });
-      case "instructions": return this.updateSettings(userId, agentId, id, undefined, { instructions: get("instructions") });
-      case "model": return this.updateSettings(userId, agentId, id, undefined, { provider: get("provider"), modelId: get("modelId"), thinkingLevel: get("thinkingLevel") });
-      case "triggers": return this.updateSettings(userId, agentId, id, undefined, { triggers: get("triggers") });
-      case "schedule": return this.updateSettings(userId, agentId, id, undefined, { schedule: get("schedule"), delaySeconds: get("delaySeconds"), completion: get("completion") });
+      case "enabled": return this.updateSettings(userId, agentId, id, undefined, { enabled: get("enabled") }, actor, expectedUpdatedAt);
+      case "instructions": return this.updateSettings(userId, agentId, id, undefined, { instructions: get("instructions") }, actor, expectedUpdatedAt);
+      case "model": return this.updateSettings(userId, agentId, id, undefined, { provider: get("provider"), modelId: get("modelId"), thinkingLevel: get("thinkingLevel") }, actor, expectedUpdatedAt);
+      case "triggers": return this.updateSettings(userId, agentId, id, undefined, { triggers: get("triggers") }, actor, expectedUpdatedAt);
+      case "schedule": return this.updateSettings(userId, agentId, id, undefined, { schedule: get("schedule"), delaySeconds: get("delaySeconds"), completion: get("completion") }, actor, expectedUpdatedAt);
       default: throw new AgentError("Unknown settings section.");
     }
   }
   async update(userId: string, agentId: string, id: string, data: unknown) {
     return this.updateSettings(userId, agentId, id, data);
   }
-  private async updateSettings(userId: string, agentId: string, id: string, data: unknown, patch?: { triggers: unknown } | { tools: unknown } | { name: unknown; description: unknown } | { [K in keyof AssignmentSettings]: unknown } | { enabled: unknown } | { instructions: unknown } | { provider: unknown; modelId: unknown; thinkingLevel: unknown } | { schedule: unknown; delaySeconds: unknown; completion: unknown }) {
+  private async updateSettings(userId: string, agentId: string, id: string, data: unknown, patch?: { triggers: unknown } | { tools: unknown } | { name: unknown; description: unknown } | { [K in keyof AssignmentSettings]: unknown } | { enabled: unknown } | { instructions: unknown } | { provider: unknown; modelId: unknown; thinkingLevel: unknown } | { schedule: unknown; delaySeconds: unknown; completion: unknown }, actor?: MemoryActor, expectedUpdatedAt?: number) {
     await this.host.owned(userId, agentId);
     return this.serial(agentId, async () => {
+      if (actor) await this.authorizeConfiguration(agentId, actor, "update_agent_configuration");
       const current = await this.definition(agentId, id);
+      this.checkUpdatedAt(current, expectedUpdatedAt);
       if (current.archived) throw new AgentError("Archived workers cannot be edited.", 409);
       if (patch && ("enabled" in patch || "delegatable" in patch || "schedule" in patch) && current.kind === "orchestrator") throw new AgentError("The orchestrator cannot be paused or have assignment or schedule settings.", 409);
       const input = subagentInput(patch ? { ...current, ...patch } : data, current.kind === "orchestrator");
+      if (current.kind === "orchestrator") input.tools = [...new Set([...input.tools, ...configurationToolNames])];
       const pausing = patch && "enabled" in patch && !input.enabled;
       // Instruction-only edits affect future jobs; admitted jobs own frozen snapshots.
       const editingInstructions = patch && "instructions" in patch;
@@ -478,15 +525,21 @@ export class SubagentService {
       const binding = this.binding(agentId);
       if (current.kind === "orchestrator") {
         const live = await binding.harness.snapshot(LiveDoc, binding.main.id, context), inbox = await binding.harness.snapshot(InboxDoc, binding.main.id, context);
-        if (live?.run || inbox?.items.length) throw new AgentError("Stop or finish queued work before editing the orchestrator.", 409);
+        if (!actor && (live?.run || inbox?.items.length)) throw new AgentError("Stop or finish queued work before editing the orchestrator.", 409);
         if (input.provider !== current.provider || input.modelId !== current.modelId) {
           const selected = (await this.host.models(userId)).getModel(input.provider, input.modelId);
           if (!selected?.input.includes("image") && (await binding.main.context(context)).messages.some((message) => message.role === "user" && Array.isArray(message.content) && message.content.some((part) => part.type === "image"))) {
             throw new AgentError("This conversation contains images. Reset context before switching to a text-only model; earlier messages remain available.", 409);
           }
         }
-      } else if (!pausing && !editingInstructions && await this.db.select().from(hvSubagentRuns).where(and(eq(hvSubagentRuns.subagentId, id), inArray(hvSubagentRuns.status, active))).get()) throw new AgentError("Stop or finish the active assignment before editing this worker.", 409);
-      const now = Date.now();
+      } else {
+        // Actor edits change only future admissions. Active assignments retain
+        // their frozen config/context, but persistence also owns a shared child
+        // conversation pointer and cannot change until the assignment drains.
+        const frozenEdit = actor && input.persistent === current.persistent;
+        if (!pausing && !editingInstructions && !frozenEdit && await this.db.select().from(hvSubagentRuns).where(and(eq(hvSubagentRuns.subagentId, id), inArray(hvSubagentRuns.status, active))).get()) throw new AgentError("Stop or finish the active assignment before editing this worker.", 409);
+      }
+      const now = Math.max(Date.now(), current.updatedAt + 1);
       const contextSettings = {
         delegatable: input.delegatable, persistent: input.persistent, timeoutSeconds: input.timeoutSeconds,
         conversationId: input.persistent === current.persistent ? current.conversationId : null,
@@ -501,21 +554,27 @@ export class SubagentService {
         : "schedule" in patch ? scheduleSettings
         : "enabled" in patch ? { enabled: input.enabled, nextRunAt: input.enabled === current.enabled ? current.nextRunAt : input.enabled ? nextCandleRun(now, input.schedule, input.delaySeconds) : null }
         : contextSettings;
-      const row = (await this.db.update(hvSubagents).set({ ...changes, updatedAt: now }).where(eq(hvSubagents.id, id)).returning().all())[0]!;
+      const row = (await this.db.update(hvSubagents).set({ ...changes, ...(current.kind === "orchestrator" ? { tools: input.tools } : {}), updatedAt: now }).where(eq(hvSubagents.id, id)).returning().all())[0]!;
       if (current.kind === "orchestrator") {
+        // Durable's public configure() changes AgentDoc only. GenerationTask
+        // fixes each request in prepare; during this tool round it is waiting.
+        // The next prepare observes these choices without cancelling/replaying
+        // the completed request or mutating its persisted prompt/tool loadout.
         await this.applyMain(binding, row);
         if (this.ready && await agentExecutable(this.database, agentId)) binding.harness.resume();
       }
       this.host.changed(agentId); this.dashboardChanged(agentId); return row;
     });
   }
-  async archive(userId: string, agentId: string, id: string) {
+  async archive(userId: string, agentId: string, id: string, actor?: MemoryActor, expectedUpdatedAt?: number) {
     await this.host.owned(userId, agentId);
     return this.serial(agentId, async () => {
+      if (actor) await this.authorizeConfiguration(agentId, actor, "archive_worker");
       const row = await this.definition(agentId, id);
+      this.checkUpdatedAt(row, expectedUpdatedAt);
       if (row.kind === "orchestrator") throw new AgentError("The main orchestrator cannot be archived or deleted.", 409);
       if (await this.db.select().from(hvSubagentRuns).where(and(eq(hvSubagentRuns.subagentId, id), inArray(hvSubagentRuns.status, active))).get()) throw new AgentError("Stop or finish the active assignment before archiving.", 409);
-      await this.db.update(hvSubagents).set({ archived: true, enabled: false, nextRunAt: null, updatedAt: Date.now() }).where(eq(hvSubagents.id, id)).run();
+      await this.db.update(hvSubagents).set({ archived: true, enabled: false, nextRunAt: null, updatedAt: Math.max(Date.now(), row.updatedAt + 1) }).where(eq(hvSubagents.id, id)).run();
       this.dashboardChanged(agentId);
     });
   }
@@ -599,8 +658,12 @@ export class SubagentService {
           if (!await tx.get("SELECT number FROM hv_memories WHERE agent_id=? AND number=? AND kind='research'", agentId, Number(ref.slice(1)))) throw new AgentError("Research reference not found in this Agent", 404);
         }
         if (actor?.runId) {
-          const source = await db.select().from(hvSubagents).where(and(eq(hvSubagents.agentId, agentId), eq(hvSubagents.id, actor.subagentId!))).get();
-          if (!source || !source.enabled || source.archived || source.triggers.inboxEnabled || !normalizeDelegationTools(source.tools).includes("delegate_subagent") || !target.triggers.workerDelegates.includes(source.id)) throw new AgentError("Worker delegation permission is unavailable", 403);
+          const sourceRun = await db.select().from(hvSubagentRuns).where(and(eq(hvSubagentRuns.agentId, agentId), eq(hvSubagentRuns.id, actor.runId), eq(hvSubagentRuns.subagentId, actor.subagentId!), inArray(hvSubagentRuns.status, active))).get();
+          if (!sourceRun || sourceRun.conversationId !== actor.conversationId) throw new AgentError("Delegation caller does not match an active assignment", 403);
+          // Source permissions belong to this admitted assignment, not a later
+          // definition edit. The recipient's current approval still applies.
+          const source = sourceRun.config;
+          if (source.agentId !== agentId || source.id !== actor.subagentId || !source.enabled || source.archived || source.triggers.inboxEnabled || !normalizeDelegationTools(source.tools).includes("delegate_subagent") || !target.triggers.workerDelegates.includes(source.id)) throw new AgentError("Worker delegation permission is unavailable", 403);
           // Empty references must never vacuously deduplicate a self-contained task.
           if (payload.researchRefs.length) {
             const publications = await db.select().from(hvWorkerRequests).where(and(eq(hvWorkerRequests.agentId, agentId), eq(hvWorkerRequests.subagentId, id), inArray(hvWorkerRequests.eventKey, payload.researchRefs.map((ref) => `research:${ref.slice(1)}`)))).all();

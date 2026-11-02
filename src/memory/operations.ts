@@ -3,13 +3,14 @@ import type { SqliteExecutor } from "@earendil-works/pi-durable/storage/sqlite";
 import { AgentError } from "../agents/agent-input.js";
 import { canonical } from "../canonical.js";
 import { text } from "./validation.js";
+import type { ConfigurationToolName } from "../agents/configuration-contracts.js";
 
 /** Server-only identity. Never deserialize this structure from model or HTTP input. */
 export interface MemoryActor {
   agentId: string; userId: string | null; subagentId: string | null; runId: string | null;
   conversationId: number | null; toolTaskId: number | null;
 }
-export type MemoryCapability = "publish_research" | "record_trade_decision" | "publish_review" | "append_insight" | "replace_insights" | "send_notification";
+export type MemoryCapability = ConfigurationToolName | "publish_research" | "record_trade_decision" | "publish_review" | "append_insight" | "replace_insights" | "send_notification";
 /** Resolves saved identity/permissions; models cannot supply this authority. */
 export type MemoryAuthorization = (tx: SqliteExecutor, actor: MemoryActor, capability: MemoryCapability, targetWorkerId?: string | null) => Promise<void>;
 export function requestHash(actor: MemoryActor, operation: string, input: unknown): string {

@@ -82,6 +82,70 @@ describe("agent safety controls", () => {
     } finally { unsubscribe(); }
   });
 
+  it("refreshes mounted configuration and worker lists for every subagents event without fetching live seeds", async () => {
+    class Source extends EventTarget {
+      static current: Source;
+      close = vi.fn();
+      constructor() { super(); Source.current = this; }
+    }
+    vi.stubGlobal("EventSource", Source);
+    const listKey = ["subagents", "agent", "list"];
+    const detailKey = ["subagents", "agent", "detail", "worker"];
+    const dashboardKey = ["subagents", "agent", "dashboard"];
+    const runKey = ["subagents", "agent", "run", "worker", "run"];
+    const otherKey = ["subagents", "other", "detail", "worker"];
+    const list = vi.fn().mockResolvedValue(["created"]), detail = vi.fn().mockResolvedValue({ tools: ["read_doc"] });
+    for (const key of [listKey, detailKey, dashboardKey, runKey, otherKey]) client.setQueryData(key, []);
+    const unsubscribes = [
+      new QueryObserver(client, { queryKey: listKey, queryFn: list, staleTime: Infinity }).subscribe(() => {}),
+      new QueryObserver(client, { queryKey: detailKey, queryFn: detail, staleTime: Infinity }).subscribe(() => {}),
+    ];
+    try {
+      await act(async () => root.render(<QueryClientProvider client={client}><AgentEventsProvider agentId="agent"><AgentLifecycleSubscriber agentId="agent" /></AgentEventsProvider></QueryClientProvider>));
+      const emit = (snapshot: unknown) => act(async () => { Source.current.dispatchEvent(new MessageEvent("subagents", { data: JSON.stringify(snapshot) })); });
+      const created = [{ id: "created", name: "New worker", enabled: false, schedule: "", nextRunAt: null, runs: [] }];
+      await emit(created);
+      expect(client.getQueryData(listKey)).toEqual(["created"]);
+      expect(client.getQueryData(detailKey)).toEqual({ tools: ["read_doc"] });
+      expect(client.getQueryData(dashboardKey)).toEqual(created);
+      // Tool/instruction edits can produce an identical dashboard snapshot.
+      await emit(created);
+      expect(detail).toHaveBeenCalledTimes(2);
+      list.mockResolvedValue([]);
+      detail.mockResolvedValue({ archived: true });
+      await emit([]);
+      expect(client.getQueryData(listKey)).toEqual([]);
+      expect(client.getQueryData(detailKey)).toEqual({ archived: true });
+      expect(client.getQueryData(dashboardKey)).toEqual([]);
+      expect(client.getQueryState(otherKey)?.isInvalidated).toBe(false);
+      expect(client.getQueryState(runKey)?.isInvalidated).toBe(false);
+      vi.useFakeTimers();
+      await act(async () => vi.advanceTimersByTime(60_000));
+      expect(list).toHaveBeenCalledTimes(3);
+      expect(detail).toHaveBeenCalledTimes(3);
+    } finally { unsubscribes.forEach((unsubscribe) => unsubscribe()); }
+  });
+
+  it("invalidates notification settings for notification events only within the current Agent", async () => {
+    class Source extends EventTarget {
+      static current: Source;
+      close = vi.fn();
+      constructor() { super(); Source.current = this; }
+    }
+    vi.stubGlobal("EventSource", Source);
+    const key = ["notification-settings", "agent"], otherKey = ["notification-settings", "other"];
+    client.setQueryData(key, { enabled: false }); client.setQueryData(otherKey, { enabled: false });
+    const fetch = vi.fn().mockResolvedValue({ enabled: true });
+    const unsubscribe = new QueryObserver(client, { queryKey: key, queryFn: fetch, staleTime: Infinity }).subscribe(() => {});
+    try {
+      await act(async () => root.render(<QueryClientProvider client={client}><AgentEventsProvider agentId="agent"><AgentLifecycleSubscriber agentId="agent" /></AgentEventsProvider></QueryClientProvider>));
+      await act(async () => Source.current.dispatchEvent(new MessageEvent("notifications", { data: JSON.stringify({ revision: 2 }) })));
+      expect(client.getQueryData(key)).toEqual({ enabled: true });
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(client.getQueryState(otherKey)?.isInvalidated).toBe(false);
+    } finally { unsubscribe(); }
+  });
+
   it("arms inline without a browser prompt and cancels without disabling the agent", async () => {
     await renderStop(true);
     await act(async () => button().click());

@@ -45,6 +45,27 @@ describe("domain query ownership", () => {
       expect(mocks.detail).not.toHaveBeenCalled(); expect(mocks.dashboard).not.toHaveBeenCalled();
     } finally { unsubscribe(); }
   });
+  it.each([2, 3])("accepts equal-version section fields but keeps a newer complete snapshot (cached version %s)", async (updatedAt) => {
+    const draft = templateDraft("basic-analysis", { provider: "test", modelId: "model", thinkingLevel: "" });
+    const original: SubagentRow = { ...draft, triggers: workerTriggers(draft.triggers), id: "worker", agentId: "agent", kind: "worker", archived: false, conversationId: null, nextRunAt: null, templateOrigin: null, createdAt: 1, updatedAt: 1 };
+    const detailKey = subagentQueryOptions("agent", original.id).queryKey;
+    const listKey = subagentsQueryOptions("agent").queryKey;
+    client.setQueryData(detailKey, { definition: original, runs: [], pagination: runPagination(0), workers: [], schedulerError: null });
+    client.setQueryData(listKey, [original]);
+    let complete!: (row: SubagentRow) => void;
+    mocks.saveSection.mockReturnValue(new Promise<SubagentRow>((resolve) => { complete = resolve; }));
+    const saving = subagentMutations(client, "agent").saveSection({ id: original.id, section: "instructions", settings: { instructions: "Saved instructions" } });
+    const concurrent = { ...original, name: "Chat rename", instructions: "Later chat instructions", tools: ["read_doc"], enabled: false, persistent: true, timeoutSeconds: 600, updatedAt };
+    client.setQueryData(detailKey, { definition: concurrent, runs: [], pagination: runPagination(0), workers: [], schedulerError: null });
+    client.setQueryData(listKey, [concurrent]);
+    complete({ ...original, instructions: "Saved instructions", updatedAt: 2 });
+    const expected = updatedAt > 2 ? concurrent : { ...concurrent, instructions: "Saved instructions" };
+    await expect(saving).resolves.toEqual(expected);
+    expect(client.getQueryData<SubagentDetail>(detailKey)?.definition).toEqual(expected);
+    expect(client.getQueryData(listKey)).toEqual([expected]);
+    expect(mocks.detail).not.toHaveBeenCalled();
+  });
+
   it.each(["run", "stop"] as const)("%s invalidates only the target agent's list, detail and live seed caches", async (action) => {
     const keys = [["subagents", "agent", "list"], ["subagents", "agent", "detail", "worker"], ["subagents", "agent", "dashboard"], ["agent-chat", "agent"]];
     keys.forEach((key) => client.setQueryData(key, []));

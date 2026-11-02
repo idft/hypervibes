@@ -8,6 +8,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRow } from "../db/subagent-schema.js";
 import { hyperliquidToolNames, mainToolNames, indicatorReadToolNames } from "../agents/subagent-input.js";
+import { configurationToolNames } from "../agents/configuration-contracts.js";
 const mocks = vi.hoisted(() => ({ invalidate: vi.fn(), navigate: vi.fn(), success: vi.fn(), error: vi.fn(), saveSubagent: vi.fn(), saveSubagentSection: vi.fn(), saveSubagentAssignments: vi.fn(), saveSubagentIdentity: vi.fn(), saveSubagentTools: vi.fn(), getSubagent: vi.fn(), runSubagent: vi.fn(), archiveSubagent: vi.fn(), unarchiveSubagent: vi.fn(), stopSubagentRun: vi.fn(), listSubagents: vi.fn() }));
 vi.mock("../web/subagents.js", () => mocks);
 vi.mock("sonner", () => ({ toast: { success: mocks.success, error: mocks.error } }));
@@ -82,6 +83,47 @@ describe("subagent pages", () => {
     expect(mocks.getSubagent).not.toHaveBeenCalled();
     await render({ ...definition, kind: "orchestrator" });
     expect(second.close).toHaveBeenCalledOnce();
+  });
+
+  it("shows committed chat configuration changes while preserving an unfinished instructions draft", async () => {
+    await render();
+    const committed = { ...definition, name: "Updated from chat", tools: ["read_doc"], instructions: "New instructions", enabled: false, updatedAt: 2 };
+    await render(committed);
+    expect(container.querySelector("h2")?.textContent).toBe("Updated from chat");
+    expect(container.querySelector("textarea")?.value).toBe("New instructions");
+    expect(container.textContent).toContain("read_doc");
+    expect(container.querySelector('[aria-label="Enable sub-agent"]')).not.toBeNull();
+    await editInstructions("Unfinished local draft");
+    await render({ ...committed, tools: ["search_docs"], instructions: "Another chat edit", archived: true, updatedAt: 3 });
+    expect(container.querySelector("textarea")?.value).toBe("Unfinished local draft");
+    expect(container.textContent).toContain("search_docs");
+    expect(container.querySelector("fieldset")?.disabled).toBe(true);
+    expect(container.textContent).toContain("Unarchive");
+  });
+
+  it.each(["instructions", "tools"] as const)("does not apply an older %s response over a newer committed snapshot", async (section) => {
+    await render();
+    let complete!: (row: SubagentRow) => void;
+    const response = new Promise<SubagentRow>((resolve) => { complete = resolve; });
+    if (section === "instructions") {
+      mocks.saveSubagentSection.mockReturnValue(response);
+      await editInstructions("Local saved instructions");
+      await click("Save instructions");
+    } else {
+      mocks.saveSubagentTools.mockReturnValue(response);
+      await click("Edit tools");
+      await click("All tools in Hyperliquid");
+      await click("Apply");
+    }
+    const newer = { ...definition, name: "Newer chat name", instructions: "Newer chat instructions", tools: ["search_docs"], updatedAt: 3 };
+    await render(newer);
+    await act(async () => complete({ ...definition, instructions: "Local saved instructions", tools: [...hyperliquidToolNames], updatedAt: 2 }));
+    expect(document.querySelector("dialog")).toBeNull();
+    expect(container.querySelector("h2")?.textContent).toBe("Newer chat name");
+    expect(container.querySelector("textarea")?.value).toBe("Newer chat instructions");
+    expect(container.textContent).toContain("search_docs");
+    expect(container.textContent).not.toContain("Hyperliquid: get_account");
+    expect(queryClient.getQueryData<SubagentDetail>(["subagents", definition.agentId, "detail", definition.id])?.definition).toEqual(newer);
   });
 
   it("lists the protected orchestrator and links workers to detail pages", () => {
@@ -403,7 +445,7 @@ describe("subagent pages", () => {
     await click("All tools in Hyperliquid");
     await click("All tools in Hyperliquid");
     await click("All tools in HyperVibes · Subagents");
-    expect(document.querySelectorAll("dialog input[type=checkbox]:checked")).toHaveLength(hyperliquidToolNames.length + 4);
+    expect(document.querySelectorAll("dialog input[type=checkbox]:checked")).toHaveLength(hyperliquidToolNames.length + 4 + configurationToolNames.length);
     const search = document.querySelector("dialog input[type=search]")!;
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(search, "get_account");
@@ -412,13 +454,13 @@ describe("subagent pages", () => {
     expect(document.querySelectorAll("dialog input[type=checkbox]")).toHaveLength(1);
     await click("No tools in Hyperliquid");
     expect(document.querySelectorAll("dialog input[type=checkbox]:checked")).toHaveLength(0);
-    expect(document.querySelector("dialog")!.textContent).toContain("4 selected");
+    expect(document.querySelector("dialog")!.textContent).toContain(`${4 + configurationToolNames.length} selected`);
     await click("All tools in Hyperliquid");
-    expect(document.querySelector("dialog")!.textContent).toContain(`${hyperliquidToolNames.length + 4} selected`);
+    expect(document.querySelector("dialog")!.textContent).toContain(`${hyperliquidToolNames.length + 4 + configurationToolNames.length} selected`);
     await click("No tools in Hyperliquid");
     await click("Apply");
     expect(mocks.saveSubagent).not.toHaveBeenCalled();
-    expect(mocks.saveSubagentTools.mock.calls[0]![0].data.tools).toEqual(["list_subagents", "delegate_subagent", "list_subagent_runs", "get_subagent_run"]);
+    expect(mocks.saveSubagentTools.mock.calls[0]![0].data.tools).toEqual([...configurationToolNames, "list_subagents", "delegate_subagent", "list_subagent_runs", "get_subagent_run"]);
   });
   it("keeps failed tool edits open for retry without changing the saved summary", async () => {
     await render();

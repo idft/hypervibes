@@ -16,6 +16,7 @@
   "files": [
     "bin/",
     "dist/",
+    "docs/*.md",
     ".build/server/",
     ".build/client/",
     "static/",

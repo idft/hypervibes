@@ -99,6 +99,7 @@ export async function createRuntime(config: AppConfig, options: AgentServiceOpti
     await agentService.recover();
     // One bridge per supported gateway platform; Telegram bridges the persistent main conversation.
     gateway = new GatewayBridge(db, agentService, config.encryptionKey, telegramConnector, { logger: logger?.child({ component: "gateway" }) });
+    agentService.installTelegramStatus((id) => gateway!.status(id));
     notificationService.installSender((target, text, signal) => gateway!.sendNotification(target, text, signal));
     return {
       db,

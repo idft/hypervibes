@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { NotificationSettings } from "../notifications/contracts.js";
 import { notificationKeys, notificationSettingsQueryOptions } from "../web/notification-queries.js";
@@ -9,6 +9,16 @@ const checkbox = "size-4 cursor-pointer accent-violet-500 disabled:cursor-not-al
 function SettingsForm({ agentId, saved }: { agentId: string; saved: NotificationSettings }) {
   const client = useQueryClient();
   const [draft, setDraft] = useState(saved);
+  const previousSaved = useRef(saved);
+  useEffect(() => {
+    const previous = previousSaved.current;
+    previousSaved.current = saved;
+    setDraft((current) => ({
+      enabled: current.enabled === previous.enabled ? saved.enabled : current.enabled,
+      submissions: current.submissions === previous.submissions ? saved.submissions : current.submissions,
+      fills: current.fills === previous.fills ? saved.fills : current.fills,
+    }));
+  }, [saved]);
   const mutation = useMutation({
     mutationFn: (settings: NotificationSettings) => saveNotificationSettings({ data: { agentId, ...settings } }),
     onSuccess: async (settings) => {

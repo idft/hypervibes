@@ -31,6 +31,11 @@ const stallDiagnostic = setTimeout(() => progress('still running; active resourc
 stallDiagnostic.unref();
 progress('import application');
 const { createApp } = await import(pathToFileURL(join(root, "dist/web/app.js")));
+const { DocumentationService } = await import(pathToFileURL(join(root, "dist/documentation/documentation-service.js")));
+const documentation = new DocumentationService();
+assert.ok((await documentation.list()).documents.some((page) => page.id === "index"));
+assert.match((await documentation.read({ id: "index" })).content, /HyperVibes user guide/);
+await assert.rejects(documentation.read({ id: "../package.json" }));
 let previousSecrets;
 if (process.argv[3] === "fresh") await assert.rejects(access(configPath));
 else previousSecrets = await readFile(configPath, "utf8");
@@ -488,12 +493,14 @@ test("real npm tarball runs with runtime dependencies outside the repository", {
       }
       const contents = archiveMembers(await execute("tar", ["-tzf", tarball], { label: "inspect tarball" }));
       for (const path of contents) {
-        assert.match(path, /^package\/(?:bin\/|dist\/|\.build\/(?:client|server)\/|static\/|scripts\/check-node\.mjs$|package\.json$|README\.md$|LICENSE$)/, path);
+        assert.match(path, /^package\/(?:bin\/|dist\/|docs\/[A-Za-z][A-Za-z0-9_-]*\.md$|\.build\/(?:client|server)\/|static\/|scripts\/check-node\.mjs$|package\.json$|README\.md$|LICENSE$)/, path);
         assert.doesNotMatch(path, /^package\/static\/dist\//, path);
         assert.doesNotMatch(path, /(?:\.env(?:\.|$)|\.sqlite|\.db$|\.test\.|\.map$|\.ts$|memory-review|pi\.md|config\.json$)/, path);
       }
       assert.ok(contents.some((path) => /dist\/db\/migrations\/.+\/migration\.sql$/.test(path)));
       assert.ok(contents.includes("package/.build/server/server.js"));
+      assert.ok(contents.includes("package/docs/index.md"));
+      assert.ok(contents.includes("package/dist/documentation/durable-extension.js"));
       await writeFile(join(installation, "package.json"), JSON.stringify({ private: true }));
       await execute("npm", ["install", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund",
         "--prefer-offline", "--loglevel=http", "--fetch-retries=1", "--fetch-timeout=30000", tarball], {

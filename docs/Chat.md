@@ -35,6 +35,15 @@ does not undo tool actions or exchange orders that have already completed.
 The main conversation can only use its enabled tools. Configure it under
 Sub-Agents. Delegation also depends on the worker's permissions and availability.
 
+The orchestrator can manage this Agent's tools, workers, instructions, models,
+schedules, triggers, and notification preferences through chat. It can also inspect
+Telegram link status and read this guide. Changes apply directly, without a
+confirmation step. Risk settings are read-only; other Agents, credentials, and
+Telegram linking remain outside chat configuration.
+
+Worker configuration changes apply to future assignments. Pausing a worker does
+not stop active runs or cancel orders.
+
 If you enable order tools and trading, a chat request can lead to real orders.
 Use [Settings](Settings.md) for enforced trading limits, not chat instructions alone.
 

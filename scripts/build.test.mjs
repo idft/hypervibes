@@ -5,6 +5,14 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { loadConfig } from "../dist/config.js";
 import { createApp } from "../dist/web/app.js";
+import { DocumentationService } from "../dist/documentation/documentation-service.js";
+
+test("compiled documentation reads the packaged user guide", async () => {
+  const documentation = new DocumentationService();
+  assert.ok((await documentation.list()).documents.some((page) => page.id === "index"));
+  assert.match((await documentation.read({ id: "index" })).content, /HyperVibes user guide/);
+  await assert.rejects(documentation.read({ id: "../package.json" }));
+});
 
 test("compiled application loads migrations, bundled indicators, SSR, and static assets without listening", async () => {
   const directory = await mkdtemp(join(tmpdir(), "hypervibes-build-"));

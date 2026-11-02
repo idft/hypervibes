@@ -12,6 +12,7 @@ import { createRuntime, type AppRuntime } from "../runtime.js";
 import { testConfig } from "../test-config.js";
 import { OrchestratorInsightsDoc, orchestratorInsightsSection } from "./orchestrator-insights.js";
 import type { SubagentInput } from "./subagent-input.js";
+import { configurationToolNames } from "./configuration-contracts.js";
 
 const blocks = (messages: readonly Message[]) => messages.flatMap((message) => {
   const value = message.role === "system" ? message.sections?.[orchestratorInsightsSection] : undefined;
@@ -53,7 +54,7 @@ describe("orchestrator insight injection", () => {
     vi.restoreAllMocks(); rmSync(directory, { recursive: true, force: true });
   });
 
-  it("injects empty or current Agent-wide guidance with no tools, preserving configured instructions", async () => {
+  it("injects empty or current Agent-wide guidance with no optional tools, preserving configured instructions", async () => {
     expect(await harness.snapshot(OrchestratorInsightsDoc, main.id, context)).toBeUndefined();
     faux.setResponses([capture("Empty observed"), capture("Guidance observed")]);
     await send();
@@ -67,12 +68,12 @@ describe("orchestrator insight injection", () => {
     expect(blocks(requests[1]!)[0]).not.toContain("Worker-specific");
     expect(JSON.stringify(requests[1])).toContain("CUSTOM root instructions");
     const resolved = await main.agent(context);
-    expect(resolved.tools).toEqual([]);
+    expect(resolved.tools.map((tool) => tool.name)).toEqual(configurationToolNames);
     expect(resolved.instructions).toBe("CUSTOM root instructions: supervise, do not trade.");
     expect((await runtime.agents.chat("owner", agentId)).messages.map((entry) => entry.text)).toEqual(["Hello", "Empty observed", "Hello", "Guidance observed"]);
   });
 
-  it("provides shared UTC guidance and a current host clock with no selected tools", async () => {
+  it("provides shared UTC guidance and a current host clock with no optional tools", async () => {
     const before = Date.now();
     faux.setResponses([capture("Time observed"), capture("Time refreshed")]);
     await send(); await send();
@@ -86,7 +87,7 @@ describe("orchestrator insight injection", () => {
       expect(timestamp).toBeLessThanOrEqual(Date.now());
       expect(clock).toContain(new Date(timestamp).toISOString());
     }
-    expect((await main.agent(context)).tools).toEqual([]);
+    expect((await main.agent(context)).tools.map((tool) => tool.name)).toEqual(configurationToolNames);
   });
 
   it("reuses identical prompt text, replaces obsolete active blocks, and preserves the historical audit", async () => {
@@ -197,7 +198,7 @@ describe("orchestrator insight injection", () => {
     expect(blocks(requests[0]!)).toEqual(blocks(requests[1]!));
     await send();
     expect(blocks(requests[2]!)[0]).toContain("Recovery next response");
-    expect((await main.agent(context)).tools).toEqual([]);
+    expect((await main.agent(context)).tools.map((tool) => tool.name)).toEqual(configurationToolNames);
   });
 
   it("injects worker-triggered wake-ups without leaking worker-specific insights into the root", async () => {

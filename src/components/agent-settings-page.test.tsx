@@ -298,6 +298,17 @@ describe("Agent settings", () => {
     expect(container.querySelectorAll('section[aria-label="Notifications"]')).toHaveLength(1);
     expect(telegram.textContent).not.toContain("Bridge this Agent");
   });
+  it("shows committed notification settings updates without discarding unfinished checkbox edits", async () => {
+    await act(async () => queryClient.setQueryData(["gateway", initial.agent.id], { hasToken: true, connected: true, botUsername: "my_bot", chatId: 7, chatUsername: "operator" }));
+    const checkboxes = () => [...container.querySelectorAll<HTMLInputElement>('#notifications input[type="checkbox"]')];
+    await act(async () => queryClient.setQueryData(["notification-settings", initial.agent.id], { enabled: true, submissions: false, fills: true }));
+    expect(checkboxes().map((input) => input.checked)).toEqual([true, false, true]);
+    await act(async () => checkboxes()[1]!.click());
+    await act(async () => queryClient.setQueryData(["notification-settings", initial.agent.id], { enabled: true, submissions: false, fills: false }));
+    expect(checkboxes().map((input) => input.checked)).toEqual([true, true, false]);
+    expect(container.querySelector('#notifications button[type="submit"]')?.textContent).toBe("Save Telegram notification settings");
+  });
+
   it.each(["stopping", "stopped"] as const)("hides notification controls for %s agents but keeps Telegram available", async (state) => {
     await act(async () => queryClient.setQueryData(["gateway", initial.agent.id], { hasToken: true, connected: true, botUsername: "my_bot", chatId: 7, chatUsername: "operator" }));
     await act(async () => root.render(<AgentSettingsPage initial={{ ...initial, agent: { ...initial.agent, state } }} />));

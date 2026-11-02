@@ -1,6 +1,6 @@
 import { randomUuid } from "../web/random-uuid.js";
 import { useRouter } from "@tanstack/react-router";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { cacheSubagent, subagentQueryOptions } from "../web/subagent-queries.js";
 import { subagentMutations } from "../web/subagent-mutations.js";
@@ -27,6 +27,13 @@ export function SubagentDetailPage({ agentId, subagentId, choices }: { agentId: 
   const { data: initial, error: refreshError } = useSuspenseQuery(subagentQueryOptions(agentId, subagentId));
   const definition = initial.definition;
   const [form, setForm] = useState<SubagentInput>(initial.definition);
+  const previousDefinition = useRef(definition);
+  useEffect(() => {
+    const previous = previousDefinition.current;
+    previousDefinition.current = definition;
+    // Instructions are the only inline draft. Keep unsaved edits during live updates.
+    setForm((current) => ({ ...definition, instructions: current.instructions === previous.instructions ? definition.instructions : current.instructions }));
+  }, [definition]);
   const [task, setTask] = useState("");
   const mutation = useMutation({
     mutationFn: (operation: () => Promise<void>) => operation(),
@@ -73,9 +80,8 @@ export function SubagentDetailPage({ agentId, subagentId, choices }: { agentId: 
     if (definition.archived) throw new Error("Settings cannot be changed right now. Please retry.");
     await operate(async () => {
       const row = await saveSubagentAssignments({ data: { agentId, id: definition.id, settings } });
-      const { delegatable, persistent, timeoutSeconds } = row;
+      const { delegatable, persistent, timeoutSeconds } = await cacheSubagent(client, agentId, row, ["delegatable", "persistent", "timeoutSeconds", "conversationId"]);
       setForm((current) => ({ ...current, delegatable, persistent, timeoutSeconds }));
-      await cacheSubagent(client, agentId, row);
       toast.success("Assignment settings updated");
     });
   }
@@ -83,8 +89,8 @@ export function SubagentDetailPage({ agentId, subagentId, choices }: { agentId: 
     if (definition.archived) throw new Error("Settings cannot be changed right now. Please retry.");
     await operate(async () => {
       const row = await saveSubagentIdentity({ data: { agentId, id: definition.id, ...identity } });
-      setForm((current) => ({ ...current, name: row.name, description: row.description }));
-      await cacheSubagent(client, agentId, row);
+      const saved = await cacheSubagent(client, agentId, row, ["name", "description"]);
+      setForm((current) => ({ ...current, name: saved.name, description: saved.description }));
       toast.success("Name and description updated");
     });
   }
@@ -92,8 +98,8 @@ export function SubagentDetailPage({ agentId, subagentId, choices }: { agentId: 
     if (definition.archived) throw new Error("Settings cannot be changed right now. Please retry.");
     await operate(async () => {
       const row = await saveSubagentTools({ data: { agentId, id: definition.id, tools } });
-      setForm((current) => ({ ...current, tools: row.tools }));
-      await cacheSubagent(client, agentId, row);
+      const saved = await cacheSubagent(client, agentId, row, ["tools"]);
+      setForm((current) => ({ ...current, tools: saved.tools }));
       toast.success("Tools updated");
     });
   }

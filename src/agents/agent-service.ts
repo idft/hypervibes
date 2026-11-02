@@ -1,4 +1,7 @@
 import { cancelTaskScope } from "./cancel-task-scope.js";
+import { createConfigurationExtension } from "./configuration-extension.js";
+import { createDocumentationExtension } from "../documentation/durable-extension.js";
+import { gatewayStatus, getGateway, type GatewayStatus } from "../gateway/gateway-store.js";
 import type { NotificationService } from "../notifications/notification-service.js";
 import { createNotificationExtension } from "../notifications/durable-extension.js";
 import type { OrderService } from "../hyperliquid/orders/order-service.js";
@@ -165,6 +168,8 @@ export class AgentService {
   readonly execution: ExecutionContextService;
   readonly risk: RiskSettingsService;
   readonly charts: ChartService;
+  private telegramStatus?: (agentId: string) => Promise<GatewayStatus>;
+  installTelegramStatus(read: (agentId: string) => Promise<GatewayStatus>) { this.telegramStatus = read; }
   constructor(private readonly db: ApplicationDatabase, private readonly database: SharedDatabase, private readonly providers: ProviderService, private readonly hyperliquid: HyperliquidService, private readonly orders: OrderService, private readonly notifications: NotificationService, private readonly options: AgentServiceOptions = {}) {
     this.charts = new ChartService(database);
     this.execution = new ExecutionContextService(database, (error) => options.logger?.error(error, "Orchestrator insights snapshot failed"));
@@ -296,7 +301,11 @@ export class AgentService {
       registry.install(assignmentTimeGuidanceExtension);
       const hyperliquid = createHyperliquidExtension(this.hyperliquid, agent.userId, agent.id, this.orders);
       registry.install(hyperliquid);
-      const capabilities = [createNotificationExtension(agent.id, this.notifications, this.execution), createMemoryExtension(agent.id, this.execution, this.database), ...this.research.extensions(agent.id), createIndicatorExtension(agent.id, this.indicators, this.execution, createResearchResponder(this.research.artifacts, agent.id, true)), createChartExtension(agent.id, this.charts, this.execution)];
+      const capabilities = [createDocumentationExtension(), createConfigurationExtension(agent.id, agent.userId, this.database, this.execution, this.subagents, this.notifications, this.risk, {
+        owned: (userId, id) => this.owned(userId, id),
+        telegramStatus: (id) => this.telegramStatus ? this.telegramStatus(id) : getGateway(this.db, id, "telegram").then((row) => gatewayStatus(row)),
+        modelChoices: (userId) => this.providers.choices(userId),
+      }), createNotificationExtension(agent.id, this.notifications, this.execution), createMemoryExtension(agent.id, this.execution, this.database), ...this.research.extensions(agent.id), createIndicatorExtension(agent.id, this.indicators, this.execution, createResearchResponder(this.research.artifacts, agent.id, true)), createChartExtension(agent.id, this.charts, this.execution)];
       for (const extension of capabilities) registry.install(extension);
       const execution = this.subagents.extension(agent.id, hyperliquid, capabilities);
       registry.install(execution.extension);

@@ -3,6 +3,8 @@ import { format } from "timeago.js";
 import { candleIntervals, hyperliquidToolNames, researchToolNames, indicatorReadToolNames, indicatorDevelopToolNames, type AssignmentSettings, type SubagentInput } from "../agents/subagent-input.js";
 import { memoryToolNames } from "../memory/memory-contracts.js";
 import { chartToolNames } from "../charts/contracts.js";
+import { configurationToolNames } from "../agents/configuration-contracts.js";
+import { documentationToolNames } from "../documentation/contracts.js";
 import { ConfigDialog, configButton, configInput } from "./config-dialog.js";
 
 import { SubagentEnabledToggle } from "./subagent-enabled-toggle.js";
@@ -52,29 +54,32 @@ function IdentityDialog({ value, onCancel, onApply }: { value: Identity; onCance
   </ConfigDialog>;
 }
 
-const toolGroups = [
+const toolGroups: { name: string; tools: readonly string[]; mainOnly?: boolean; required?: boolean }[] = [
   { name: "Hyperliquid", tools: hyperliquidToolNames },
   { name: "Research · Code Mode & Artifacts", tools: researchToolNames },
   { name: "Indicators — Read & Calculate", tools: indicatorReadToolNames },
   { name: "Indicators — Develop", tools: indicatorDevelopToolNames },
   { name: "Memories & Insights", tools: memoryToolNames },
-  { name: "Chart workspace · Orchestrator only", tools: chartToolNames },
+  { name: "Chart workspace · Orchestrator only", tools: chartToolNames, mainOnly: true },
+  { name: "Agent configuration · Orchestrator only", tools: configurationToolNames, mainOnly: true, required: true },
+  { name: "HyperVibes · Documentation", tools: documentationToolNames },
   { name: "HyperVibes · Notifications", tools: ["send_notification"] },
   { name: "HyperVibes · Subagents", tools: ["list_subagents", "delegate_subagent", "list_subagent_runs", "get_subagent_run"] },
 ];
 
 export function ToolPicker({ tools, onChange, main = false }: { tools: string[]; onChange: (tools: string[]) => Promise<void>; main?: boolean }) {
   const [open, setOpen] = useState(false);
+  const allowedTools = main ? [...new Set([...tools, ...configurationToolNames])] : tools;
   return <section className="space-y-2">
     <header className="flex items-center justify-between gap-4"><h3 className="font-medium text-white">Tools</h3><button type="button" aria-haspopup="dialog" onClick={() => setOpen(true)} className={configButton}>Edit tools</button></header>
-    <p className="text-sm text-zinc-400">{tools.length ? `${tools.length} ${tools.length === 1 ? "tool" : "tools"} allowed` : "No tools allowed"}</p>
-    {toolGroups.map((group) => {
-      const enabled = group.tools.filter((name) => tools.includes(name));
+    <p className="text-sm text-zinc-400">{allowedTools.length ? `${allowedTools.length} ${allowedTools.length === 1 ? "tool" : "tools"} allowed` : "No tools allowed"}</p>
+    {toolGroups.filter((group) => main || !group.mainOnly).map((group) => {
+      const enabled = group.tools.filter((name) => allowedTools.includes(name));
       if (!enabled.length) return null;
       const summary = `${group.name}: ${enabled.join(", ")}`;
       return <p key={group.name} className="line-clamp-2 break-words text-sm text-zinc-200" title={summary}>{group.name}: <span className="font-mono">{enabled.join(", ")}</span></p>;
     })}
-    {open && <ToolDialog tools={tools} main={main} onCancel={() => setOpen(false)} onApply={async (next) => { await onChange(next); setOpen(false); }} />}
+    {open && <ToolDialog tools={allowedTools} main={main} onCancel={() => setOpen(false)} onApply={async (next) => { await onChange(next); setOpen(false); }} />}
   </section>;
 }
 
@@ -87,11 +92,11 @@ function ToolDialog({ tools, onCancel, onApply, main }: { tools: string[]; onCan
   async function apply() {
     if (inFlight.current) return;
     inFlight.current = true; setSaving(true); setError("");
-    try { await onApply(draft); }
+    try { await onApply(main ? [...new Set([...draft, ...configurationToolNames])] : draft); }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to save tools. Please retry."); }
     finally { inFlight.current = false; setSaving(false); }
   }
-  const groups = toolGroups.filter((group) => main || group.tools !== chartToolNames).map((group) => ({ ...group, visibleTools: group.tools.filter((name) => `${group.name} ${name}`.toLowerCase().includes(search.trim().toLowerCase())) })).filter((group) => group.visibleTools.length);
+  const groups = toolGroups.filter((group) => main || !group.mainOnly).map((group) => ({ ...group, visibleTools: group.tools.filter((name) => `${group.name} ${name}`.toLowerCase().includes(search.trim().toLowerCase())) })).filter((group) => group.visibleTools.length);
   return <ConfigDialog title="Allowed tools" onCancel={() => { if (!inFlight.current) onCancel(); }} onApply={() => { void apply(); }} applyDisabled={saving}>
     <fieldset disabled={saving} className="space-y-4 disabled:opacity-60">
     <label className="block space-y-2 text-sm">Search extensions and tools<input autoFocus type="search" value={search} onChange={(event) => setSearch(event.target.value)} className={configInput} /></label>
@@ -99,12 +104,12 @@ function ToolDialog({ tools, onCancel, onApply, main }: { tools: string[]; onCan
       {groups.map((group) => <fieldset key={group.name} className="space-y-3 rounded-xl border border-zinc-800 p-4"><legend className="px-2 text-sm font-medium text-white"><span className="inline-flex flex-wrap items-center gap-3">
           <span>{group.name}</span>
           <span className="inline-flex items-center gap-2 text-xs font-normal">
-            <button type="button" aria-label={`All tools in ${group.name}`} onClick={() => setDraft((current) => [...new Set([...current, ...group.tools])])} className="cursor-pointer text-zinc-400 hover:text-violet-300 hover:underline">All</button>
+            <button type="button" disabled={group.required} aria-label={`All tools in ${group.name}`} onClick={() => setDraft((current) => [...new Set([...current, ...group.tools])])} className="cursor-pointer text-zinc-400 hover:text-violet-300 hover:underline disabled:cursor-not-allowed disabled:opacity-50">All</button>
             <span aria-hidden="true" className="text-zinc-700">/</span>
-            <button type="button" aria-label={`No tools in ${group.name}`} onClick={() => setDraft((current) => current.filter((tool) => !group.tools.some((name) => name === tool)))} className="cursor-pointer text-zinc-400 hover:text-violet-300 hover:underline">None</button>
+            <button type="button" disabled={group.required} aria-label={`No tools in ${group.name}`} onClick={() => setDraft((current) => current.filter((tool) => !group.tools.some((name) => name === tool)))} className="cursor-pointer text-zinc-400 hover:text-violet-300 hover:underline disabled:cursor-not-allowed disabled:opacity-50">None</button>
           </span>
         </span></legend>
-        <div className="grid gap-3 sm:grid-cols-2">{group.visibleTools.map((name) => <label key={name} className="flex cursor-pointer items-center gap-3 font-mono text-xs"><input type="checkbox" checked={draft.includes(name)} onChange={(event) => setDraft((current) => event.target.checked ? [...current, name] : current.filter((tool) => tool !== name))} className="cursor-pointer" />{name}</label>)}</div>
+        <div className="grid gap-3 sm:grid-cols-2">{group.visibleTools.map((name) => <label key={name} className="flex cursor-pointer items-center gap-3 font-mono text-xs"><input type="checkbox" disabled={group.required} checked={draft.includes(name)} onChange={(event) => setDraft((current) => event.target.checked ? [...current, name] : current.filter((tool) => tool !== name))} className="cursor-pointer disabled:cursor-not-allowed" />{name}</label>)}</div>
       </fieldset>)}
       {!groups.length && <p className="text-sm text-zinc-400">No matching tools.</p>}
     </div>

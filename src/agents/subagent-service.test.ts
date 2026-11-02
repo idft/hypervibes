@@ -16,7 +16,9 @@ import { createRuntime, type AppRuntime } from "../runtime.js";
 import { testConfig } from "../test-config.js";
 import { nextCandleRun, subagentInput, type SubagentInput } from "./subagent-input.js";
 import { subagentTemplates, templateDraft } from "./subagent-templates.js";
-import { MarketSnapshotUpgradeDoc, ChartToolsUpgradeDoc } from "./subagent-service.js";
+import { MarketSnapshotUpgradeDoc, ChartToolsUpgradeDoc, DocumentationToolsUpgradeDoc, NotificationToolsUpgradeDoc } from "./subagent-service.js";
+import { configurationToolNames } from "./configuration-contracts.js";
+import { documentationToolNames } from "../documentation/contracts.js";
 import { defaultWorkerTriggers } from "./worker-triggers.js";
 
 const settings = (patch: Partial<SubagentInput> = {}): SubagentInput => ({ name: "Research", description: "Focused evidence", instructions: "Research the assignment using only available evidence.", provider: "faux", modelId: "faux-1", thinkingLevel: "", tools: [], enabled: true, delegatable: true, persistent: false, schedule: "", delaySeconds: 30, completion: "save", timeoutSeconds: 900, ...patch });
@@ -108,21 +110,26 @@ describe("subagent definitions, execution and scheduling", () => {
     expect(main.tools).toContain("get_market_snapshot");
     // Simulate a pre-upgrade root, with customized tools/instructions.
     await runtime.db.update(hvSubagents).set({ tools: ["list_memories"], instructions: "Preserve my custom instructions." }).where(eq(hvSubagents.id, main.id)).run();
-    await root.commit(async (tx) => { (await tx.doc(MarketSnapshotUpgradeDoc, root.id)).applied = false; (await tx.doc(ChartToolsUpgradeDoc, root.id)).applied = false; }, context);
+    await root.commit(async (tx) => {
+      (await tx.doc(MarketSnapshotUpgradeDoc, root.id)).applied = false;
+      (await tx.doc(ChartToolsUpgradeDoc, root.id)).applied = false;
+      (await tx.doc(DocumentationToolsUpgradeDoc, root.id)).applied = false;
+      (await tx.doc(NotificationToolsUpgradeDoc, root.id)).applied = false;
+    }, context);
     await runtime.close();
     runtime = await createRuntime(config(), options());
     const upgraded = (await runtime.agents.subagents.list("owner", agent.id)).find((row) => row.id === main.id)!;
-    expect(upgraded.tools).toEqual(["list_memories", "get_market_snapshot", "get_chart_snapshot", "get_chart_layout", "edit_chart_annotations"]);
+    expect(upgraded.tools).toEqual(["list_memories", ...configurationToolNames, "get_market_snapshot", "get_chart_snapshot", "get_chart_layout", "edit_chart_annotations", ...documentationToolNames, "send_notification"]);
     expect(upgraded.instructions).toBe("Preserve my custom instructions.");
     expect(upgraded.modelId).toBe(main.modelId);
     const restored = await (await opened.mock.results[1]!.value as Harness).root(context);
     expect((await restored.agent(context)).tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(upgraded.tools));
     expect(faux.state.callCount).toBe(0);
-    // A later deliberate deselection must survive another startup.
+    // A later deliberate deselection survives, except mandatory management tools.
     await runtime.db.update(hvSubagents).set({ tools: ["list_memories"] }).where(eq(hvSubagents.id, main.id)).run();
     await runtime.close();
     runtime = await createRuntime(config(), options());
-    expect((await runtime.agents.subagents.list("owner", agent.id)).find((row) => row.id === main.id)!.tools).toEqual(["list_memories"]);
+    expect((await runtime.agents.subagents.list("owner", agent.id)).find((row) => row.id === main.id)!.tools).toEqual(["list_memories", ...configurationToolNames]);
   });
 
   it("lists enabled, paused and non-delegatable workers without exposing archived workers or other agents", async () => {
@@ -267,7 +274,7 @@ describe("subagent definitions, execution and scheduling", () => {
     await runtime.agents.subagents.update("owner", agent.id, main.id, { ...main, instructions: "Custom coordinator", tools: ["get_account"] });
     await runtime.close(); runtime = await createRuntime(config(), options());
     const restored = await detail(agent.id, main.id);
-    expect(restored.definition.instructions).toBe("Custom coordinator"); expect(restored.definition.tools).toEqual(["get_account"]);
+    expect(restored.definition.instructions).toBe("Custom coordinator"); expect(restored.definition.tools).toEqual(["get_account", ...configurationToolNames]);
     expect((await detail(agent.id, worker.id)).runs).toEqual([]); expect(faux.state.callCount).toBe(0);
   });
 
@@ -317,8 +324,8 @@ describe("subagent definitions, execution and scheduling", () => {
     const definition = (await runtime.agents.subagents.list("owner", agent.id)).find((row) => row.kind === "orchestrator")!;
     await runtime.agents.subagents.updateTools("owner", agent.id, definition.id, ["indicator_get"]);
     const rootAgent = await main.agent(context);
-    expect(rootAgent.extensions.map((extension) => extension.name)).toEqual(["time-guidance", "hyperliquid", "subagents", "indicators", "orchestrator-insights"]);
-    expect(rootAgent.tools.map((tool) => tool.name)).toEqual(["indicator_get"]);
+    expect(rootAgent.extensions.map((extension) => extension.name)).toEqual(["time-guidance", "hyperliquid", "subagents", "agent-configuration", "indicators", "orchestrator-insights"]);
+    expect(rootAgent.tools.map((tool) => tool.name)).toEqual([...configurationToolNames, "indicator_get"]);
   });
 
   it("rejects cross-user and cross-Agent access, unknown tools, recursive delegation and malformed schedules", async () => {

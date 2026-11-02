@@ -73,6 +73,18 @@ describe("Agent notification inbox and Telegram outbox", () => {
     await expect(service.list("agent", 0)).rejects.toThrow("page");
   });
 
+  it("atomically patches preferences only for an authorized same-Agent orchestrator", async () => {
+    await db.run("UPDATE hv_subagents SET id='main:agent',tools=? WHERE id='root'", JSON.stringify(["send_notification", "update_agent_configuration"]));
+    const root = { ...actor, subagentId: "main:agent" };
+    await service.saveSettings("agent", { enabled: true, submissions: false, fills: true });
+    expect(await service.patchFromTool(root, { fills: false }, execution)).toEqual({ before: { enabled: true, submissions: false, fills: true }, after: { enabled: true, submissions: false, fills: false } });
+    await expect(service.patchFromTool({ ...root, runId: "worker-run" }, { enabled: false }, execution)).rejects.toMatchObject({ status: 403 });
+    await expect(service.patchFromTool({ ...root, agentId: "other" }, { enabled: false }, execution)).rejects.toMatchObject({ status: 403 });
+    await db.run("UPDATE hv_subagents SET tools='[]' WHERE id='main:agent'");
+    await expect(service.patchFromTool(root, { enabled: false }, execution)).rejects.toMatchObject({ status: 403 });
+    expect(await service.getSettings("agent")).toEqual({ enabled: true, submissions: false, fills: false });
+  });
+
   it("keeps unlinked notifications web-only and never sends an old backlog when linked", async () => {
     const sender = vi.fn(async () => 42); service.installSender(sender);
     const result = await service.send("agent", "event", message);

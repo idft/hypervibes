@@ -52,16 +52,33 @@ export class NotificationService {
     if (!value || typeof value !== "object") throw new AgentError("Invalid notification settings.");
     const settings = value as NotificationSettings;
     if ([settings.enabled, settings.submissions, settings.fills].some((v) => typeof v !== "boolean")) throw new AgentError("Invalid notification settings.");
-    await this.db.transaction(async (tx) => {
-      const previous = await this.settingsTx(tx, agentId), now = this.clock();
-      await tx.run(`UPDATE hv_notification_settings SET enabled=?,submissions=?,fills=?,enabled_since=?,fills_since=? WHERE agent_id=?`,
-        Number(settings.enabled), Number(settings.submissions), Number(settings.fills),
-        settings.enabled && !previous.enabled ? now : previous.enabled_since, settings.fills && !previous.fills ? now : previous.fills_since, agentId);
-      await tx.run(`UPDATE hv_notifications SET delivery='suppressed',error='Notifications disabled before delivery' WHERE agent_id=? AND delivery='pending'
-        AND (?=0 OR (category='submission' AND ?=0) OR (category='fill' AND ?=0))`, agentId, Number(settings.enabled), Number(settings.submissions), Number(settings.fills));
-    });
+    await this.db.transaction(async (tx) => this.saveSettingsTx(tx, agentId, settings, await this.settingsTx(tx, agentId)));
     this.changed(agentId);
     return { enabled: settings.enabled, submissions: settings.submissions, fills: settings.fills };
+  }
+  private async saveSettingsTx(tx: SqliteExecutor, agentId: string, settings: NotificationSettings, previous: SettingsRow) {
+    const now = this.clock();
+    await tx.run(`UPDATE hv_notification_settings SET enabled=?,submissions=?,fills=?,enabled_since=?,fills_since=? WHERE agent_id=?`,
+      Number(settings.enabled), Number(settings.submissions), Number(settings.fills),
+      settings.enabled && !previous.enabled ? now : previous.enabled_since, settings.fills && !previous.fills ? now : previous.fills_since, agentId);
+    await tx.run(`UPDATE hv_notifications SET delivery='suppressed',error='Notifications disabled before delivery' WHERE agent_id=? AND delivery='pending'
+      AND (?=0 OR (category='submission' AND ?=0) OR (category='fill' AND ?=0))`, agentId, Number(settings.enabled), Number(settings.submissions), Number(settings.fills));
+  }
+  /** Atomic partial edit. Tool identity cannot select another Agent or change credentials. */
+  async patchFromTool(actor: MemoryActor, patch: Partial<NotificationSettings>, execution: Pick<ExecutionContextService, "authorize">): Promise<{ before: NotificationSettings; after: NotificationSettings }> {
+    if (actor.runId !== null || actor.subagentId !== `main:${actor.agentId}` || actor.conversationId === null || actor.toolTaskId === null) throw new AgentError("Only the orchestrator can change notification settings", 403);
+    if (Object.entries(patch).some(([key, value]) => !["enabled", "submissions", "fills"].includes(key) || typeof value !== "boolean")) throw new AgentError("Invalid notification settings.");
+    const result = await this.db.transaction(async (tx) => {
+      await assertActiveActor(tx, actor);
+      await execution.authorize(tx, actor, "update_agent_configuration");
+      const previous = await this.settingsTx(tx, actor.agentId);
+      const before = { enabled: Boolean(previous.enabled), submissions: Boolean(previous.submissions), fills: Boolean(previous.fills) };
+      const after = { ...before, ...patch };
+      await this.saveSettingsTx(tx, actor.agentId, after, previous);
+      return { before, after };
+    });
+    this.changed(actor.agentId);
+    return result;
   }
   private async queueTx(tx: SqliteExecutor, agentId: string, eventKey: string, category: NotificationCategory, value: NotificationInput, provenance: NotificationProvenance): Promise<NotificationResult> {
     const existing = await tx.get<{ id: string }>("SELECT id FROM hv_notifications WHERE agent_id=? AND event_key=?", agentId, eventKey);
