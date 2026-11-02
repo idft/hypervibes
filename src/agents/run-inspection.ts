@@ -1,5 +1,5 @@
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { ConversationId, EntryId, Harness } from "@earendil-works/pi-durable";
 import type { SharedDatabase } from "../db/shared-database.js";
 import type { SubagentRun } from "../db/subagent-schema.js";

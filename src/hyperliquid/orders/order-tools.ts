@@ -1,4 +1,4 @@
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { defineTool } from "@earendil-works/pi-durable";
 import type { JsonValue } from "@earendil-works/chord";
 import { OrderInputSchema, OrderSize, OrderPrice, Decimal, CancelAllSchema, CancelSchema, GetResultSchema, GetSchema, ListResultSchema, ListSchema, OperationSchema, RequestId, SubmitSchema, type CancelInput, type SubmitInput } from "./order-contracts.js";

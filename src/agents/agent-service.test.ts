@@ -499,7 +499,7 @@ describe("per-Agent durable execution", () => {
     runtime = await createRuntime(config(), options());
     expect(faux.state.callCount).toBe(0);
     runtime.start();
-    await vi.waitFor(async () => expect((await runtime.agents.chat("owner", agent.id)).messages.some((entry) => entry.text === "Recovered after process kill")).toBe(true));
+    await vi.waitFor(async () => expect((await runtime.agents.chat("owner", agent.id)).messages.some((entry) => entry.text === "Recovered after process kill")).toBe(true), { timeout: 10_000 });
     expect((await runtime.agents.owned("owner", agent.id)).conversationId).toBe(agent.conversationId);
   }, 20000); // Child startup/recovery must outlive its bounded 15s subprocess deadline.
 

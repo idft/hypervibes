@@ -41,17 +41,19 @@ function ChatMessage({ entry, agentId }: { entry: ChatEntry; agentId: string }) 
 
 function ResetContextDialog({ onCancel, onConfirm, disabled }: { onCancel: () => void; onConfirm: () => void; disabled: boolean }) {
   const dialog = useRef<HTMLDialogElement>(null);
+  const cancelButton = useRef<HTMLButtonElement>(null);
   const titleId = useId();
   useEffect(() => {
     const element = dialog.current!;
     element.showModal();
+    cancelButton.current?.focus();
     return () => element.close();
   }, []);
   return <dialog ref={dialog} aria-labelledby={titleId} aria-describedby={`${titleId}-description`} onCancel={(event) => { event.preventDefault(); onCancel(); }} className="m-auto w-[calc(100%_-_2rem)] max-w-md rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6 text-zinc-100 shadow-2xl backdrop:bg-black/70 backdrop:backdrop-blur-sm">
     <h3 id={titleId} className="text-lg font-semibold text-white">Reset context?</h3>
     <p id={`${titleId}-description`} className="mt-2 text-sm leading-6 text-zinc-400">The model will start fresh. Earlier messages remain available. Accounts, orders, and agent configuration are unchanged.</p>
     <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-      <button type="button" autoFocus onClick={onCancel} className="cursor-pointer rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Cancel</button>
+      <button type="button" ref={cancelButton} onClick={onCancel} className="cursor-pointer rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Cancel</button>
       <button type="button" disabled={disabled} onClick={onConfirm} className="cursor-pointer rounded-full bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50">Reset context</button>
     </div>
   </dialog>;

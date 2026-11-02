@@ -1,4 +1,4 @@
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { configure, defineDocFamily, defineExtension, defineTask, defineTool, section, type AgentChange, type ConversationId, type ContextEdit, type Extension, type TaskId } from "@earendil-works/pi-durable";
 import type { ExecutionContextService } from "./execution-context.js";
 import type { MemoryActor } from "../memory/operations.js";

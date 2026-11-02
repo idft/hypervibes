@@ -1,4 +1,4 @@
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 
 const nonnegativeInteger = Type.Integer({ minimum: 0 });
 const nullableInteger = Type.Union([nonnegativeInteger, Type.Null()]);

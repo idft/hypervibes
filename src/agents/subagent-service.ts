@@ -791,9 +791,9 @@ export class SubagentService {
   }
   /** Outside the admission lock: abort APIs can join invocations waiting for that lock. */
   private async recoverParkedRuns(agentId: string, binding: Binding, markOnly = false) {
-    const attached = await binding.harness.taskGraph(context);
+    const attached = await binding.harness.watchTaskGraph(context);
     const graph = attached.value;
-    attached.dispose();
+    await attached.stop();
     const liveRunners = new Map<string, number>();
     for (const node of Object.values(graph.tasks)) {
       if (node.kind !== "hv.subagent-runner") continue;
@@ -823,7 +823,8 @@ export class SubagentService {
           for (const id of node.conversations) if (!conversations.has(id)) { conversations.add(id); changed = true; }
         }
       }
-      if (!recovery.pending && !Object.values(graph.tasks).some((node) => ids.has(node.id) && node.blocked === "restart_limit")) continue;
+      // Pi Durable 1.5 settles restart-limited tasks. Only finish legacy cleanup.
+      if (!recovery.pending) continue;
       await binding.main.commit(async (tx) => { const doc = await tx.doc(ParkedRunRecovery, binding.main.id, run.id, null); doc.pending = true; doc.conversationId = workerConversation; }, context);
       // Preserve the ID and completed results. Finish first so the runner's abort
       // handler cannot replace the failure with a generic cancellation result.

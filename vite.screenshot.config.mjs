@@ -13,7 +13,7 @@ const boundaryNames = new Set(["agents", "subagents", "indicators", "auth-client
 const browserWebModules = new Set([
   "app.css", "agent-queries.ts", "subagent-queries.ts", "subagent-mutations.ts", "indicator-queries.ts", "random-uuid.ts", "risk-queries.ts",
 ]);
-const browserHyperliquidModules = new Set(["decimal.ts", "journal-decimal.ts", "currency-logo.ts"]);
+const browserHyperliquidModules = new Set(["decimal.ts", "journal-decimal.ts", "currency-logo.ts", "dashboard-equity.ts"]);
 
 function sourcePath(specifier, importer) {
   const clean = specifier.split(/[?#]/, 1)[0];

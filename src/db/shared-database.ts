@@ -16,6 +16,9 @@ class Executor implements SqliteExecutor {
     this.connection.exec(sql);
   }
   async run(sql: string, ...params: SqliteValue[]) { this.statement(sql).run(...params); }
+  async runCounted(sql: string, ...params: SqliteValue[]) {
+    return Number(this.statement(sql).run(...params).changes);
+  }
   async get<T extends object>(sql: string, ...params: SqliteValue[]) {
     return this.statement(sql).get(...params) as T | undefined;
   }
@@ -60,6 +63,7 @@ export class SharedDatabase implements SqliteDatabase {
   }
   exec(sql: string) { return this.enqueue(() => this.executor.exec(sql)); }
   run(sql: string, ...params: SqliteValue[]) { return this.enqueue(() => this.executor.run(sql, ...params)); }
+  runCounted(sql: string, ...params: SqliteValue[]) { return this.enqueue(() => this.executor.runCounted(sql, ...params)); }
   get<T extends object>(sql: string, ...params: SqliteValue[]) { return this.enqueue(() => this.executor.get<T>(sql, ...params)); }
   all<T extends object>(sql: string, ...params: SqliteValue[]) { return this.enqueue(() => this.executor.all<T>(sql, ...params)); }
   query(sql: string, params: SQLInputValue[], method: Method) {
@@ -92,7 +96,8 @@ export class SharedDatabase implements SqliteDatabase {
   /** Each harness borrows the facade; only the application owns the connection. */
   borrow(): SqliteDatabase {
     return {
-      exec: this.exec.bind(this), run: this.run.bind(this), get: this.get.bind(this), all: this.all.bind(this),
+      exec: this.exec.bind(this), run: this.run.bind(this), runCounted: this.runCounted.bind(this),
+      get: this.get.bind(this), all: this.all.bind(this),
       transaction: this.transaction.bind(this),
       // Storage close drains already-admitted SQL without closing other owners.
       close: () => this.enqueue(async () => {}),

@@ -1,4 +1,4 @@
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { InfoClient, type HttpTransport } from "@nktkas/hyperliquid";
 import { HyperliquidError } from "./errors.js";
 import { amount } from "./journal-decimal.js";

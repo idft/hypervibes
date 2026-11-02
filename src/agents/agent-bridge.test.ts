@@ -128,12 +128,29 @@ describe("agent bridge gateway access", () => {
     const agent = await createAgent();
     runtime.start();
     const bridge = await runtime.agents.bridge(agent.id);
-    // The inbox limit (20) is enforced by submission serialization; flooding past it must surface the public error.
-    let full = false;
-    for (let index = 0; index < 25 && !full; index++) {
-      try { await bridge.submit(`message ${index}`, randomUUID()); }
-      catch (error) { full = error instanceof Error && error.message.includes("queue is full"); }
+    // Hold the active turn so the inbox cannot drain during admission.
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => { release = resolve; });
+    faux.setResponses([async () => {
+      await hold;
+      return fauxAssistantMessage("interrupted");
+    }]);
+    try {
+      await bridge.submit("active", randomUUID());
+      await vi.waitFor(() => expect(faux.state.callCount).toBe(1));
+      // The inbox limit (20) is enforced by submission serialization.
+      let full = false;
+      for (let index = 0; index < 25 && !full; index++) {
+        try { await bridge.submit(`message ${index}`, randomUUID()); }
+        catch (error) {
+          if (!(error instanceof Error) || !error.message.includes("queue is full")) throw error;
+          full = true;
+        }
+      }
+      expect(full).toBe(true);
+    } finally {
+      release();
+      await bridge.stop();
     }
-    expect(full).toBe(true);
   });
 });

@@ -12,6 +12,7 @@ export {
   unavailable as getRiskSettings,
   unavailable as getTradingAccountChoices,
   unavailable as closeAgentPosition,
+  unavailable as cancelAgentOrder,
   unavailable as sendAgentMessage,
   unavailable as setAgentEnabled,
   unavailable as listSubagents,

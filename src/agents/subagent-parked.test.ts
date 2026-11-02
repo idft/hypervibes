@@ -52,19 +52,18 @@ function holdResponse() {
     return fauxAssistantMessage("Interrupted");
   }]);
 }
-// Inject only the public graph's parking diagnostic. Cancellation, scope traversal,
-// task joins and database writes use the real runtime and disposable SQLite file.
-function park(predicate: (node: Awaited<ReturnType<Harness["taskGraph"]>>["value"]["tasks"][string]) => boolean) {
-  const original = harness.taskGraph.bind(harness);
-  return vi.spyOn(harness, "taskGraph").mockImplementation(async function (ctx) {
-    const attached = await original(ctx);
-    return { ...attached, value: { tasks: Object.fromEntries(Object.entries(attached.value.tasks).map(([key, node]) => [key, predicate(node) ? { ...node, blocked: "restart_limit" as const } : node])) }, dispose: () => attached.dispose() };
-  });
+// Emulate a cleanup marker written by a previous application version.
+async function markLegacyRecovery(runId: string, conversationId: number | null) {
+  await main.commit(async (tx) => {
+    const doc = await tx.doc(ParkedRunRecovery, main.id, runId, null);
+    doc.pending = true;
+    doc.conversationId = conversationId;
+  }, context);
 }
 
-it.each(["runner", "descendant", "persistent"] as const)("stops a parked %s scope and retains the run identity", async (kind) => {
-  const { agent, worker } = await setup(kind === "persistent");
-  if (kind === "persistent") {
+it.each([false, true])("finishes legacy cleanup for persistent=%s and retains the run identity", async (persistent) => {
+  const { agent, worker } = await setup(persistent);
+  if (persistent) {
     faux.setResponses([fauxAssistantMessage("First assignment")]);
     const first = await runtime.agents.subagents.run("owner", agent.id, worker.id, "First", randomUUID());
     await vi.waitFor(async () => expect((await runtime.agents.subagents.internalRun(agent.id, first.id)).reportedAt).not.toBeNull());
@@ -73,16 +72,15 @@ it.each(["runner", "descendant", "persistent"] as const)("stops a parked %s scop
   const run = await runtime.agents.subagents.run("owner", agent.id, worker.id, "Do not replay", randomUUID());
   await vi.waitFor(async () => expect((await runtime.agents.subagents.internalRun(agent.id, run.id)).status).toBe("running"));
   const before = await runtime.agents.subagents.internalRun(agent.id, run.id);
-  const graphSpy = park((node) => kind === "runner" ? node.id === before.taskId : node.conversationId === before.conversationId);
+  await markLegacyRecovery(run.id, before.conversationId);
   await runtime.agents.subagents.tick();
   const after = await runtime.agents.subagents.internalRun(agent.id, run.id);
   expect(after).toMatchObject({ status: "failed", taskId: before.taskId, conversationId: before.conversationId, task: "Do not replay" });
   expect(after.result).toContain("Automatic recovery stopped after repeated interruptions");
   expect(after.result).toContain("Existing exchange orders were not cancelled");
   expect(after.reportedAt).not.toBeNull();
-  graphSpy.mockRestore();
   await runtime.agents.subagents.tick();
-  expect((await runtime.agents.subagents.detail("owner", agent.id, worker.id)).runs).toHaveLength(kind === "persistent" ? 2 : 1);
+  expect((await runtime.agents.subagents.detail("owner", agent.id, worker.id)).runs).toHaveLength(persistent ? 2 : 1);
   expect((await runtime.agents.subagents.internalRun(agent.id, run.id)).result).toBe(after.result);
 });
 
@@ -91,20 +89,19 @@ it("continues cancellation after an interrupted abort without reporting or repla
   const run = await runtime.agents.subagents.run("owner", agent.id, worker.id, "One assignment", randomUUID());
   await vi.waitFor(async () => expect((await runtime.agents.subagents.internalRun(agent.id, run.id)).status).toBe("running"));
   const taskId = (await runtime.agents.subagents.internalRun(agent.id, run.id)).taskId;
-  const graphSpy = park((node) => node.id === taskId);
+  await markLegacyRecovery(run.id, (await runtime.agents.subagents.internalRun(agent.id, run.id)).conversationId);
   const original = harness.abortTask.bind(harness);
   const abort = vi.spyOn(harness, "abortTask").mockRejectedValueOnce(new Error("Interrupted cancellation")).mockImplementation((...args) => original(...args));
   await runtime.agents.subagents.tick();
   expect((await runtime.agents.subagents.internalRun(agent.id, run.id)).status).toBe("failed");
   await expect(runtime.agents.subagents.run("owner", agent.id, worker.id, "Unsafe overlap", randomUUID())).rejects.toMatchObject({ status: 409 });
-  graphSpy.mockRestore();
   await runtime.agents.subagents.tick();
   expect(abort.mock.calls.length).toBeGreaterThan(1);
   expect((await runtime.agents.subagents.internalRun(agent.id, run.id)).reportedAt).not.toBeNull();
   expect((await runtime.agents.subagents.internalRun(agent.id, run.id)).taskId).toBe(taskId);
 });
 
-it("preserves a completed result when its report task parks", async () => {
+it("preserves a completed result during legacy report cleanup", async () => {
   const { agent, worker } = await setup();
   faux.setResponses([fauxAssistantMessage("Original completed evidence")]);
   const run = await runtime.agents.subagents.run("owner", agent.id, worker.id, "Assignment", randomUUID());
@@ -119,7 +116,7 @@ it("preserves a completed result when its report task parks", async () => {
   await runtime.db.update(hvSubagentRuns).set({ taskId }).where(eq(hvSubagentRuns.id, run.id)).run();
   harness.resume();
   await vi.waitFor(() => expect(delivery).toHaveBeenCalledTimes(1));
-  park((node) => node.id === taskId);
+  await markLegacyRecovery(run.id, null);
   vi.spyOn(runtime.agents.subagents, "reported").mockRejectedValueOnce(new Error("Interrupted after cleanup marker cleared"));
   await runtime.agents.subagents.tick();
   const after = await runtime.agents.subagents.internalRun(agent.id, run.id);
@@ -166,8 +163,7 @@ it.each(["error", "timeout"] as const)("isolates recovery %s without normal repo
   const run = await runtime.agents.subagents.run("owner", first.agent.id, first.worker.id, "Parked", randomUUID());
   await vi.waitFor(async () => expect((await runtime.agents.subagents.internalRun(first.agent.id, run.id)).status).toBe("running"));
   const firstHarness = harness;
-  const taskId = (await runtime.agents.subagents.internalRun(first.agent.id, run.id)).taskId;
-  park((node) => node.id === taskId);
+  await markLegacyRecovery(run.id, (await runtime.agents.subagents.internalRun(first.agent.id, run.id)).conversationId);
   if (failure === "timeout") {
     const timeout = AbortSignal.timeout.bind(AbortSignal);
     vi.spyOn(AbortSignal, "timeout").mockImplementation(() => timeout(5));

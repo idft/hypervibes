@@ -1,7 +1,7 @@
 /** Browser-safe indicator contracts. Analytical numbers are never order authority. */
 export interface IndicatorEngineInfo { readonly name: "pinets"; readonly version: string }
 /** The pin this build was developed and tested against. Startup derives the recorded engine version from the installed package and warns (never fails) on drift. */
-export const indicatorEngine: IndicatorEngineInfo = { name: "pinets", version: "0.12.1" };
+export const indicatorEngine: IndicatorEngineInfo = { name: "pinets", version: "0.13.1" };
 export const indicatorWrapperVersion = 1;
 export const indicatorLimits = {
   sourceBytes: 64 * 1024, inputs: 32, numericOutputs: 32, markerOutputs: 32,

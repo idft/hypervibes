@@ -1,4 +1,4 @@
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { defineExtension, defineTool, section } from "@earendil-works/pi-durable";
 import type { ExecutionContextService } from "../agents/execution-context.js";
 import type { ResearchResponder } from "../research/tool-response.js";

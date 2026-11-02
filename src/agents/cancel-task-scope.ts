@@ -7,9 +7,9 @@ export async function cancelTaskScope(harness: Harness, taskIds: readonly number
   const conversations = new Set(conversationIds);
   while (true) {
     context.abortSignal?.throwIfAborted();
-    const attached = await harness.taskGraph(context);
+    const attached = await harness.watchTaskGraph(context);
     const nodes = Object.values(attached.value.tasks);
-    attached.dispose();
+    await attached.stop();
     // A terminal owner can disappear from the live graph while background work survives.
     // Follow public records rather than assuming that every ancestor is still live.
     const scoped = await harness.commit(async (tx) => {

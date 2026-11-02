@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { validateToolArguments, type JsonObject, type TSchema } from "@earendil-works/pi-ai";
+import { validateToolArguments, type JsonObject } from "@earendil-works/pi-ai";
+import type { TSchema } from "typebox";
 import { DecisionInputSchema, MemoryListInputSchema, ResearchInputSchema, ReviewInputSchema, TradingContextInputSchema } from "./tool-schemas.js";
 import { canonical } from "../canonical.js";
 import { insightMutation, insightScope, renderInsightSections } from "./insight-contracts.js";

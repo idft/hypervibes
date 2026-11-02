@@ -1,4 +1,4 @@
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { SharedDatabase } from "../db/shared-database.js";
 import { AgentError } from "../agents/agent-input.js";
 import { attributeFills } from "./decision-audit.js";

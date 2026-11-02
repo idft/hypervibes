@@ -41,7 +41,7 @@ await root.commit(tx => tx.createTask(task, null, { ownership: { kind: 'conversa
 harness.resume();
 `;
 
-it("settles a genuinely restart-parked task through abort without replay", async () => {
+it("settles a restart-limited task as faulted without replay", async () => {
   const directory = await mkdtemp(join(tmpdir(), "hv-parked-cancellation-"));
   const path = join(directory, "tasks.sqlite");
   const child = spawn(process.execPath, ["--input-type=module", "--eval", childSource], {
@@ -83,20 +83,13 @@ it("settles a genuinely restart-parked task through abort without replay", async
     harness = await Harness.open(await SqliteStorage.open(database), {
       models: createModels(), registry, settings: { restartLimit: 1 },
     }, context);
-    const parked = await harness.inspect(context);
-    expect(parked.scheduling).toBe("paused");
-    expect(parked.tasks.find((task) => task.record.id === id)?.state).toMatchObject({ kind: "blocked", reason: "restart_limit" });
-    expect(await harness.abortTask(id, context)).toBe("marked");
-    expect((await harness.getTask(id, context))?.abortRequested).toBe(true);
-    expect(abort).not.toHaveBeenCalled();
     expect((await harness.inspect(context)).scheduling).toBe("paused");
-
-    // waitForTask resumes scheduling; abortTask alone only marks while paused.
+    expect(replay).not.toHaveBeenCalled();
     const cancellation = withAbortSignal(AbortSignal.timeout(10_000), context);
     const settled = await awaitWithContext(harness.waitForTask(id, cancellation), cancellation);
-    expect(settled.state).toMatchObject({ status: "terminal", outcome: { status: "aborted" } });
+    expect(settled.state).toMatchObject({ status: "terminal", outcome: { status: "faulted" } });
     expect(replay).not.toHaveBeenCalled();
-    expect(abort).toHaveBeenCalledTimes(1);
+    expect(abort).not.toHaveBeenCalled();
   } finally {
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     await exited;

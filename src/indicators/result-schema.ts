@@ -1,4 +1,5 @@
-import { Type, validateToolArguments, type JsonObject } from "@earendil-works/pi-ai";
+import { validateToolArguments, type JsonObject } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { indicatorLimits, type IndicatorLimits, type NormalizedIndicator } from "./contracts.js";
 import { resolveInputs } from "./validation.js";
 import { ArtifactMetaSchema } from "../research/contracts.js";

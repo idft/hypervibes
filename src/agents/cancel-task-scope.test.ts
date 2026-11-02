@@ -39,9 +39,9 @@ it("rescans late background work through terminal owners without stopping unrela
     const unrelated = await root.commit((tx) => tx.createTask(leaf, null, { ownership: { kind: "conversation" }, background: true }), context);
     harness.resume();
     await awaitWithContext(started, bounded);
-    const taskGraph = harness.taskGraph.bind(harness);
-    vi.spyOn(harness, "taskGraph").mockImplementationOnce(async (ctx) => {
-      const graph = await taskGraph(ctx);
+    const watchTaskGraph = harness.watchTaskGraph.bind(harness);
+    vi.spyOn(harness, "watchTaskGraph").mockImplementationOnce(async (ctx) => {
+      const graph = await watchTaskGraph(ctx);
       const snapshot = graph.value;
       expect(Object.keys(snapshot.tasks)).toHaveLength(2);
       // Create a background descendant after the cancellation snapshot, then let its owner settle.
@@ -49,7 +49,7 @@ it("rescans late background work through terminal owners without stopping unrela
       await harness.waitForTask(target, bounded);
       return new Proxy(graph, { get(state, key) {
         if (key === "value") return snapshot;
-        if (key === "dispose") return () => graph.dispose();
+        if (key === "stop") return () => graph.stop();
         return Reflect.get(state, key, state) as unknown;
       } });
     });

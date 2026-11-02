@@ -21,9 +21,10 @@ minimumReleaseAgeExclude:
   - "@better-auth/telemetry@1.7.10"
   - better-auth@1.7.10
   - auth@1.7.10
-  - "@earendil-works/chord@1.3.0"
-  - "@earendil-works/pi-ai@1.3.0"
-  - "@earendil-works/pi-codemode@1.3.0"
-  - "@earendil-works/pi-durable@1.3.0"
-  - "@earendil-works/pi-telemetry@1.3.0"
+  - "@earendil-works/chord@1.3.0 || 1.5.0"
+  - "@earendil-works/pi-ai@1.3.0 || 1.5.0"
+  - "@earendil-works/pi-codemode@1.3.0 || 1.5.0"
+  - "@earendil-works/pi-durable@1.3.0 || 1.5.0"
+  - "@earendil-works/pi-telemetry@1.3.0 || 1.5.0"
   - pinets@0.12.1
+  - "@earendil-works/pi-schema@1.5.0"

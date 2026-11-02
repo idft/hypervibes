@@ -1,5 +1,5 @@
 import { withAbortSignal } from "@earendil-works/chord/context";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { CodemodeSandbox, parseCodemodeSource, type CodemodeRunOptions } from "@earendil-works/pi-codemode";
 import { createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
 import { defineExtension, defineTool, section } from "@earendil-works/pi-durable";

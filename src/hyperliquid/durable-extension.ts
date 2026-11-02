@@ -1,4 +1,4 @@
-import { Type, type Static } from "@earendil-works/pi-ai";
+import { Type, type Static } from "typebox";
 import { createOrderTools, toolResult } from "./orders/order-tools.js";
 import type { OrderService } from "./orders/order-service.js";
 import type { HyperliquidService } from "./service.js";

@@ -313,6 +313,8 @@ test("pre-resolution boundaries replace JS and TS imports before runtime code ca
   }
   assert.equal(plugin.resolveId("../web/agents.js?test", importer), resolve(repository, "src/screenshot/screenshot-boundaries.ts"));
   assert.equal(plugin.resolveId("../hyperliquid/decimal.js", importer), null);
+  assert.equal(plugin.resolveId("../hyperliquid/dashboard-equity.js", importer), null);
+  assert.throws(() => plugin.resolveId("../hyperliquid/agent-dashboard.js", importer), /backend-only/);
   assert.equal(plugin.resolveId("../web/random-uuid.js", importer), null);
   assert.equal(plugin.resolveId("../web/risk-queries.js", importer), null);
   for (const specifier of ["node:sqlite", "fs", "node:http", "@tanstack/react-start", "@earendil-works/pi-durable", "@nktkas/hyperliquid", "better-auth/react", "../runtime.js", "../main.js", "../db/database.js", "../web/app.js", "../hyperliquid/service.js", "../agents/agent-service.js"]) {

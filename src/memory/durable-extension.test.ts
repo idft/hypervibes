@@ -2,7 +2,7 @@ import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { createRegistry, defineExtension, defineTool, Harness, MemoryStorage, type NestedToolExecutionResult } from "@earendil-works/pi-durable";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import type { ExecutionContextService } from "../agents/execution-context.js";
 import type { SharedDatabase } from "../db/shared-database.js";

@@ -81,7 +81,7 @@ export interface AgentServiceOptions {
 interface RunningAgent { harness: Harness; main: Conversation }
 
 // Public application document: cancellation must resume even after the abort mark removes parking.
-const MainRecoveryDoc = defineDoc<{ tasks: number[] }>({
+export const MainRecoveryDoc = defineDoc<{ tasks: number[] }>({
   kind: "hv.main-recovery", version: 1, scope: "conversation", history: "latest", fork: "initial",
   initial: () => ({ tasks: [] }), checkpointWhen: () => false,
 });
@@ -307,7 +307,7 @@ export class AgentService {
         harness = await Harness.open(storage, {
           models: await this.models(agent.userId), registry,
           settings: { retry: { maxRetries: 2 }, stream: { timeoutMs: 120_000 } },
-          onReport: (error, info) => this.options.logger?.warn({ err: error, agentId: agent.id, report: info }, "Agent harness report"),
+          onReport: (report) => this.options.logger?.warn({ err: report.error, agentId: agent.id, report }, "Agent harness report"),
         }, context);
       } catch (error) { await storage.close(context); throw error; }
       this.harnesses.set(agent.id, harness);
@@ -331,7 +331,7 @@ export class AgentService {
         this.running.delete(agent.id);
         this.subagents.unbind(agent.id);
         this.execution.unbind(agent.id);
-        if (end.reason === "failed" && !this.stopping && !this.signal(agent.id).aborted) {
+        if (end.kind === "failed" && !this.stopping && !this.signal(agent.id).aborted) {
           await this.db.update(hvAgents).set({ state: "failed", error: "Agent execution stopped. Retry initialization.", updatedAt: Date.now() }).where(eq(hvAgents.id, agent.id)).run();
           this.notify(agent.id);
         }
@@ -625,8 +625,10 @@ export class AgentService {
               const attached = await current.main.watch(context);
               watch = attached;
               view = attached.value;
-              attached.start(async (value) => {
-                if (watch === attached) { view = value; notify(); }
+              attached.start(async (call) => {
+                if (watch !== attached) return;
+                if (call.kind === "value") { view = call.value; notify(); }
+                else this.options.logger?.warn({ err: call.error, agentId: agent.id }, "Agent conversation watch failed");
               });
               void attached.closed.then(() => { if (watch === attached) onLifecycle(); });
             }
@@ -709,33 +711,9 @@ export class AgentService {
     if (!current || this.stopping || this.draining || this.signal(id).aborted) return;
     const targets = await this.subagents.execute(id, async () => {
       if (this.running.get(id) !== current) return [];
-      const graph = await current.harness.taskGraph(context);
-      try {
-        const tasks = Object.values(graph.value.tasks);
-        const scope = new Set(tasks.filter((task) => task.owner === undefined && task.conversationId === current.main.id && (!task.background || task.kind === "pi.compaction")).map((task) => task.id));
-        const conversations = new Set<number>();
-        let changed = true;
-        while (changed) {
-          changed = false;
-          for (const task of tasks) {
-            if (scope.has(task.id)) for (const conversation of task.conversations) if (!conversations.has(conversation)) { conversations.add(conversation); changed = true; }
-            if (!scope.has(task.id) && ((task.owner !== undefined && scope.has(task.owner)) || (task.owner === undefined && conversations.has(task.conversationId)))) {
-              scope.add(task.id); changed = true;
-            }
-          }
-        }
-        const parked = tasks.filter((task) => scope.has(task.id) && task.blocked === "restart_limit");
-        return await current.main.commit(async (tx) => {
-          const recovery = await tx.doc(MainRecoveryDoc, current.main.id);
-          if (recovery.tasks.length) return [...recovery.tasks];
-          if (!parked.length) return [];
-          recovery.tasks = [...scope];
-          for (const task of parked) await tx.appendEntry(current.main.id, {
-            kind: "hv.execution-failure", data: { taskId: task.id, kind: task.kind, text: "Automatic recovery stopped after repeated interruptions. This response and its queued inputs were stopped. Existing exchange orders were not cancelled. Inspect account/order state before starting new work." },
-          });
-          return [...recovery.tasks];
-        }, context);
-      } finally { graph.dispose(); }
+      // Pi Durable 1.5 settles tasks that exceed the restart limit instead of
+      // parking them. Finish only cleanup already recorded by an older version.
+      return current.main.commit(async (tx) => [...(await tx.doc(MainRecoveryDoc, current.main.id)).tasks], context);
     });
     if (!targets.length) return;
     // Joins must run outside admission: a cancelled tool can itself be waiting for that lock.

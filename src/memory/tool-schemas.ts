@@ -1,4 +1,4 @@
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { topicPattern } from "./memory-contracts.js";
 const options = { additionalProperties: false } as const;
 const str = (maxLength: number, minLength = 0) => Type.String({ minLength, maxLength });

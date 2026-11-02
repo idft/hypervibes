@@ -8,7 +8,7 @@ import { validateToolArguments, type JsonObject } from "@earendil-works/pi-ai";
 import { projectIndicatorResult } from "./indicator-service.js";
 import { IndicatorToolResultSchema } from "./result-schema.js";
 import type { IndicatorResult } from "./contracts.js";
-import { type IndicatorInputs, type PineCandle } from "./contracts.js";
+import { indicatorEngine, type IndicatorInputs, type PineCandle } from "./contracts.js";
 
 const candles: PineCandle[] = Array.from({ length: 80 }, (_, i) => {
   const close = 100 + i * 0.3 + Math.sin(i * 1.7) * 4;
@@ -132,7 +132,7 @@ describe("bounded no-capability PineTS runtime", () => {
   it("derives the recorded engine version from the installed package and only warns on drift", async () => {
     const pinets = JSON.parse(await readFile(new URL("../package.json", import.meta.resolve("pinets")), "utf8")) as { version: string };
     expect(runtime.engine.version).toBe(pinets.version);
-    expect(pineVersionDrift(pinets.version, pinets.version)).toBeNull();
+    expect(pineVersionDrift(pinets.version, indicatorEngine.version)).toBeNull();
     expect(pineVersionDrift("0.13.0", "0.12.1")).toContain("0.13.0");
     // A drifted engine must not brick the tool result contract: the schema
     // records whatever semver the installed engine reported.

@@ -1,4 +1,4 @@
-import { Type, type Static } from "@earendil-works/pi-ai";
+import { Type, type Static } from "typebox";
 import { defineExtension, defineTool, section } from "@earendil-works/pi-durable";
 import type { ExecutionContextService } from "../agents/execution-context.js";
 import type { SharedDatabase } from "../db/shared-database.js";

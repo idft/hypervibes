@@ -10,6 +10,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { hvUsers } from "../db/auth-schema.js";
 import { createRuntime, type AppRuntime } from "../runtime.js";
 import { testConfig } from "../test-config.js";
+import { MainRecoveryDoc } from "./agent-service.js";
 
 let runtime: AppRuntime | undefined;
 let directory: string | undefined;
@@ -19,7 +20,7 @@ afterEach(async () => {
   if (directory) rmSync(directory, { recursive: true, force: true });
 });
 
-it("stops a parked chat response, records its failure once, and permits a fresh response", async () => {
+it("finishes legacy chat cleanup and permits a fresh response", async () => {
   directory = mkdtempSync(join(tmpdir(), "hv-parked-chat-"));
   const faux = fauxProvider();
   const models = createModels(); models.setProvider(faux.provider);
@@ -40,34 +41,16 @@ it("stops a parked chat response, records its failure once, and permits a fresh 
   }]);
   await runtime.agents.send("owner", agent.id, "Observe", randomUUID());
   await vi.waitFor(async () => expect((await runtime!.agents.chat("owner", agent.id)).busy).toBe(true));
-  const graph = await harness.taskGraph(context);
+  const graph = await harness.watchTaskGraph(context);
   const generation = Object.values(graph.value.tasks).find((task) => task.kind === "pi.generation");
-  graph.dispose();
+  await graph.stop();
   expect(generation).toBeDefined();
-  // Simulate the public parked diagnostic while exercising real task cancellation.
-  const originalGraph = harness.taskGraph.bind(harness);
-  let scans = 0;
-  vi.spyOn(harness, "taskGraph").mockImplementation(async (ctx) => {
-    if (++scans === 2) throw new Error("Recovery interrupted after conversation cancellation");
-    const state = await originalGraph(ctx);
-    const value = state.value;
-    return new Proxy(state, { get(target, key) {
-      if (key === "value") return { tasks: Object.fromEntries(Object.entries(value.tasks).map(([id, task]) => [id, task.id === generation!.id ? { ...task, blocked: "restart_limit" as const } : task])) };
-      if (key === "dispose") return () => state.dispose();
-      return Reflect.get(target, key, target) as unknown;
-    } });
-  });
-  await runtime.agents.subagents.tick();
-  await expect(runtime.agents.send("owner", agent.id, "Too early", randomUUID())).rejects.toMatchObject({ status: 409 });
-  // The abort mark removes parking. The durable recovery marker must still finish cleanup.
+  // Simulate a cleanup marker committed by the previous application version.
+  const main = await harness.root(context);
+  await main.commit(async (tx) => { (await tx.doc(MainRecoveryDoc, main.id)).tasks = [generation!.id]; }, context);
   await runtime.agents.subagents.tick();
   await vi.waitFor(async () => expect((await runtime!.agents.chat("owner", agent.id)).busy).toBe(false));
-  await runtime.agents.subagents.tick();
-  const chat = await runtime.agents.chat("owner", agent.id);
-  const failures = chat.messages.filter((message) => message.text.includes("Automatic recovery stopped"));
-  expect(failures).toHaveLength(1);
-  expect(failures[0]).toMatchObject({ failed: true });
-  expect(failures[0]!.text).toContain("Existing exchange orders were not cancelled");
+  expect(await main.commit(async (tx) => [...(await tx.doc(MainRecoveryDoc, main.id)).tasks], context)).toEqual([]);
   expect((await harness.getTask(generation!.id, context))!.state.status).toBe("terminal");
   expect(cancelOrders).not.toHaveBeenCalled();
   faux.setResponses([fauxAssistantMessage("Fresh response")]);

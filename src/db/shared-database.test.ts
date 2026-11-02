@@ -37,6 +37,28 @@ describe("shared SQLite facade", () => {
       rmSync(directory, { recursive: true, force: true });
     }
   });
+  it("counts changed rows across borrowed and transaction executors", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "hv-shared-count-"));
+    const database = new SharedDatabase(openDatabase(join(directory, "test.sqlite")));
+    try {
+      await database.exec("CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT)");
+      const borrowed = database.borrow();
+      expect(await borrowed.runCounted("INSERT INTO items VALUES (?, ?)", 1, "first")).toBe(1);
+      expect(await database.runCounted("UPDATE items SET value = ? WHERE id = ?", "missing", 2)).toBe(0);
+      let expired!: Parameters<Parameters<SharedDatabase["transaction"]>[0]>[0];
+      await expect(database.transaction(async (tx) => {
+        expired = tx;
+        expect(await tx.runCounted("UPDATE items SET value = ? WHERE id = ?", "changed", 1)).toBe(1);
+        throw new Error("rollback counted update");
+      })).rejects.toThrow("rollback counted update");
+      expect(await database.get("SELECT value FROM items WHERE id = ?", 1)).toEqual({ value: "first" });
+      await expect(expired.runCounted("DELETE FROM items")).rejects.toThrow("closed");
+      expect(await borrowed.runCounted("DELETE FROM items")).toBe(1);
+    } finally {
+      await database.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
   it("serializes async transactions, expires handles, maps Drizzle rows and preserves other harnesses", async () => {
     const directory = mkdtempSync(join(tmpdir(), "hv-shared-"));
     const database = new SharedDatabase(openDatabase(join(directory, "test.sqlite")));

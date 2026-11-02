@@ -1,4 +1,4 @@
-import { Type, type Static } from "@earendil-works/pi-ai";
+import { Type, type Static } from "typebox";
 
 const object = { additionalProperties: false } as const;
 export const Decimal = Type.String({ pattern: "^(0|[1-9][0-9]*)(\\.[0-9]+)?$", maxLength: 80, description: "Exact plain decimal string, never a JSON number or exponent." });
