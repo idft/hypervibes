@@ -6,7 +6,7 @@ import type { SubagentRow, SubagentRun } from "../db/subagent-schema.js";
 import { normalizeDelegationTools } from "./subagent-input.js";
 import { RunListInputSchema, RunReadInputSchema, RunListResultSchema, RunReadResultSchema } from "./run-inspection.js";
 import { jsonResult } from "../research/tool-response.js";
-import { timeGuidanceExtension } from "./time-guidance.js";
+import { assignmentTimeGuidanceExtension } from "./time-guidance.js";
 
 interface ExecutionService {
   internalRun(agentId: string, id: string): Promise<SubagentRun>;
@@ -58,7 +58,7 @@ export function createSubagentExtension(service: ExecutionService, agentId: stri
           await configure(tx, child as ConversationId, {
             model: { provider: run.config.provider, modelId: run.config.modelId },
             thinkingLevel: service.thinking(run.config.thinkingLevel),
-            extensions: [timeGuidanceExtension, hyperliquid, ...(extension.tools?.some((tool) => selectedTools.includes(tool.name)) ? [extension] : []), ...capabilities.filter((extension) => extension.tools?.some((tool) => selectedTools.includes(tool.name)))], tools: [...(hyperliquid.tools ?? []), ...(extension.tools ?? []), ...capabilities.flatMap((extension) => extension.tools ?? [])].filter((tool) => selectedTools.includes(tool.name)),
+            extensions: [assignmentTimeGuidanceExtension, hyperliquid, ...(extension.tools?.some((tool) => selectedTools.includes(tool.name)) ? [extension] : []), ...capabilities.filter((extension) => extension.tools?.some((tool) => selectedTools.includes(tool.name)))], tools: [...(hyperliquid.tools ?? []), ...(extension.tools ?? []), ...capabilities.flatMap((extension) => extension.tools ?? [])].filter((tool) => selectedTools.includes(tool.name)),
             modelTools: null, cwd: null,
             instructions: savedContext.instructions,
           });

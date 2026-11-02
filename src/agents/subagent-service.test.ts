@@ -1,3 +1,4 @@
+import type { Message } from "@earendil-works/pi-ai";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
@@ -38,6 +39,35 @@ describe("subagent definitions, execution and scheduling", () => {
     runtime.start(); await runtime.agents.subagents.tick();
   });
   afterEach(async () => { vi.restoreAllMocks(); await runtime.close(); rmSync(directory, { recursive: true, force: true }); });
+
+  it("keeps one assignment clock across model requests and refreshes it for the next run", async () => {
+    const agent = await createAgent();
+    const worker = await createWorker(agent.id, { tools: ["artifact_create"] });
+    const requests: Message[][] = [];
+    for (let index = 0; index < 2; index++) {
+      faux.setResponses([
+        (request) => {
+          requests.push(structuredClone(request.messages));
+          return fauxAssistantMessage(fauxToolCall("codemode", { code: "text(1 + 1);" }), { stopReason: "toolUse" });
+        },
+        (request) => {
+          requests.push(structuredClone(request.messages));
+          return fauxAssistantMessage("Done");
+        },
+      ]);
+      const run = await runtime.agents.subagents.run("owner", agent.id, worker.id, "Check the last hour", randomUUID());
+      await vi.waitFor(async () => expect((await runtime.agents.subagents.internalRun(agent.id, run.id)).status).toBe("completed"));
+      const saved = await runtime.agents.subagents.internalRun(agent.id, run.id);
+      for (const messages of requests.slice(index * 2)) {
+        const clocks = messages.filter((message) => message.role === "user" && JSON.stringify(message.content).includes("Host assignment admittedAtMs:"));
+        expect(clocks).toHaveLength(1);
+        expect(JSON.stringify(clocks[0])).toContain(`Host assignment admittedAtMs: ${saved.createdAt}`);
+        expect(messages.some((message) => message.role === "system" && message.sections?.current_time !== undefined)).toBe(false);
+        expect(messages.some((message) => message.role === "system" && message.sections?.time_handling?.includes("Use UTC"))).toBe(true);
+      }
+    }
+    expect(requests).toHaveLength(4);
+  });
 
   it("halts active workers and all admission paths without changing worker configuration or replaying queues", async () => {
     const agent = await createAgent();
@@ -277,7 +307,7 @@ describe("subagent definitions, execution and scheduling", () => {
     const run = await completed(agent.id, worker.id);
     const child = await harness.conversation(run.conversationId! as ConversationId, context);
     const resolved = await child!.agent(context);
-    expect(resolved.extensions.map((extension) => extension.name)).toEqual(["time-guidance", "hyperliquid", "indicators"]);
+    expect(resolved.extensions.map((extension) => extension.name)).toEqual(["assignment-time-guidance", "hyperliquid", "indicators"]);
     expect(resolved.tools.map((tool) => tool.name)).toEqual(["indicator_run"]);
     const transcript = await runtime.agents.subagents.runDetail("owner", agent.id, worker.id, run.id);
     expect(transcript.tools).toContainEqual(expect.objectContaining({ name: "indicator_run", status: "done" }));
@@ -476,7 +506,7 @@ describe("subagent definitions, execution and scheduling", () => {
     expect(one.id).toBe(again.id);
     const first = await completed(agent.id, worker.id); expect(first.result).toBe("Research evidence");
     const child = await harness.conversation(first.conversationId! as never, context); const resolved = await child!.agent(context);
-    expect(resolved.tools.map((tool) => tool.name)).toEqual(["get_account"]); expect(resolved.extensions.map((extension) => extension.name)).toEqual(["time-guidance", "hyperliquid"]);
+    expect(resolved.tools.map((tool) => tool.name)).toEqual(["get_account"]); expect(resolved.extensions.map((extension) => extension.name)).toEqual(["assignment-time-guidance", "hyperliquid"]);
     await runtime.agents.subagents.run("owner", agent.id, worker.id, "Second task", randomUUID());
     const second = await completed(agent.id, worker.id); expect(second.result).toBe("Second assignment"); expect(second.conversationId).not.toBe(first.conversationId);
     expect((await runtime.agents.chat("owner", agent.id)).messages).toEqual([]);

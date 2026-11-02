@@ -24,6 +24,12 @@ export function currentTimeContext(nowMs: number): string {
   return `Host currentTimeMs: ${nowMs} (${new Date(nowMs).toISOString()}). Host clock at request preparation, not a historical evidence boundary. Only the latest current_time section is the current clock.`;
 }
 
+// Runs receive their fixed host clock once in the assignment input.
+export const assignmentTimeGuidanceExtension = defineExtension({
+  name: "assignment-time-guidance",
+  sections: [section("time_handling", () => timeGuidance)],
+});
+
 export const timeGuidanceExtension = defineExtension({
   name: "time-guidance",
   sections: [

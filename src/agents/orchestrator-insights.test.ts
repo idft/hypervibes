@@ -214,7 +214,9 @@ describe("orchestrator insight injection", () => {
     expect(blocks(requests[1]!)).toEqual([]);
     expect(JSON.stringify(requests[1])).toContain("WORKER ONLY guidance");
     expect(requests[1]!.some((message) => message.role === "system" && message.sections?.time_handling?.includes("Use UTC for all dates"))).toBe(true);
-    expect(requests[1]!.some((message) => message.role === "system" && message.sections?.current_time?.includes("Host currentTimeMs:"))).toBe(true);
+    expect(requests[1]!.some((message) => message.role === "system" && message.sections?.current_time !== undefined)).toBe(false);
+    expect(JSON.stringify(requests[1])).toContain("Host assignment admittedAtMs:");
+    expect(requests[2]!.some((message) => message.role === "system" && message.sections?.current_time?.includes("Host currentTimeMs:"))).toBe(true);
     expect(blocks(requests[2]!)).toHaveLength(1);
     expect(blocks(requests[2]!)[0]).toContain("Wake-up shared");
     expect(JSON.stringify(requests[2])).not.toContain("WORKER ONLY guidance");
