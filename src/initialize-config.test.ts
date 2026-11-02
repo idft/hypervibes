@@ -42,7 +42,32 @@ describe("first-run configuration", () => {
     expect(initializeConfig(env, path).authSecret).toBe(testAuthSecret);
   });
 
-  it.each(["{broken-json", "{}", JSON.stringify({ version: 1, BETTER_AUTH_SECRET: testAuthSecret }), JSON.stringify({ version: 1, ...supplied, AGENTS_ENCRYPTION_KEY: "" }), JSON.stringify({ version: 2, ...supplied })])("does not replace malformed or incomplete configuration", (contents) => {
+  it("loads a saved origin and lets the environment override it", () => {
+    const { root, path, env } = fixture();
+    mkdirSync(join(root, "private"));
+    const contents = JSON.stringify({ version: 1, ...supplied, APP_ORIGIN: "https://example.com:3003" });
+    writeFileSync(path, contents);
+    expect(initializeConfig(env, path).authOrigin).toBe("https://example.com:3003");
+    expect(initializeConfig({ ...env, APP_ORIGIN: "https://other.example" }, path).authOrigin).toBe("https://other.example");
+    expect(readFileSync(path, "utf8")).toBe(contents);
+  });
+
+  it("allows saved private-network HTTP only with the explicit opt-in", () => {
+    const { root, path, env } = fixture();
+    mkdirSync(join(root, "private"));
+    writeFileSync(path, JSON.stringify({ version: 1, ...supplied, APP_ORIGIN: "http://example.com:3003" }));
+    expect(initializeConfig({ ...env, APP_ALLOW_INSECURE_HTTP: "true" }, path).authOrigin).toBe("http://example.com:3003");
+    expect(() => initializeConfig({ ...env, APP_ORIGIN: "" }, path)).toThrow(/APP_ORIGIN/);
+  });
+
+  it.each(["", "not a URL", "http://example.com"])("rejects invalid saved origin %s", (origin) => {
+    const { root, path, env } = fixture();
+    mkdirSync(join(root, "private"));
+    writeFileSync(path, JSON.stringify({ version: 1, ...supplied, APP_ORIGIN: origin }));
+    expect(() => initializeConfig(env, path)).toThrow(/APP_ORIGIN/);
+  });
+
+  it.each(["{broken-json", "{}", JSON.stringify({ version: 1, BETTER_AUTH_SECRET: testAuthSecret }), JSON.stringify({ version: 1, ...supplied, AGENTS_ENCRYPTION_KEY: "" }), JSON.stringify({ version: 2, ...supplied }), JSON.stringify({ version: 1, ...supplied, APP_ORIGIN: 123 })])("does not replace malformed or incomplete configuration", (contents) => {
     const { root, path, env } = fixture();
     mkdirSync(join(root, "private"));
     writeFileSync(path, contents);

@@ -19,6 +19,7 @@ interface StoredSecrets {
   version: 1;
   BETTER_AUTH_SECRET: string;
   AGENTS_ENCRYPTION_KEY: string;
+  APP_ORIGIN?: string;
 }
 
 function missing(error: unknown): boolean {
@@ -26,7 +27,7 @@ function missing(error: unknown): boolean {
 }
 
 function effectiveConfig(secrets: StoredSecrets, env: NodeJS.ProcessEnv): AppConfig {
-  const config = loadConfig({ ...env, BETTER_AUTH_SECRET: env.BETTER_AUTH_SECRET ?? secrets.BETTER_AUTH_SECRET, AGENTS_ENCRYPTION_KEY: env.AGENTS_ENCRYPTION_KEY ?? secrets.AGENTS_ENCRYPTION_KEY });
+  const config = loadConfig({ ...env, APP_ORIGIN: env.APP_ORIGIN ?? secrets.APP_ORIGIN, BETTER_AUTH_SECRET: env.BETTER_AUTH_SECRET ?? secrets.BETTER_AUTH_SECRET, AGENTS_ENCRYPTION_KEY: env.AGENTS_ENCRYPTION_KEY ?? secrets.AGENTS_ENCRYPTION_KEY });
   if (!config.encryptionKey) throw new Error("AGENTS_ENCRYPTION_KEY must not be empty");
   return config;
 }
@@ -56,7 +57,8 @@ function readSecrets(path: string): StoredSecrets | undefined {
     if (!value || typeof value !== "object" || !("version" in value) || value.version !== 1
       || !("BETTER_AUTH_SECRET" in value) || typeof value.BETTER_AUTH_SECRET !== "string"
       || !("AGENTS_ENCRYPTION_KEY" in value) || typeof value.AGENTS_ENCRYPTION_KEY !== "string"
-      || !value.AGENTS_ENCRYPTION_KEY.trim()) {
+      || !value.AGENTS_ENCRYPTION_KEY.trim()
+      || ("APP_ORIGIN" in value && typeof value.APP_ORIGIN !== "string")) {
       throw new Error("Invalid or incomplete private configuration; restore the original configuration");
     }
     loadConfig({ BETTER_AUTH_SECRET: value.BETTER_AUTH_SECRET, AGENTS_ENCRYPTION_KEY: value.AGENTS_ENCRYPTION_KEY });

@@ -32,6 +32,7 @@ export async function loadStart(config: AppConfig, development: boolean): Promis
       appType: "custom",
       server: {
         middlewareMode: true,
+        allowedHosts: [new URL(config.authOrigin).hostname],
         hmr: false, // No extra listener or runtime restart; refresh the browser after edits.
         fs: developmentFileAccess(config.databasePath),
       },

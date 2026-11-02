@@ -6,7 +6,6 @@ slug: /configuration
 
 HyperVibes works without an `.env` file. On first start, it creates a private
 `config.json` containing authentication and credential-encryption secrets.
-Server and storage settings use environment variables, not `config.json`.
 Restart the app after changing settings.
 
 ## Files and directories
