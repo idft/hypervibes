@@ -1,0 +1,55 @@
+# HyperVibes
+
+> HyperVibes is a self-hosted application for running AI trading agents on Hyperliquid. This file helps an AI assistant install it on a local or remote machine.
+
+## Before installing
+
+- Ask which machine should run the app, how the user will access it, and whether it should keep running after logout or reboot. Obtain permission before changing the host, installing software, configuring a service, or changing network access.
+- Check the current [installation guide](https://hypervibes.ai/docs/installation) and [configuration guide](https://hypervibes.ai/docs/configuration). Check the target OS, CPU architecture, available disk space, internet access, and installed Node.js version. Hardware and server compatibility have not been fully verified; do not promise that every device or OS works. A 64-bit Linux system is a reasonable starting point for a server; report any compatibility failure rather than assuming support.
+- Node.js 22.23.3 or newer and npm are required for the npm installation. Install a compatible Node.js build for the target OS and architecture using a trustworthy source. SQLite is built into Node.js; a separate database server is not required.
+- HyperVibes can place real orders. Do not request a main wallet private key, transfer funds, approve transactions, or enable trading on the user's behalf. Let the user complete wallet approvals and review risk settings. Start with trading disabled.
+
+## Install and start
+
+For an interactive local installation, run:
+
+```sh
+node --version
+npm --version
+npx hypervibes
+```
+
+Open http://localhost:3003 on the machine running the app. For a persistent installation, `npm install -g hypervibes` installs the `hypervibes` command. The first start creates private authentication and encryption secrets; no `.env` file is required. Confirm startup and check http://localhost:3003/healthz on the host. Do not claim the app is running if a check fails.
+
+For an always-on host, arrange a service appropriate to its OS only with the user's permission. Run it as a dedicated, unprivileged user with a stable home directory and a reliable path to Node.js and the installed executable. Configure restart on failure and startup after boot, then verify the service and logs. The machine and internet connection must remain available for scheduled work.
+
+Alternatively, the [installation guide](https://hypervibes.ai/docs/installation) describes the Linux AMD64/ARM64 container and source installation. Check that the specified container image is available before using it. Verify the target architecture and prerequisites first.
+
+## Remote access
+
+The default bind address is `127.0.0.1` and the default port is `3003`. Keep the app private. Never bind it to the public internet as a shortcut.
+
+For SSH access, leave the app at its defaults and run this on the user's computer, replacing the SSH destination:
+
+```sh
+ssh -N -L 3003:127.0.0.1:3003 user@remote-host
+```
+
+While that connection stays open, browse to http://localhost:3003 on the user's computer. If local port 3003 is in use, use another local port and configure `APP_ORIGIN` on the server to the exact browser origin, for example `http://localhost:3004`; restart the app. The SSH tunnel encrypts traffic between the computers.
+
+For access without SSH forwarding, an HTTPS reverse proxy on a private network, such as Tailscale, is another option. Set `APP_ORIGIN` to the exact HTTPS origin used by the browser and restart the app. Keep the app bound to loopback when the proxy runs on the same host. Configure access controls and TLS for the chosen proxy; do not assume a Tailscale address alone provides HTTPS. Cloudflare Tunnel is another possible HTTPS proxy, but it can make a service internet-reachable: use explicit access controls, obtain the user's approval, and avoid public exposure. Follow the provider's current documentation for either setup.
+
+If the user explicitly chooses private LAN HTTP instead, the [configuration guide](https://hypervibes.ai/docs/configuration) explains `APP_HOST`, `APP_ORIGIN`, and `APP_ALLOW_INSECURE_HTTP`. HTTP exposes sessions and data to the network, and some browser wallets require HTTPS.
+
+## Data and setup
+
+On Linux, the default database is `~/.local/share/hypervibes/hypervibes.sqlite` and the secrets file is `~/.config/hypervibes/config.json`; absolute XDG overrides can change these locations. See the configuration guide for other systems and overrides. Back up the database and secrets together, securely, with the app stopped. Preserve the original encryption key when upgrading or moving an installation. Never print, share, or replace secrets unnecessarily.
+
+After opening the app, direct the user to [Quick start](https://hypervibes.ai/docs/quick-start) to connect their wallet and AI provider and create an agent. The user must retain control of credentials and approvals.
+
+## References
+
+- [Installation](https://hypervibes.ai/docs/installation)
+- [Configuration](https://hypervibes.ai/docs/configuration)
+- [Quick start](https://hypervibes.ai/docs/quick-start)
+- [Source repository](https://github.com/idft/hypervibes)
