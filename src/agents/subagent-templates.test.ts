@@ -89,6 +89,20 @@ describe("bundled editable worker manifests", () => {
     expect(draft.instructions).toContain("Distinguish computed observations from interpretations");
     expect(draft.instructions).toContain("If a claim cannot be verified, qualify or omit it");
   });
+  it("guides safe analyst report code without imposing a report schema", () => {
+    const codeMode = analysisManifest.instructions.find((section) => section.startsWith("## Code Mode and artifacts\n\n"))!;
+    expect(analysisManifest.version).toBe(13);
+    expect(codeMode).toContain("tool-provided researchReportExample in technical evidence guidance");
+    expect(codeMode).toContain("Select candle `.close` explicitly; never format candle-end ISO text as a price");
+    expect(codeMode).toContain('`typeof value === "number"` and `Number.isFinite(value)`');
+    expect(codeMode).toContain("Treat null as unknown, never zero");
+    expect(codeMode).toContain("numeric indicators under a dedicated `indicators` object and memory references as sibling metadata");
+    expect(codeMode).toContain("Iterate only `indicators`, not all values of the outer object");
+    expect(codeMode).toContain("Use backtick template literals for interpolation");
+    expect(codeMode).toContain("Stop on unexpected shapes before publishing, or publish a limitation-only report without fabricating numbers");
+    expect(codeMode).toContain("Keep exact decimal strings for monetary authority; analytical numbers are not monetary authority");
+    expect(analysisManifest.instructions.join("\n\n")).toContain("no fixed headings, bias, setup labels or structured payload are required");
+  });
   it("publishes analyst reports as memories without redundant artifacts by default", () => {
     const draft = templateDraft("basic-analysis", { provider: "operator-selected", modelId: "operator-model", thinkingLevel: "" });
     expect(draft.instructions).toContain("Publish the analysis directly in the research memory by default; no artifact is required");

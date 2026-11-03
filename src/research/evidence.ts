@@ -40,4 +40,25 @@ const bandsValid = priceValid && bollingerResult.coin === candleResult.coin && b
   ['Lower','Middle','Upper'].every(key => typeof bands[key] === 'number' && Number.isFinite(bands[key])) && bands.Lower <= bands.Middle && bands.Middle <= bands.Upper;
 text({bollinger:{openTimeUtc:utcSeconds(bandPoint?.time), value:bandsValid ? bands : null, provenance:provenance(bollingerResult)},
   facts:{priceAboveUpperBand:bandsValid ? latest.close > bands.Upper : null, priceBelowLowerBand:bandsValid ? latest.close < bands.Lower : null}});`;
-export const technicalEvidenceInstructions = `Calculate comparison flags in Code Mode before writing prose; Check the final prose against the flags. Facts are not forecasts. Quote the emitted ISO UTC strings verbatim. Request start/end are milliseconds, candle-open times are seconds. All indicators use point.value.<outputId>: EMA, ATR, RSI, ADX, MACD/Signal/Histogram and Lower/Middle/Upper. Null/missing/nonfinite/misaligned/non-close-source evidence is unknown, never zero or fabricated false. Report actual seed/output bounds, coverage, resolvedInputs, concrete version/sourceHash/resultHash and per-output finite availability. A finite value does not prove initialization effects have disappeared. About 5× the longest period plus trailing history is a seed recommendation, not universal stability. A one-value request still computes the entire seed window. No universal stable/requiredInputs claim exists for arbitrary PineScript. Use indicator_get for exact keys. Example (bind these results using selected tools on a common closed window):\n\n${technicalEvidenceExample}\n\n${bollingerEvidenceExample}`;
+export const researchReportExample = `function analyticalText(value, label) {
+  if (value === null) return 'unknown';
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(label + ' must be a finite analytical number or null');
+  return String(value);
+}
+function buildResearchReport(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data) || !data.indicators || typeof data.indicators !== 'object' || Array.isArray(data.indicators)) {
+    throw new Error('Expected report data with a separate indicators object');
+  }
+  const closeText = analyticalText(data.closePrice, 'closePrice');
+  const indicatorText = Object.entries(data.indicators).map(([name, value]) => \`\${name}: \${analyticalText(value, name)}\`).join('; ');
+  return {content: \`Close: \${closeText}; candle end UTC: \${data.candleEndUtc ?? 'unknown'}. \${indicatorText}.\`, payload: data};
+}
+const reportData = {
+  closePrice: priceValid ? latest.close : null,
+  candleEndUtc: utcMilliseconds(candleResult.end),
+  indicators: {ema20, ema50, atr},
+  previousResearchRef: null // If needed, replace null with an exact memory ref returned by a tool.
+};
+const researchDraft = buildResearchReport(reportData);
+text(researchDraft);`;
+export const technicalEvidenceInstructions = `Calculate comparison flags in Code Mode before writing prose; Check the final prose against the flags. Facts are not forecasts. Quote the emitted ISO UTC strings verbatim. Request start/end are milliseconds, candle-open times are seconds. All indicators use point.value.<outputId>: EMA, ATR, RSI, ADX, MACD/Signal/Histogram and Lower/Middle/Upper. Null/missing/nonfinite/misaligned/non-close-source evidence is unknown, never zero or fabricated false. Report actual seed/output bounds, coverage, resolvedInputs, concrete version/sourceHash/resultHash and per-output finite availability. A finite value does not prove initialization effects have disappeared. About 5× the longest period plus trailing history is a seed recommendation, not universal stability. A one-value request still computes the entire seed window. No universal stable/requiredInputs claim exists for arbitrary PineScript. Use indicator_get for exact keys. Example (bind these results using selected tools on a common closed window):\n\n${technicalEvidenceExample}\n\n${bollingerEvidenceExample}\n\nReport-building example (researchReportExample, continue above). This is optional code, not a required report schema. Select latest.close explicitly; keep ISO time and memory references outside the indicators object, and iterate only indicators. Use backtick template literals for interpolation. Null means unknown; unexpected shapes or invalid analytical values stop the example before publication, rather than becoming zero. You can still publish a limitation-only report without fabricated numbers. Add your interpretation, provenance, uncertainty and limitations to the factual draft before publishing. Analytical numbers are not order/account monetary authority; keep monetary values as exact decimal strings.\n\n${researchReportExample}`;

@@ -29,6 +29,20 @@ describe("memory and insight contracts", () => {
       expect(() => validateToolArguments(tool, { type: "toolCall", id: "publish", name: tool.name, arguments: input })).not.toThrow();
     }
   });
+  it("allows reports to discuss NaN and literal template expressions without prose scanning", () => {
+    const content = 'The earlier calculation produced NaN. Ordinary quotes preserve the literal ${zone}; use a template literal when interpolation is intended.';
+    expect(publicationInput("research", { ...research, content }).content).toBe(content);
+  });
+  it("requires summary rather than accepting or silently renaming title", () => {
+    expect(ResearchInputSchema.properties.summary).toMatchObject({ description: expect.stringContaining("The field name is summary, not title") });
+    expect(ResearchInputSchema).toMatchObject({ additionalProperties: false });
+    const tool = { name: "publish_research", description: "Publish research", parameters: ResearchInputSchema };
+    const { summary, ...withoutSummary } = research;
+    for (const input of [{ ...withoutSummary, title: summary }, { ...research, title: summary }]) {
+      expect(() => validateToolArguments(tool, { type: "toolCall", id: "publish", name: tool.name, arguments: input })).toThrow();
+      expect(() => publicationInput("research", input)).toThrow("Unknown field");
+    }
+  });
   it("explains evidence timestamp units and direct Code Mode publication without manual copying", () => {
     const description = JSON.stringify(ResearchInputSchema.properties.evidenceAsOf);
     expect(description).toContain("MILLISECONDS");

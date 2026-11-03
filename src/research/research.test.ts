@@ -12,7 +12,7 @@ import { timeCodeExamples } from "../agents/time-guidance.js";
 import { createRegistry, Harness, LiveDoc, MemoryStorage } from "@earendil-works/pi-durable";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { toolActivity } from "./tool-activity.js";
-import { technicalEvidenceExample, utcFormattingExample } from "./evidence.js";
+import { researchReportExample, technicalEvidenceExample, utcFormattingExample } from "./evidence.js";
 import { researchJournal } from "./journal.js";
 import { indicatorReadToolNames } from "../agents/subagent-input.js";
 import { createIndicatorExtension } from "../indicators/durable-extension.js";
@@ -239,10 +239,13 @@ describe("Code Mode research and artifacts", () => {
   it("runs generic indicators and evidence guidance in Code Mode and exports full results without bulk summaries", async () => {
     const candles = Array.from({ length: 80 }, (_, i) => ({ time: i * 3600, open: i + 10, high: i + 12, low: i + 9, close: i + 11, volume: 20 }));
     vi.spyOn(runtime.hyperliquid.charts, "researchHistory").mockResolvedValue({ coin: "BTC", interval: "1h", start: 0, end: 288000000, pageEnd: 288000000, candles, nextStart: null, coverage: { complete: true, returned: 80, expected: 80, closedOnly: true, sourceLimit: "fixture" } });
-    const entries = await execute(`const base={coin:'BTC',interval:'1h',start:0,end:288000000}; const candleResult=await tools.research_candles(base); const [ema20Result,ema50Result]=await Promise.all([tools.indicator_run({...base,indicatorId:'builtin:ema',inputs:{period:20}}),tools.indicator_run({...base,indicatorId:'builtin:ema',inputs:{period:50}})]); const atrResult=await tools.indicator_run({...base,indicatorId:'builtin:atr'}); ${technicalEvidenceExample} const exported=await tools.indicator_run({...base,indicatorId:'builtin:macd',saveAs:'Full MACD'}); if ('values' in exported.summary || 'outputs' in exported.summary || 'markers' in exported.summary) throw new Error('Bulk leaked'); text(exported.summary.exportScope);`, ["codemode", "research_candles", "indicator_run", "artifact_create"]);
+    const entries = await execute(`const base={coin:'BTC',interval:'1h',start:0,end:288000000}; const candleResult=await tools.research_candles(base); const [ema20Result,ema50Result]=await Promise.all([tools.indicator_run({...base,indicatorId:'builtin:ema',inputs:{period:20}}),tools.indicator_run({...base,indicatorId:'builtin:ema',inputs:{period:50}})]); const atrResult=await tools.indicator_run({...base,indicatorId:'builtin:atr'}); ${technicalEvidenceExample} ${researchReportExample} const exported=await tools.indicator_run({...base,indicatorId:'builtin:macd',saveAs:'Full MACD'}); if ('values' in exported.summary || 'outputs' in exported.summary || 'markers' in exported.summary) throw new Error('Bulk leaked'); text(exported.summary.exportScope);`, ["codemode", "research_candles", "indicator_run", "artifact_create"]);
     const response = entries.flatMap((entry) => entry.model ?? []).find((message) => message.role === "toolResult");
     expect(response, JSON.stringify(response)).toMatchObject({ isError: false });
     expect(JSON.stringify(entries)).toContain("ema20AboveEma50");
+    const reportOutput = response!.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+    expect(reportOutput).toContain("Close: 90; candle end UTC: 1970-01-04T08:00:00.000Z");
+    expect(reportOutput).not.toContain("${closeText}");
     const item = (await runtime.agents.research.artifacts.list(agentId)).items[0]!;
     const saved = JSON.parse((await runtime.agents.research.artifacts.get(agentId, item.id)).payload.toString());
     expect(saved).toMatchObject({ indicatorId: "builtin:macd", exportScope: "full", version: 1 }); expect(saved.values).toHaveLength(80);
