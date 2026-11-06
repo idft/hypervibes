@@ -3,9 +3,11 @@ import { InfoClient, type HttpTransport } from "@nktkas/hyperliquid";
 import { Type, type Static, type TSchema } from "typebox";
 import { Check } from "typebox/value";
 import {
-  AccountModeSchema, AccountOrderSchema, AccountPerpStateSchema, AccountSpotStateSchema,
+  AccountModeSchema, AccountOrderSchema, AccountPerpStateSchema, AccountSpotStateSchema, AccountTwapEventSchema,
   type AccountStatus,
 } from "./account-status-schema.js";
+import { amount } from "./journal-decimal.js";
+import { createTwapSnapshotReader } from "./twap-snapshot.js";
 export type { AccountStatus } from "./account-status-schema.js";
 
 type Section = AccountStatus["sections"]["spot"];
@@ -81,7 +83,7 @@ async function bounded<T>(request: () => Promise<T>, signal: AbortSignal): Promi
 }
 
 /**
- * Fresh, read-only HTTP snapshot. Never use dashboard caches as account coverage.
+ * Fresh, read-only HTTP and TWAP WebSocket observations. Never use dashboard caches as account coverage.
  * Official API docs: info-endpoint (frontendOpenOrders includes spot only on dex ""),
  * info-endpoint/perpetuals (perpDexs null = main DEX), and info-endpoint/spot.
  * Under unified/portfolio margin, spot balances are the balance source of truth.
@@ -93,16 +95,18 @@ export async function loadAccountStatus(transport: HttpTransport, address: strin
     address, scope: "account-wide-perpetuals-and-spot", startedAt: Date.now(), observedAt: Date.now(), accountAbstraction: null,
     equity: { value: null, reason: "Account-wide equity is unknown. No verified valuation and aggregation rule across spot, perpetual DEXs, and account modes is applied. Do not sum spot balances with perpetual accountValue." },
     availableMargin: { value: null, reason: "Account-wide available margin is unknown. Per-DEX withdrawable, raw margin summaries, and spot total minus hold are not verified trading capacity." },
-    coverage: { complete: false, openingRiskVerified: false, perpDexs: null, discovery: unavailable(), limitations: [
-      "Only this address: discovered perpetual DEXs, spot balances, and frontend open orders. No subaccounts, vault equity, staking, HyperEVM balances, or pending TWAP schedules.",
-      "HTTP reads are not atomic. updatedAt records local receipt; perpetual state.time records exchange time. Fresh perpetual state must be at most 30 seconds old.",
+    coverage: { complete: false, perpDexs: null, discovery: unavailable(), limitations: [
+      "Only this address: discovered perpetual DEXs, spot balances, frontend open orders, and current TWAP schedules. No other subaccounts, vault equity, staking, or HyperEVM balances.",
+      "Reads are not atomic. updatedAt records local receipt; perpetual state.time records exchange time. Fresh perpetual state must be at most 30 seconds old.",
       "Per-DEX summaries retain exchange units and are not added together. Unified and portfolio-margin trading balances come from spot state.",
       "Order children are flattened with parentOid. Identical positive order IDs are deduplicated, preserving parent linkage. Zero IDs are placeholders: orderIdKnown is false and sourcePath identifies their response location.",
       "Outcome order coins (#N) are separate; outcome balances (+N/oN), if returned by the spot endpoint, remain in spot state.",
-      "coverage.complete describes only requested HTTP source coverage, not sufficient account-wide opening-risk verification. Pending TWAP schedules are not queried.",
+      "coverage.complete describes requested source coverage, not trading approval or usable opening capacity. Reconcile local pending/unknown submissions separately and use get_trading_capacity for instrument-specific venue limits.",
+      "TWAP states come from current per-DEX WebSocket events. Their timestamp is schedule creation time, not an exchange snapshot timestamp; freshness uses local receipt only. Null states mean unknown, not no commitments.",
+      "TWAP remainingSz is exact unexecuted base quantity, not remaining USD notional or reserved margin. Main-DEX states may include spot schedules. Do not treat executedNtl as a future price or assume reduce-only schedules free capacity before fills. A live slice may overlap open orders; do not subtract assumed overlap without evidence.",
     ] },
     perps: [], spot: { state: null, orders: null, sections: { balances: unavailable(), orders: unavailable() } },
-    outcomeOrders: { orders: null, section: unavailable() },
+    outcomeOrders: { orders: null, section: unavailable() }, twaps: [],
     perpEquity: null, positions: null, spotUsdc: null, spotUsdcHold: null, orders: null,
     sections: { perps: unavailable(), spot: unavailable(), orders: unavailable(), mode: unavailable() }, errors: [],
   };
@@ -118,7 +122,8 @@ export async function loadAccountStatus(transport: HttpTransport, address: strin
       result.errors.push(`${label} unavailable: request failed, timed out, or returned malformed data.`);
     }
   };
-  // This phase has at most 3 requests. The per-DEX phase below has at most 4.
+  // This phase has at most 3 requests. The per-DEX phase has at most 4 HTTP
+  // requests and 4 TWAP subscriptions independently, under the same deadline.
   await Promise.all([
     attempt("Perpetual DEX discovery", async () => {
       const dexs = validate(discoverySchema, await bounded(() => client.perpDexs(signal), signal));
@@ -148,6 +153,10 @@ export async function loadAccountStatus(transport: HttpTransport, address: strin
   // Discovery failure is not an empty account. Main-DEX reads can still succeed,
   // but coverage.perpDexs stays null and coverage.complete stays false.
   result.perps = (result.coverage.perpDexs ?? [""]).map((dex) => ({ dex, state: null, orders: null, sections: { state: unavailable(), orders: unavailable() } }));
+  result.twaps = result.perps.map(({ dex }) => ({ dex, states: null, section: unavailable() }));
+  // A dedicated, lazy socket forces a new subscription rather than reusing a
+  // dashboard subscription whose initial event might precede this request.
+  const twapReader = createTwapSnapshotReader(transport.isTestnet);
   const jobs = result.perps.flatMap((perp) => [
     () => attempt(`Perpetual state (${perp.dex || "main"})`, async () => {
       const state = validate(AccountPerpStateSchema, await bounded(() => client.clearinghouseState({ user, dex: perp.dex }, signal), signal));
@@ -176,14 +185,42 @@ export async function loadAccountStatus(transport: HttpTransport, address: strin
       }
     }),
   ]);
-  let next = 0;
-  await Promise.all(Array.from({ length: Math.min(4, jobs.length) }, async () => {
-    while (next < jobs.length) { const job = jobs[next++]; if (job) await job(); }
-  }));
+  const twapJobs = result.perps.map((perp, index) =>
+    () => attempt(`TWAP schedules (${perp.dex || "main"})`, async () => {
+      const requestedAt = Date.now();
+      const snapshot = await bounded(() => twapReader.read(user, perp.dex, signal), signal);
+      const event = validate(AccountTwapEventSchema, snapshot.data);
+      if (event.user.toLowerCase() !== user.toLowerCase() || event.dex !== perp.dex) throw new Error("TWAP account/DEX identity mismatch");
+      if (!Number.isSafeInteger(snapshot.receivedAt) || snapshot.receivedAt < requestedAt || snapshot.receivedAt > Date.now()) throw new Error("Invalid TWAP receipt time");
+      const ids = new Set<number>();
+      const states = event.states.map(([twapId, state]) => {
+        if (ids.has(twapId)) throw new Error("Duplicate TWAP ID");
+        ids.add(twapId);
+        if (state.user.toLowerCase() !== user.toLowerCase()
+          || !(matchesPerpDex(state.coin, perp.dex) || (perp.dex === "" && (isSpot(state.coin) || isOutcome(state.coin))))) throw new Error("TWAP state identity mismatch");
+        const remaining = amount(state.sz).sub(amount(state.executedSz));
+        if (remaining.sign < 0) throw new Error("TWAP executed quantity exceeds total");
+        return { ...state, twapId, remainingSz: remaining.toString() };
+      });
+      const twaps = result.twaps[index]!;
+      twaps.states = states;
+      twaps.section = { updatedAt: snapshot.receivedAt, fresh: true, source: "websocket" };
+    }),
+  );
+  const runJobs = async (queue: Array<() => Promise<void>>) => {
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(4, queue.length) }, async () => {
+      while (next < queue.length) { const job = queue[next++]; if (job) await job(); }
+    }));
+  };
+  try {
+    // Silent subscriptions must not starve balance/order reads for other DEXs.
+    await Promise.all([runJobs(jobs), runJobs(twapJobs)]);
+  } finally { twapReader.close(); }
   if (cancellation?.aborted) throw new Error("Account status request aborted");
   result.observedAt = Date.now();
   const sections = [result.coverage.discovery, ...Object.values(result.sections), ...Object.values(result.spot.sections),
-    result.outcomeOrders.section, ...result.perps.flatMap((perp) => Object.values(perp.sections))];
+    result.outcomeOrders.section, ...result.perps.flatMap((perp) => Object.values(perp.sections)), ...result.twaps.map((twaps) => twaps.section)];
   for (const section of sections) {
     if (section.updatedAt !== null) {
       const age = result.observedAt - section.updatedAt;

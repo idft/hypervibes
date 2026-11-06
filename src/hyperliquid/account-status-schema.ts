@@ -2,7 +2,8 @@ import { Type, type Static, type TSchema } from "typebox";
 
 const nullable = <T extends TSchema>(schema: T) => Type.Union([schema, Type.Null()]);
 const decimal = Type.String({ pattern: "^-?[0-9]+(\\.[0-9]+)?(?![\\s\\S])" });
-const unsigned = Type.String({ pattern: "^[0-9]+(\\.[0-9]+)?(?![\\s\\S])" });
+const unsignedPattern = "^[0-9]+(\\.[0-9]+)?(?![\\s\\S])";
+const unsigned = Type.String({ pattern: unsignedPattern });
 const integer = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
 const symbol = Type.String({ minLength: 1 });
 const summary = Type.Object({
@@ -59,9 +60,27 @@ export const AccountModeSchema = Type.Union([
   Type.Literal("unifiedAccount"), Type.Literal("portfolioMargin"), Type.Literal("disabled"),
   Type.Literal("default"), Type.Literal("dexAbstraction"),
 ]);
+const twapUnsigned = Type.String({ pattern: unsignedPattern, maxLength: 200 });
+/** Current TWAP state, not historical slices or a computed capacity approval. */
+export const AccountTwapStateSchema = Type.Object({
+  coin: symbol, user: Type.String({ pattern: "^0x[a-fA-F0-9]{40}(?![\\s\\S])" }),
+  side: Type.Union([Type.Literal("B"), Type.Literal("A")]),
+  sz: twapUnsigned, executedSz: twapUnsigned, executedNtl: twapUnsigned,
+  reduceOnly: Type.Boolean(), minutes: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+  randomize: Type.Boolean(), timestamp: integer, stopPx: nullable(twapUnsigned),
+  trigger: nullable(Type.Object({ px: twapUnsigned, above: Type.Boolean() })),
+});
+export const AccountTwapSchema = Type.Object({
+  ...AccountTwapStateSchema.properties, twapId: integer,
+  remainingSz: Type.String({ pattern: unsignedPattern, description: "Exact sz minus executedSz, in base units. Not reserved margin or remaining USD notional." }),
+});
+export const AccountTwapEventSchema = Type.Object({
+  user: Type.String({ pattern: "^0x[a-fA-F0-9]{40}(?![\\s\\S])" }), dex: Type.String(),
+  states: Type.Array(Type.Tuple([integer, AccountTwapStateSchema]), { maxItems: 10_000 }),
+});
 const section = Type.Object({
   updatedAt: nullable(integer), fresh: Type.Boolean(),
-  source: Type.Union([Type.Literal("http"), Type.Literal("unavailable")]),
+  source: Type.Union([Type.Literal("http"), Type.Literal("websocket"), Type.Literal("unavailable")]),
 });
 const unknownAmount = Type.Object({ value: Type.Null(), reason: Type.String() });
 const legacyPosition = Type.Object({
@@ -78,8 +97,8 @@ export const AccountStatusSchema = Type.Object({
   startedAt: integer, observedAt: integer, accountAbstraction: nullable(AccountModeSchema),
   equity: unknownAmount, availableMargin: unknownAmount,
   coverage: Type.Object({
-    complete: Type.Boolean({ description: "All requested HTTP source sections succeeded and remain fresh at observedAt. This is not complete opening-risk verification." }),
-    openingRiskVerified: Type.Literal(false), perpDexs: nullable(Type.Array(Type.String())), discovery: section,
+    complete: Type.Boolean({ description: "All requested HTTP and current TWAP source sections succeeded and remain fresh at observedAt. Not trading approval, available capacity, or reconciliation of local submissions." }),
+    perpDexs: nullable(Type.Array(Type.String())), discovery: section,
     limitations: Type.Array(Type.String()),
   }),
   perps: Type.Array(Type.Object({
@@ -91,6 +110,9 @@ export const AccountStatusSchema = Type.Object({
     sections: Type.Object({ balances: section, orders: section }),
   }),
   outcomeOrders: Type.Object({ orders: nullable(Type.Array(AccountOrderSchema)), section }),
+  twaps: Type.Array(Type.Object({
+    dex: Type.String(), states: nullable(Type.Array(AccountTwapSchema)), section,
+  }), { description: "Current TWAP schedules for each discovered DEX. Main DEX may include spot schedules. Null states mean unknown; an empty array means a verified empty response at receipt." }),
   // Compatibility fields cover the main perpetual DEX and spot USDC only.
   perpEquity: nullable(decimal), spotUsdc: nullable(decimal), spotUsdcHold: nullable(decimal),
   positions: nullable(Type.Array(legacyPosition)), orders: nullable(Type.Array(legacyOrder)),

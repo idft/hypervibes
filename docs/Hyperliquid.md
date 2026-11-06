@@ -45,10 +45,12 @@ they do not provide general spot trading or fund transfers.
 
 ## Account and capacity tools
 
-`get_account` reads balances, holds, and positions and open orders across
-discovered perpetual DEXs and spot. Check its coverage and freshness: a partial
-response does not prove that the account has no exposure. Equity is reported as
-unknown when the account-mode accounting cannot be verified.
+`get_account` reads balances, holds, positions, open orders, and current TWAP
+schedules across discovered perpetual DEXs and spot. TWAPs can create future
+exposure even when there are no open orders. Check coverage and freshness:
+missing data does not mean no commitments, and complete coverage is not trading
+approval. Equity is reported as unknown when the account-mode accounting cannot
+be verified.
 
 Select `get_trading_capacity` in a worker's tools to let it check exchange capacity
 for a specific main-DEX perpetual. Buy/sell capacity is not a maximum new-position

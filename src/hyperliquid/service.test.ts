@@ -15,6 +15,9 @@ import { BUILDER_RECIPIENT } from "./constants.js";
 import { HyperliquidError } from "./errors.js";
 import type { AccountFeedEvents } from "./live-dashboard.js";
 
+const twapReads = vi.hoisted(() => vi.fn(async (user: string, dex: string) => ({ data: { user, dex, states: [] }, receivedAt: Date.now() })));
+vi.mock("./twap-snapshot.js", () => ({ createTwapSnapshotReader: () => ({ read: twapReads, close() {} }) }));
+
 const encryptionKey = "3f".repeat(32);
 const mainWallet = privateKeyToAccount(`0x${"5a".repeat(32)}` as `0x${string}`);
 const signerPrivateKey = `0x${"6b".repeat(32)}`;
@@ -110,6 +113,7 @@ describe("Hyperliquid account service", () => {
   let feedEvents: Map<string, AccountFeedEvents>;
 
   beforeEach(async () => {
+    twapReads.mockClear();
     directory = mkdtempSync(join(tmpdir(), "hv-hyperliquid-"));
     feedEvents = new Map();
     const models = createModels();
@@ -142,6 +146,7 @@ describe("Hyperliquid account service", () => {
     await expect(runtime.hyperliquid.agentTradingCapacity("someone-else", agent.id, "ETH")).rejects.toMatchObject({ status: 404 });
     await expect(runtime.hyperliquid.agentTradingCapacity(user.id, randomUUID(), "ETH")).rejects.toMatchObject({ status: 404 });
     expect(fetch).not.toHaveBeenCalled();
+    expect(twapReads).not.toHaveBeenCalled();
   });
 
   it("keeps account-wide reads separate from the dashboard feed and isolates assigned accounts", async () => {
@@ -175,6 +180,7 @@ describe("Hyperliquid account service", () => {
     expect(reads.filter((body) => body.type === "perpDexs")).toHaveLength(2);
     expect(reads.filter((body) => body.user === address)).toHaveLength(4);
     expect(reads.filter((body) => body.user === other)).toHaveLength(4);
+    expect(twapReads.mock.calls.map(([user, dex]) => ({ user, dex }))).toEqual([{ user: address, dex: "" }, { user: other, dex: "" }]);
   });
 
   it("reads capacity only for the assigned account without signing authority", async () => {
