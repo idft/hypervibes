@@ -431,6 +431,7 @@ export class AgentService {
     try { await this.subagents.discardPending(id); }
     finally {
       // Public API withdraws queued inputs and crosses background worker boundaries.
+      await this.subagents.stopDiscussions(id);
       await current?.main.abort(context, { background: true });
       await this.subagents.cancelOutstanding(id);
     }

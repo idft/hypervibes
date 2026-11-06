@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { subagentRunQueryOptions } from "../web/subagent-queries.js";
 import type { RunDetail } from "../agents/subagent-service.js";
 
 /** One page-scoped subscription; reconnects receive a fresh backend snapshot. */
 export function useSubagentRun(agentId: string, subagentId: string, runId: string, initial: RunDetail) {
+  const client = useQueryClient();
   const [detail, setDetail] = useState(initial);
   const [connectionError, setConnectionError] = useState("");
   useEffect(() => {
@@ -15,7 +18,9 @@ export function useSubagentRun(agentId: string, subagentId: string, runId: strin
     };
     source.addEventListener("run", (event) => {
       if (!active) return;
-      setDetail(JSON.parse((event as MessageEvent).data) as RunDetail);
+      const next = JSON.parse((event as MessageEvent).data) as RunDetail;
+      client.setQueryData(subagentRunQueryOptions(agentId, subagentId, runId).queryKey, next);
+      setDetail(next);
       setConnectionError("");
     });
     source.addEventListener("unauthorized", () => { if (active) window.location.assign("/login"); });
@@ -24,6 +29,6 @@ export function useSubagentRun(agentId: string, subagentId: string, runId: strin
     source.addEventListener("stream-error", (event) => interrupted(event as MessageEvent, "Run detail could not be streamed."));
     source.onerror = () => interrupted(undefined, "Live updates interrupted. Showing the last received detail. Reconnecting…");
     return () => { active = false; source.close(); };
-  }, [agentId, subagentId, runId]);
+  }, [agentId, subagentId, runId, client]);
   return { detail, connectionError };
 }

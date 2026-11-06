@@ -2,6 +2,8 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } f
 import { createPortal } from "react-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { subagentMutations } from "../web/subagent-mutations.js";
+import { sendSubagentRunFollowup } from "../web/subagents.js";
+import { randomUuid } from "../web/random-uuid.js";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import type { RunDetail } from "../agents/subagent-service.js";
 import { workerInstructions } from "../agents/subagent-input.js";
@@ -102,7 +104,39 @@ export function SubagentRunPage({ initial }: { initial: RunDetail }) {
     }
   }
   const { detail, connectionError } = useSubagentRun(initial.run.agentId, initial.run.subagentId, initial.run.id, initial);
-  const { run } = detail;
+  const { run, discussion, discussionUnavailable } = detail;
+  const canDiscuss = run.status === "completed" || run.status === "failed" || run.status === "cancelled";
+  const [message, setMessage] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState("");
+  const followupInFlight = useRef(false);
+  const request = useRef<{ message: string; id: string } | null>(null);
+  const composer = useRef<HTMLTextAreaElement>(null);
+  const composerId = useId();
+  const followupErrorId = useId();
+  const followupDisabled = !canDiscuss || Boolean(discussionUnavailable) || discussion?.busy === true || sending;
+  async function sendFollowup() {
+    if (followupInFlight.current || followupDisabled || !message.trim()) return;
+    followupInFlight.current = true;
+    setSending(true);
+    setSendError("");
+    try {
+      if (request.current?.message !== message) request.current = { message, id: randomUuid() };
+      const outgoing = request.current;
+      await sendSubagentRunFollowup({ data: { agentId: run.agentId, id: run.subagentId, runId: run.id, message: outgoing.message, requestId: outgoing.id } });
+      // The existing run stream supplies committed messages and replies.
+      setMessage((current) => current === outgoing.message ? "" : current);
+      if (request.current === outgoing) request.current = null;
+    } catch (cause) {
+      setSendError(cause instanceof Error ? cause.message : "Unable to send follow-up.");
+    } finally {
+      followupInFlight.current = false;
+      setSending(false);
+      composer.current?.focus();
+    }
+  }
+  const discussionVersion = JSON.stringify([discussion, discussionUnavailable]);
+  const previousDiscussion = useRef(discussionVersion);
   const transcriptEnd = useRef<HTMLDivElement>(null);
   const transcriptScroll = useRef<HTMLElement>(null);
   const following = useRef(true);
@@ -120,8 +154,11 @@ export function SubagentRunPage({ initial }: { initial: RunDetail }) {
   }, []);
   useLayoutEffect(() => {
     const live = run.status === "queued" || run.status === "running";
-    // Start every run at the latest activity, and include the final live snapshot.
-    if (following.current && (!initializedScroll.current || live || wasLive.current)) {
+    const discussionChanged = previousDiscussion.current !== discussionVersion;
+    previousDiscussion.current = discussionVersion;
+    // Start at the latest activity. Follow live runs and discussion updates only
+    // while the reader remains at the bottom, including each final snapshot.
+    if (following.current && (!initializedScroll.current || live || wasLive.current || discussionChanged)) {
       transcriptEnd.current?.scrollIntoView({ block: "end", behavior: "instant" });
     }
     if (!initializedScroll.current) {
@@ -129,7 +166,7 @@ export function SubagentRunPage({ initial }: { initial: RunDetail }) {
       setTranscriptReady(true);
     }
     wasLive.current = live;
-  }, [detail.entries, detail.tools, run.status]);
+  }, [detail.entries, detail.tools, run.status, discussionVersion]);
   const subagentUrl = `/agents/${encodeURIComponent(run.agentId)}/sub-agents/${encodeURIComponent(run.subagentId)}`;
   return <div className="flex h-[calc(100dvh-4.5rem)] min-h-0 w-full min-w-0 flex-col gap-3 overflow-hidden sm:h-[calc(100dvh-5rem)]">
     <section aria-label="Run header" className={`${panel} shrink-0`}>
@@ -166,7 +203,24 @@ export function SubagentRunPage({ initial }: { initial: RunDetail }) {
     <h2 className="font-medium text-white">Conversation transcript</h2>
     {detail.prior.length > 0 && <div><details><summary className="cursor-pointer font-medium text-white">Earlier conversation context · {detail.prior.length} entries</summary><p className="my-4 text-sm text-zinc-400">History preceding this assignment in the persistent conversation. Later assignments are not shown.</p><Transcript entries={detail.prior} agentId={run.agentId} /></details></div>}
     {detail.entries.length ? <Transcript entries={detail.entries} agentId={run.agentId} tools={detail.tools} /> : <p className="text-sm text-zinc-500">No transcript entries yet.</p>}
-    {(run.status === "queued" || run.status === "running") && <p role="status" className="flex items-center gap-2 pt-2 text-xs text-zinc-400"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="size-4 text-violet-400 animate-spin"><path d="M12 3a9 9 0 1 1-9 9" /></svg>{run.status === "queued" ? "Waiting to start" : "Thinking"}…</p>}<div ref={transcriptEnd} /></section>
+    {(run.status === "queued" || run.status === "running") && <p role="status" className="flex items-center gap-2 pt-2 text-xs text-zinc-400"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="size-4 text-violet-400 animate-spin"><path d="M12 3a9 9 0 1 1-9 9" /></svg>{run.status === "queued" ? "Waiting to start" : "Thinking"}…</p>}
+    {canDiscuss && <section aria-label="Follow-up discussion" className="space-y-4 border-t border-zinc-800 pt-4">
+      <header className="flex flex-wrap items-center gap-2"><h2 className="font-medium text-white">Follow-up discussion</h2><span className="text-xs text-zinc-500">Read-only</span></header>
+      <Transcript entries={discussion?.entries ?? []} agentId={run.agentId} />
+      {(discussion?.busy || discussion?.partial) && <ChatBubble role="assistant"><p role="status" className={pre}>{discussion.partial || "Thinking…"}</p></ChatBubble>}
+    </section>}
+    <div ref={transcriptEnd} /></section>
+    {canDiscuss && <form aria-label="Run follow-up" onSubmit={(event) => { event.preventDefault(); void sendFollowup(); }} className="shrink-0 space-y-2 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-3 sm:px-6">
+      {discussionUnavailable && <p id={followupErrorId} role="status" className="max-h-24 overflow-y-auto whitespace-pre-wrap break-words text-sm text-amber-200">{discussionUnavailable}</p>}
+      {!discussionUnavailable && (sendError || discussion?.error) && <p id={followupErrorId} role="alert" className="max-h-24 overflow-y-auto whitespace-pre-wrap break-words text-sm text-red-300">{sendError || discussion?.error}</p>}
+      <div className="flex items-end gap-2">
+        <label htmlFor={composerId} className="sr-only">Follow-up message</label>
+        <textarea ref={composer} id={composerId} value={message} onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void sendFollowup(); }
+        }} disabled={Boolean(discussionUnavailable) || discussion?.busy === true} aria-describedby={discussionUnavailable || sendError || discussion?.error ? followupErrorId : undefined} required maxLength={16000} rows={1} placeholder="Ask about this run" className="field-sizing-content max-h-32 min-h-11 min-w-0 flex-1 resize-none rounded-2xl border border-zinc-800 bg-zinc-950 px-4 py-3 text-sm text-zinc-100 placeholder-zinc-600 focus:border-zinc-600 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50" />
+        <button type="submit" disabled={followupDisabled || !message.trim()} className="shrink-0 cursor-pointer rounded-full bg-violet-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50">{sending ? "Sending…" : "Send"}</button>
+      </div>
+    </form>}
     </div>
   </div>;
 }

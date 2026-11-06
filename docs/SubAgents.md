@@ -34,6 +34,9 @@ They start paused so you can review their configuration first.
 
 - Browse run history and open a run's assignment, result, and recorded activity.
 - Inspect saved publications and supporting evidence.
+- Ask follow-up questions on a finished run's page. The discussion branches from
+  that run's recorded conversation, without changing its result or later assignments.
+  Follow-ups cannot use tools, place trades, or change settings.
 - Stop a run.
 - Check Notifications for expired assignments and work waiting on paused workers.
 - Archive a worker while preserving its history.

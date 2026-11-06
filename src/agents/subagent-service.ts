@@ -2,7 +2,7 @@ import type { NotificationService } from "../notifications/notification-service.
 import type { SqliteExecutor } from "@earendil-works/pi-durable/storage/sqlite";
 import { BACKGROUND_CONTEXT as context, withAbortSignal } from "@earendil-works/chord/context";
 import { getSupportedThinkingLevels, type Models } from "@earendil-works/pi-ai/models";
-import { defineDoc, defineDocFamily, InboxDoc, LiveDoc, type AgentChange, type Conversation, type ConversationId, type Cursor, type EntryRecord, type Extension, type Harness, type ModelRef } from "@earendil-works/pi-durable";
+import { ConversationBusy, defineDoc, defineDocFamily, InboxDoc, LiveDoc, type AgentChange, type Conversation, type ConversationId, type Cursor, type EntryRecord, type Extension, type Harness, type ModelRef } from "@earendil-works/pi-durable";
 import { and, asc, count, desc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { agentExecutable, assertAgentExecutable } from "./agent-enablement.js";
@@ -13,7 +13,8 @@ import type { FastifyBaseLogger } from "fastify";
 import type { ProviderService } from "../providers/provider-service.js";
 import type { DashboardSubagent } from "./subagent-dashboard.js";
 import { runHistoryPageSize, runPagination, type RunHistory } from "./subagent-history.js";
-import { AgentError, requestId } from "./agent-input.js";
+import { AgentError, chatMessage, requestId } from "./agent-input.js";
+import { createRunDiscussion, readRunDiscussion, RunDiscussionLink, stopRunDiscussions, submitRunDiscussion, type RunDiscussion } from "./run-discussion.js";
 import { createSubagentExtension, RunReceipt, type RunnerId, type SubagentExtension } from "./subagent-extension.js";
 import { executionWarnings, type ExecutionWarning } from "./execution-warnings.js";
 import { toolActivity, type ToolActivity } from "../research/tool-activity.js";
@@ -35,7 +36,7 @@ import { timeGuidanceExtension } from "./time-guidance.js";
 interface Binding extends SubagentExtension { harness: Harness; main: Conversation; hyperliquid: Extension; capabilities: readonly Extension[]; orchestratorInsights: Extension; userId: string }
 export interface SubagentHost { owned(userId: string, id: string): Promise<AgentRow>; models(userId: string): Promise<Models>; changed(id: string): void; signal(id: string): AbortSignal; recoverParkedMain?(agentId: string): Promise<void> }
 /** Full run detail: snapshotted configuration plus the complete transcript. */
-export interface RunDetail { definition: SubagentRow; run: SubagentRun; entries: EntryRecord[]; prior: EntryRecord[]; tools?: ToolActivity[]; context?: RunContext; warnings?: ExecutionWarning[]; publications?: { ref: string; kind: string; summary: string }[] }
+export interface RunDetail { definition: SubagentRow; run: SubagentRun; entries: EntryRecord[]; prior: EntryRecord[]; tools?: ToolActivity[]; context?: RunContext; warnings?: ExecutionWarning[]; publications?: { ref: string; kind: string; summary: string }[]; discussion?: RunDiscussion; discussionUnavailable?: string }
 const active = ["queued", "running"] as const;
 const parkedRunReason = "Automatic recovery stopped after repeated interruptions. Existing exchange orders were not cancelled. Inspect account/order state before starting a new assignment.";
 /** A public, durable cancellation intent. Never clear it before all work drains. */
@@ -365,7 +366,41 @@ export class SubagentService {
     }
     const live = run.conversationId !== null && (run.status === "running" || run.status === "queued") ? await this.binding(agentId).harness.snapshot(LiveDoc, run.conversationId as ConversationId, context) : undefined;
     const publications = await this.database.all<{ ref: string; kind: string; summary: string }>("SELECT 'm'||number AS ref,kind,summary FROM hv_memories WHERE agent_id=? AND source_run_id=? ORDER BY number DESC LIMIT 50", agentId, run.id);
-    return { definition, run, entries, prior, tools: toolActivity(entries, live), warnings: executionWarnings(entries), context: await this.execution.runContext(agentId, run), publications };
+    const binding = this.binding(agentId);
+    const discussion = await readRunDiscussion(binding.harness, binding.main, run);
+    return { definition, run, entries, prior, tools: toolActivity(entries, live), warnings: executionWarnings(entries), context: await this.execution.runContext(agentId, run), publications, ...discussion };
+  }
+  /** Lazily fork one finished assignment; admission never changes the worker or its result. */
+  async sendRunFollowup(userId: string, agentId: string, id: string, runId: string, message: string, submissionRequestId: string): Promise<void> {
+    await this.ownedRun(userId, agentId, id, runId);
+    message = chatMessage(message);
+    submissionRequestId = requestId(submissionRequestId);
+    await this.execute(agentId, async () => {
+      if (!this.ready) throw new AgentError("Agent execution is not ready", 503);
+      const run = await this.internalRun(agentId, runId);
+      if (run.status === "queued" || run.status === "running" || run.status === "skipped") throw new AgentError("Only finished runs with a recorded conversation can be discussed.", 409);
+      await this.validateModel(userId, run.config, run.config.thinkingLevel);
+      const binding = this.binding(agentId);
+      const saved = await this.execution.runContext(agentId, run);
+      const created = await binding.main.commit((tx) => createRunDiscussion(tx, binding.main, run, saved, this.thinking(run.config.thinkingLevel)), context);
+      if (created.conversationId === undefined) throw new AgentError(created.unavailable ?? "This run cannot be discussed.", 409);
+      // The history event attaches existing viewers to the new branch, including
+      // when the following admission fails. Later updates use its Durable watch.
+      this.historyChanged(agentId, id);
+      const child = await binding.harness.conversation(created.conversationId, context);
+      if (!child) throw new AgentError("The follow-up discussion is unavailable.", 503);
+      try {
+        await submitRunDiscussion(child, message, submissionRequestId);
+      } catch (error) {
+        if (error instanceof ConversationBusy) throw new AgentError("Wait for the current follow-up response to finish.", 409);
+        throw error;
+      }
+    });
+  }
+  /** Stop independent follow-up branches along with the parent Agent. */
+  async stopDiscussions(agentId: string) {
+    const binding = this.bindings.get(agentId);
+    if (binding) await stopRunDiscussions(binding.harness);
   }
   /** Verifies the viewer owns the Agent, worker and run without reading its transcript. */
   async ownedRun(userId: string, agentId: string, id: string, runId: string) {
@@ -391,6 +426,8 @@ export class SubagentService {
     lifetime.addEventListener("abort", changed);
     let watch: Awaited<ReturnType<Conversation["watch"]>> | undefined;
     let watched: number | null = null;
+    let discussionWatch: Awaited<ReturnType<Conversation["watch"]>> | undefined;
+    let watchedDiscussion: number | null = null;
     try {
       while (!lifetime.aborted) {
         if (dirty) {
@@ -410,6 +447,19 @@ export class SubagentService {
               void attached.closed.then(() => { if (watch === attached) { watch = undefined; watched = null; changed(); } });
             }
           }
+          const binding = this.binding(agentId);
+          const link = await binding.main.commit(async (tx) => (await tx.doc(RunDiscussionLink, binding.main.id, runId, null)).conversationId, context);
+          if (link !== null && link !== watchedDiscussion) {
+            await discussionWatch?.stop();
+            discussionWatch = undefined; watchedDiscussion = null;
+            const child = await binding.harness.conversation(link as ConversationId, context);
+            if (child && !lifetime.aborted) {
+              const attached = await child.watch(context);
+              discussionWatch = attached; watchedDiscussion = child.id;
+              attached.start(async () => { if (discussionWatch === attached) changed(); });
+              void attached.closed.then(() => { if (discussionWatch === attached) { discussionWatch = undefined; watchedDiscussion = null; changed(); } });
+            }
+          }
           if (!lifetime.aborted) publish(await this.runDetail(userId, agentId, id, runId));
         }
         if (!dirty && !lifetime.aborted) await new Promise<void>((resolve) => { wake = resolve; });
@@ -419,7 +469,7 @@ export class SubagentService {
       lifetime.removeEventListener("abort", changed);
       listeners.delete(changed);
       if (!listeners.size) this.historyListeners.delete(id);
-      try { await watch?.stop(); }
+      try { await Promise.all([watch?.stop(), discussionWatch?.stop()]); }
       finally { this.historyFeeds.delete(finished); finish(); }
     }
   }

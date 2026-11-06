@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RunDetail } from "../agents/subagent-service.js";
 import type { SubagentRow, SubagentRun } from "../db/subagent-schema.js";
 import type { EntryRecord } from "@earendil-works/pi-durable";
-const mocks = vi.hoisted(() => ({ stopSubagentRun: vi.fn() }));
+const mocks = vi.hoisted(() => ({ stopSubagentRun: vi.fn(), sendSubagentRunFollowup: vi.fn() }));
 vi.mock("../web/subagents.js", () => mocks);
 import { SubagentRunHistory } from "./subagent-run-history.js";
 import { SubagentRunPage as SubagentRunPageComponent } from "./subagent-run-page.js";
@@ -33,6 +33,175 @@ describe("sub-agent run history and details", () => {
   let root: Root, container: HTMLDivElement;
   beforeEach(() => { vi.resetAllMocks(); client = createTestQueryClient(); RunSource.instances = []; vi.stubGlobal("EventSource", RunSource); container = document.createElement("div"); container.className = "app-shell"; Element.prototype.scrollIntoView = vi.fn(); document.body.append(container); root = createRoot(container); });
   afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+  async function typeFollowup(text: string) {
+    const textarea = container.querySelector("textarea")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, text);
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+  async function submitFollowup() {
+    await act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+  }
+  async function snapshot(detail: RunDetail) {
+    await act(async () => RunSource.instances.at(-1)!.dispatchEvent(new MessageEvent("run", { data: JSON.stringify(detail) })));
+  }
+  it.each(["completed", "failed", "cancelled"] as const)("adds a read-only discussion and accessible footer for %s runs", async (status) => {
+    await act(async () => root.render(<SubagentRunPage initial={{ ...initial, run: { ...run, status } }} />));
+    const transcript = container.querySelector('[aria-label="Conversation transcript"]')!;
+    const discussion = transcript.querySelector('[aria-label="Follow-up discussion"]')!;
+    const form = container.querySelector<HTMLFormElement>('form[aria-label="Run follow-up"]')!;
+    expect(discussion.querySelector("h2")?.textContent).toBe("Follow-up discussion");
+    expect(discussion.querySelector("header p")).toBeNull();
+    expect(discussion.textContent).toContain("Read-only");
+    expect(transcript.textContent).toContain("Full assistant response");
+    expect(transcript.textContent).toContain("Earlier assignment");
+    expect(discussion.textContent).not.toContain("Full assistant response");
+    expect(discussion.textContent).not.toContain("Earlier assignment");
+    expect(transcript.contains(form)).toBe(false);
+    expect(form.parentElement).toBe(transcript.parentElement);
+    expect(form.className).toContain("shrink-0");
+    expect(form.className).not.toMatch(/(?:sm|md):(?:block|flex)/);
+    expect(form.querySelector("label")?.textContent).toBe("Follow-up message");
+    expect(form.querySelector("label")?.htmlFor).toBe(form.querySelector("textarea")?.id);
+    expect(form.querySelector("textarea")?.maxLength).toBe(16000);
+    expect(form.querySelector("textarea")?.className).toContain("min-w-0");
+    expect(form.querySelector("button")?.className).toContain("cursor-pointer");
+    expect(form.querySelector("button")?.disabled).toBe(true);
+    expect(form.querySelector("textarea")?.disabled).toBe(false);
+  });
+  it.each(["queued", "running", "skipped"] as const)("does not offer a discussion for %s runs", async (status) => {
+    await act(async () => root.render(<SubagentRunPage initial={{ ...initial, run: { ...run, status } }} />));
+    expect(container.querySelector('[aria-label="Follow-up discussion"]')).toBeNull();
+    expect(container.querySelector("form")).toBeNull();
+    expect(container.querySelector("textarea")).toBeNull();
+  });
+  it("starts a discussion when a running run finishes through the same stream", async () => {
+    await act(async () => root.render(<SubagentRunPage initial={{ ...initial, run: { ...run, status: "running" } }} />));
+    expect(container.querySelector("textarea")).toBeNull();
+    await snapshot(initial);
+    expect(container.querySelector("textarea")).not.toBeNull();
+    expect(RunSource.instances).toHaveLength(1);
+  });
+  it("submits once, clears only the sent draft, and waits for the existing stream", async () => {
+    let finish!: () => void;
+    mocks.sendSubagentRunFollowup.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+    await act(async () => root.render(<SubagentRunPage initial={initial} />));
+    await typeFollowup("Why did this run stop?");
+    const form = container.querySelector("form")!;
+    await act(async () => {
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    expect(mocks.sendSubagentRunFollowup).toHaveBeenCalledOnce();
+    expect(mocks.sendSubagentRunFollowup).toHaveBeenCalledWith({ data: { agentId: run.agentId, id: definition.id, runId: run.id, message: "Why did this run stop?", requestId: expect.any(String) } });
+    expect(container.querySelector('button[type="submit"]')?.textContent).toBe("Sending…");
+    expect(container.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(true);
+    expect(container.querySelector("textarea")?.value).toBe("Why did this run stop?");
+    await typeFollowup("Another question");
+    await act(async () => finish());
+    expect(container.querySelector("textarea")?.value).toBe("Another question");
+    expect(container.querySelector('[aria-label="Follow-up discussion"]')?.textContent).not.toContain("Why did this run stop?");
+    mocks.sendSubagentRunFollowup.mockResolvedValue(undefined);
+    await submitFollowup();
+    expect(container.querySelector("textarea")?.value).toBe("");
+    expect(document.activeElement).toBe(container.querySelector("textarea"));
+    expect(RunSource.instances).toHaveLength(1);
+  });
+  it("preserves failed drafts and request IDs for retries, but gives changed messages new IDs", async () => {
+    mocks.sendSubagentRunFollowup.mockRejectedValue(new Error("Connection lost"));
+    await act(async () => root.render(<SubagentRunPage initial={initial} />));
+    await typeFollowup("Explain the result");
+    await submitFollowup();
+    const first = mocks.sendSubagentRunFollowup.mock.calls[0]![0] as { data: { requestId: string } };
+    expect(container.querySelector("textarea")?.value).toBe("Explain the result");
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe("Connection lost");
+    expect(container.querySelector("textarea")?.getAttribute("aria-describedby")).toBe(container.querySelector('[role="alert"]')?.id);
+    await submitFollowup();
+    expect(mocks.sendSubagentRunFollowup.mock.calls[1]![0]).toEqual(first);
+    await typeFollowup("Explain the failure instead");
+    await submitFollowup();
+    expect(mocks.sendSubagentRunFollowup.mock.calls[2]![0].data.requestId).not.toBe(first.data.requestId);
+    const retry = mocks.sendSubagentRunFollowup.mock.calls[2]![0];
+    mocks.sendSubagentRunFollowup.mockResolvedValue(undefined);
+    await submitFollowup();
+    expect(mocks.sendSubagentRunFollowup.mock.calls[3]![0]).toEqual(retry);
+    expect(container.querySelector("textarea")?.value).toBe("");
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    await typeFollowup("Explain the failure instead");
+    await submitFollowup();
+    expect(mocks.sendSubagentRunFollowup.mock.calls[4]![0].data.requestId).not.toBe(retry.data.requestId);
+  });
+  it("rejects blank messages and supports Enter, Shift+Enter, and composition", async () => {
+    mocks.sendSubagentRunFollowup.mockResolvedValue(undefined);
+    await act(async () => root.render(<SubagentRunPage initial={initial} />));
+    await typeFollowup("   "); await submitFollowup();
+    expect(mocks.sendSubagentRunFollowup).not.toHaveBeenCalled();
+    await typeFollowup("Explain this run");
+    const textarea = container.querySelector("textarea")!;
+    await act(async () => textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true, cancelable: true })));
+    await act(async () => textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true, cancelable: true })));
+    expect(mocks.sendSubagentRunFollowup).not.toHaveBeenCalled();
+    await act(async () => textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
+    expect(mocks.sendSubagentRunFollowup).toHaveBeenCalledOnce();
+  });
+  it("renders branch history, partial replies, busy state, and failures from run snapshots", async () => {
+    const discussion = { conversationId: 8, entries: [entry(51, "pi.user", [{ role: "user", content: "What happened?", timestamp: 1 }])], busy: true, partial: "Checking the result" };
+    await act(async () => root.render(<SubagentRunPage initial={{ ...initial, discussion }} />));
+    const branch = container.querySelector('[aria-label="Follow-up discussion"]')!;
+    expect(branch.textContent).toContain("What happened?");
+    expect(branch.querySelector('[role="status"]')?.textContent).toBe("Checking the result");
+    expect(branch.querySelector('[role="status"]')?.closest("article")?.className).toContain("bg-zinc-900");
+    expect(container.querySelector("textarea")?.disabled).toBe(true);
+    await submitFollowup();
+    expect(mocks.sendSubagentRunFollowup).not.toHaveBeenCalled();
+    await snapshot({ ...initial, discussion: { ...discussion, partial: "" } });
+    expect(branch.querySelector('[role="status"]')?.textContent).toBe("Thinking…");
+    const response = entry(52, "pi.assistant", [fauxAssistantMessage("The run finished normally.")]);
+    await snapshot({ ...initial, discussion: { ...discussion, entries: [...discussion.entries, response], busy: false, partial: "", error: "Provider disconnected" } });
+    expect(branch.textContent).toContain("The run finished normally.");
+    expect(client.getQueryData<RunDetail>(["subagents", run.agentId, "run", run.subagentId, run.id])?.discussion?.entries).toHaveLength(2);
+    expect(branch.textContent).not.toContain("Thinking…");
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe("Provider disconnected");
+    expect(container.querySelector("textarea")?.disabled).toBe(false);
+    expect(container.textContent?.match(/Full assistant response/g)).toHaveLength(1);
+    expect(RunSource.instances).toHaveLength(1);
+  });
+  it("shows unavailable reasons and disables submissions without discarding a draft or branch history", async () => {
+    await act(async () => root.render(<SubagentRunPage initial={initial} />));
+    await typeFollowup("Explain the result");
+    const unavailable = { ...initial, discussionUnavailable: "The original conversation is unavailable.", discussion: { conversationId: 8, entries: [entry(51, "pi.user", [{ role: "user", content: "Saved question", timestamp: 1 }])], busy: false, partial: "" } };
+    await snapshot(unavailable);
+    const form = container.querySelector("form")!;
+    expect(form.querySelector('[role="status"]')?.textContent).toBe(unavailable.discussionUnavailable);
+    expect(form.querySelector("textarea")?.disabled).toBe(true);
+    expect(form.querySelector("textarea")?.value).toBe("Explain the result");
+    expect(form.querySelector("button")?.disabled).toBe(true);
+    expect(container.querySelector('[aria-label="Follow-up discussion"]')?.textContent).toContain("Saved question");
+    await submitFollowup();
+    expect(mocks.sendSubagentRunFollowup).not.toHaveBeenCalled();
+  });
+  it("follows discussion updates, pauses above the bottom, and does not follow identical historical snapshots", async () => {
+    await act(async () => root.render(<SubagentRunPage initial={initial} />));
+    const transcript = container.querySelector('[aria-label="Conversation transcript"]')!;
+    Object.defineProperties(transcript, { scrollHeight: { value: 2000 }, clientHeight: { value: 600 } });
+    const scroll = vi.mocked(Element.prototype.scrollIntoView);
+    const discussion = { conversationId: 8, entries: [], busy: true, partial: "First" };
+    await snapshot({ ...initial, discussion });
+    expect(scroll).toHaveBeenCalledTimes(2);
+    await snapshot({ ...initial, discussion });
+    expect(scroll).toHaveBeenCalledTimes(2);
+    transcript.scrollTop = 400;
+    await act(async () => transcript.dispatchEvent(new Event("scroll")));
+    await snapshot({ ...initial, discussion: { ...discussion, partial: "Second" } });
+    expect(scroll).toHaveBeenCalledTimes(2);
+    transcript.scrollTop = 1400;
+    await act(async () => transcript.dispatchEvent(new Event("scroll")));
+    await snapshot({ ...initial, discussion: { ...discussion, partial: "Final", busy: false } });
+    expect(scroll).toHaveBeenCalledTimes(3);
+    await snapshot({ ...initial, discussion: { ...discussion, partial: "", busy: false, entries: [entry(51, "pi.assistant", [fauxAssistantMessage("Final")])] } });
+    expect(scroll).toHaveBeenCalledTimes(4);
+  });
   it("renders a table with relative timestamps, accessible status icons, links and isolated Stop actions", async () => {
     const stop = vi.fn();
     await act(async () => root.render(<SubagentRunHistory agentId={run.agentId} runs={[run, { ...run, id: "running-id", status: "running", source: "delegation" }]} pending={false} onStop={stop} />));

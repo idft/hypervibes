@@ -16,7 +16,7 @@ vi.mock("@tanstack/react-start", () => {
 import { cancelAgentOrder, closeAgentPosition, setAgentEnabled } from "./agents.js";
 import { beginProviderLogin, getModelChoices, getProviderSettings, refreshProviderModels } from "./providers.js";
 import { approveApiWallet, getAccount, setupApiWallet } from "./account.js";
-import { listSubagents, saveSubagentSection } from "./subagents.js";
+import { listSubagents, saveSubagentSection, sendSubagentRunFollowup } from "./subagents.js";
 import { readArtifact, changeArtifact } from "./artifacts.js";
 import { getChartLayouts, changeChartLayout } from "./charts.js";
 function invoke(fn: unknown, runtime: AppRuntime, input?: unknown) {
@@ -74,6 +74,26 @@ describe("throwing domain server functions", () => {
     expect(list).toHaveBeenCalledWith("owner", "agent");
     await expect(invoke(saveSubagentSection, app, { agentId: "agent", id: "worker", section: "enabled", settings: { enabled: false } })).rejects.toMatchObject({ message: "Stop the active assignment first", status: 409 });
     expect(updateSection).toHaveBeenCalledWith("owner", "agent", "worker", "enabled", { enabled: false });
+  });
+  it("authenticates run follow-ups, validates fields, and passes the owned run identity to the service", async () => {
+    const sendRunFollowup = vi.fn().mockResolvedValue(undefined);
+    const app = { ...runtime, agents: { subagents: { sendRunFollowup } } } as unknown as AppRuntime;
+    const input = { agentId: "agent", id: "worker", runId: "run", message: "Why did you skip BTC?", requestId: "request" };
+    await expect(invoke(sendSubagentRunFollowup, app, input)).resolves.toBeUndefined();
+    expect(sendRunFollowup).toHaveBeenCalledWith("owner", "agent", "worker", "run", input.message, "request");
+    for (const field of Object.keys(input)) expect(() => invoke(sendSubagentRunFollowup, app, { ...input, [field]: 123 })).toThrow("Invalid request");
+    sendRunFollowup.mockRejectedValueOnce(new AgentError("Assignment not found", 404));
+    await expect(invoke(sendSubagentRunFollowup, app, input)).rejects.toMatchObject({ status: 404 });
+    sendRunFollowup.mockRejectedValueOnce(new Error("private storage details"));
+    await expect(invoke(sendSubagentRunFollowup, app, input)).rejects.toMatchObject({ message: "Agent operation failed. Please try again.", status: 500 });
+    sendRunFollowup.mockClear();
+    for (const headers of [new Headers({ origin: "https://evil.example" }), new Headers()]) {
+      mocks.headers.mockReturnValue(headers);
+      await expect(invoke(sendSubagentRunFollowup, app, input)).rejects.toMatchObject({ status: 403 });
+    }
+    mocks.headers.mockReturnValue(new Headers({ origin: runtime.origin })); mocks.user.mockResolvedValue(null);
+    expect(isRedirect(await invoke(sendSubagentRunFollowup, app, input).catch((error: unknown) => error))).toBe(true);
+    expect(sendRunFollowup).not.toHaveBeenCalled();
   });
   it("checks artifact/chart ownership before reading or mutating their services", async () => {
     const owned = vi.fn().mockRejectedValue(new AgentError("Agent not found", 404));
