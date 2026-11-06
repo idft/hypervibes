@@ -80,6 +80,7 @@ describe("read-only main-DEX market snapshots", () => {
     registry.install(createHyperliquidExtension({
       marketSnapshot: snapshot,
       agentAccountStatus: async () => { throw new Error("No account access expected"); },
+      agentTradingCapacity: async () => { throw new Error("No account access expected"); },
     }, "owner", "agent", {} as OrderService));
     const models = createModels(), faux = fauxProvider(); models.setProvider(faux.provider);
     faux.setResponses([

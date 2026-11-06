@@ -6,6 +6,7 @@ import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { eq } from "drizzle-orm";
 import { HttpTransport } from "@nktkas/hyperliquid";
 import { loadAccountStatus } from "../hyperliquid/account-status.js";
+import { loadTradingCapacity } from "../hyperliquid/trading-capacity.js";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -196,7 +197,7 @@ describe("per-Agent durable execution", () => {
     const agent = await create();
     const harness = await opened.mock.results[0]!.value as Harness;
     const root = await harness.root(context);
-    const toolNames = ["get_account", "get_market_snapshot", "prepare_protected_entry", "prepare_position_protection", "get_protection_status", "submit_orders", "cancel_orders", "cancel_all_orders", "list_orders", "get_order", "get_order_request", "list_subagents", "delegate_subagent", "list_subagent_runs", "get_subagent_run", ...documentationToolNames, ...configurationToolNames, "send_notification", "record_trade_decision", "list_memories", "get_memory", "get_trading_context", "list_instruments", "get_chart_snapshot", "get_chart_layout", "edit_chart_annotations"];
+    const toolNames = ["get_account", "get_trading_capacity", "get_market_snapshot", "prepare_protected_entry", "prepare_position_protection", "get_protection_status", "submit_orders", "cancel_orders", "cancel_all_orders", "list_orders", "get_order", "get_order_request", "list_subagents", "delegate_subagent", "list_subagent_runs", "get_subagent_run", ...documentationToolNames, ...configurationToolNames, "send_notification", "record_trade_decision", "list_memories", "get_memory", "get_trading_context", "list_instruments", "get_chart_snapshot", "get_chart_layout", "edit_chart_annotations"];
     expect((await root.agent(context)).tools.map((tool) => tool.name)).toEqual(toolNames);
     await root.configure({ extensions: [], tools: [], instructions: "Trading and live exchange data are not configured." }, context);
     await runtime.close();
@@ -266,6 +267,35 @@ describe("per-Agent durable execution", () => {
     await runtime.agents.send("owner", one.id, "Try another account", randomUUID());
     await vi.waitFor(async () => expect((await runtime.agents.chat("owner", one.id)).messages.some((entry) => entry.text === "Invalid arguments rejected")).toBe(true));
     expect(status).toHaveBeenCalledTimes(2);
+  });
+
+  it("binds trading capacity to each Agent and rejects model-supplied accounts", async () => {
+    const one = await create(), two = await create("Second", randomUUID(), "other");
+    const unavailable = await loadTradingCapacity(new HttpTransport(), null, "ETH");
+    const capacity = vi.spyOn(runtime.hyperliquid, "agentTradingCapacity").mockImplementation(async (owner, id) => ({
+      ...unavailable, address: (await runtime.agents.owned(owner, id)).tradingAccountAddress,
+    }));
+    for (const [agent, owner] of [[one, "owner"], [two, "other"]] as const) {
+      faux.setResponses([
+        fauxAssistantMessage(fauxToolCall("get_trading_capacity", { instrument: "ETH" }), { stopReason: "toolUse" }),
+        (transcript) => {
+          const result = transcript.messages.filter((message) => message.role === "toolResult").at(-1);
+          expect(result).toMatchObject({ toolName: "get_trading_capacity", isError: false });
+          expect(JSON.stringify(result)).toContain(agent.tradingAccountAddress);
+          return fauxAssistantMessage("Capacity checked");
+        },
+      ]);
+      await runtime.agents.send(owner, agent.id, "Check ETH capacity", randomUUID());
+      await vi.waitFor(async () => expect((await runtime.agents.chat(owner, agent.id)).messages.some((entry) => entry.text === "Capacity checked")).toBe(true));
+      expect(capacity).toHaveBeenLastCalledWith(owner, agent.id, "ETH", expect.any(AbortSignal));
+    }
+    faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("get_trading_capacity", { instrument: "ETH", address: two.tradingAccountAddress }), { stopReason: "toolUse" }),
+      fauxAssistantMessage("Foreign account rejected"),
+    ]);
+    await runtime.agents.send("owner", one.id, "Try another account", randomUUID());
+    await vi.waitFor(async () => expect((await runtime.agents.chat("owner", one.id)).messages.some((entry) => entry.text === "Foreign account rejected")).toBe(true));
+    expect(capacity).toHaveBeenCalledTimes(2);
   });
 
   it("deduplicates concurrent creation and rejects reuse with a different name", async () => {

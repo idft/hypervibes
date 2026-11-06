@@ -139,19 +139,25 @@ describe("Hyperliquid account service", () => {
     await expect(runtime.hyperliquid.agentDashboard(user.id, randomUUID())).rejects.toMatchObject({ status: 404 });
     await expect(runtime.hyperliquid.agentAccountStatus("someone-else", agent.id)).rejects.toMatchObject({ status: 404 });
     await expect(runtime.hyperliquid.agentAccountStatus(user.id, randomUUID())).rejects.toMatchObject({ status: 404 });
+    await expect(runtime.hyperliquid.agentTradingCapacity("someone-else", agent.id, "ETH")).rejects.toMatchObject({ status: 404 });
+    await expect(runtime.hyperliquid.agentTradingCapacity(user.id, randomUUID(), "ETH")).rejects.toMatchObject({ status: 404 });
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("shares the dashboard feed with the Agent account tool and isolates assigned accounts", async () => {
+  it("keeps account-wide reads separate from the dashboard feed and isolates assigned accounts", async () => {
     const address = `0x${"ab".repeat(20)}`;
     const other = `0x${"cd".repeat(20)}`;
     const one = await runtime.agents.create(user.id, "First", randomUUID(), address);
     const two = await runtime.agents.create(user.id, "Second", randomUUID(), other);
     const fetcher = vi.fn(async (_input: unknown, init: RequestInit) => {
       const { type, user: account } = JSON.parse(String(init.body)) as { type: string; user: string };
-      if (type === "clearinghouseState") return Response.json({ marginSummary: { accountValue: account === address ? "10.123" : "20" }, assetPositions: [] });
-      if (type === "spotClearinghouseState") return Response.json({ balances: [{ coin: "USDC", total: account === address ? "150" : "250", hold: "5" }] });
+      if (type === "clearinghouseState") {
+        const summary = { accountValue: account === address ? "10.123" : "20", totalNtlPos: "0", totalRawUsd: "0", totalMarginUsed: "0" };
+        return Response.json({ marginSummary: summary, crossMarginSummary: summary, crossMaintenanceMarginUsed: "0", withdrawable: "0", time: Date.now(), assetPositions: [] });
+      }
+      if (type === "spotClearinghouseState") return Response.json({ balances: [{ coin: "USDC", token: 0, total: account === address ? "150" : "250", hold: "5", entryNtl: "0" }] });
       if (type === "userAbstraction") return Response.json("unifiedAccount");
+      if (type === "perpDexs") return Response.json([null]);
       return Response.json([]);
     });
     vi.stubGlobal("fetch", fetcher);
@@ -161,11 +167,41 @@ describe("Hyperliquid account service", () => {
     await vi.waitFor(async () => expect((await runtime.hyperliquid.agentDashboard(user.id, one.id)).live?.sections.orders.fresh).toBe(true));
     await vi.waitFor(async () => expect((await runtime.hyperliquid.agentDashboard(user.id, two.id)).live?.sections.orders.fresh).toBe(true));
     fetcher.mockClear();
-    expect(await runtime.hyperliquid.agentAccountStatus(user.id, one.id)).toMatchObject({ address, perpEquity: "10.123", spotUsdc: "150", spotUsdcHold: "5", accountAbstraction: "unifiedAccount", sections: { perps: { source: "live", fresh: true }, spot: { source: "live", fresh: true } } });
+    expect(await runtime.hyperliquid.agentAccountStatus(user.id, one.id)).toMatchObject({ address, perpEquity: "10.123", spotUsdc: "150", spotUsdcHold: "5", accountAbstraction: "unifiedAccount", coverage: { complete: true, perpDexs: [""] }, sections: { perps: { source: "http", fresh: true }, spot: { source: "http", fresh: true } } });
     expect(await runtime.hyperliquid.agentAccountStatus(user.id, two.id)).toMatchObject({ address: other, perpEquity: "20", spotUsdc: "250" });
     expect(feedEvents.size).toBe(2);
-    expect(fetcher).toHaveBeenCalledTimes(2);
-    for (const [, init] of fetcher.mock.calls) expect(JSON.parse(String(init.body)).type).toBe("userAbstraction");
+    expect(fetcher).toHaveBeenCalledTimes(10);
+    const reads = fetcher.mock.calls.map(([, init]) => JSON.parse(String(init.body)) as { type: string; user?: string });
+    expect(reads.filter((body) => body.type === "perpDexs")).toHaveLength(2);
+    expect(reads.filter((body) => body.user === address)).toHaveLength(4);
+    expect(reads.filter((body) => body.user === other)).toHaveLength(4);
+  });
+
+  it("reads capacity only for the assigned account without signing authority", async () => {
+    const address = `0x${"ab".repeat(20)}`, other = `0x${"cd".repeat(20)}`;
+    const one = await runtime.agents.create(user.id, "First", randomUUID(), address);
+    const two = await runtime.agents.create(user.id, "Second", randomUUID(), other);
+    const authority = vi.spyOn(runtime.hyperliquid, "orderAuthority");
+    const fetcher = vi.fn(async (_input: unknown, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as { type: string; user?: string; coin?: string };
+      if (body.type === "meta") return Response.json({ universe: [{ name: "ETH" }] });
+      if (body.type === "userAbstraction") return Response.json("unifiedAccount");
+      if (body.type === "activeAssetData") return Response.json({
+        user: body.user, coin: body.coin, leverage: { type: "cross", value: 3 },
+        maxTradeSzs: ["0.123456789", "0.2"], availableToTrade: ["100", "99"], markPx: "2318.2",
+      });
+      throw new Error("Unexpected exchange access");
+    });
+    vi.stubGlobal("fetch", fetcher);
+    for (const [agent, account] of [[one, address], [two, other]] as const) {
+      const result = await runtime.hyperliquid.agentTradingCapacity(user.id, agent.id, "ETH");
+      expect(result).toMatchObject({ address: account, instrument: "ETH", accountAbstraction: "unifiedAccount", activeAssetData: { user: account, maxTradeSzs: ["0.123456789", "0.2"] } });
+    }
+    expect(authority).not.toHaveBeenCalled();
+    expect(fetcher).toHaveBeenCalledTimes(6);
+    await runtime.hyperliquid.close();
+    await expect(runtime.hyperliquid.agentTradingCapacity(user.id, one.id, "ETH")).rejects.toMatchObject({ status: 503 });
+    expect(fetcher).toHaveBeenCalledTimes(6);
   });
 
   async function signingFixture() {

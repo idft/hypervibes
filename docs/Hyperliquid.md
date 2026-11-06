@@ -43,6 +43,18 @@ Each account can belong to only one app agent at a time. Use Hyperliquid to
 manage deposits and transfers. The agent order tools trade main-DEX perpetuals;
 they do not provide general spot trading or fund transfers.
 
+## Account and capacity tools
+
+`get_account` reads balances, holds, and positions and open orders across
+discovered perpetual DEXs and spot. Check its coverage and freshness: a partial
+response does not prove that the account has no exposure. Equity is reported as
+unknown when the account-mode accounting cannot be verified.
+
+Select `get_trading_capacity` in a worker's tools to let it check exchange capacity
+for a specific main-DEX perpetual. Buy/sell capacity is not a maximum new-position
+size, a recommendation, or an acceptance guarantee. Unknown values must not be
+used for sizing. Risk limits still apply.
+
 ## Stopping activity and closing positions
 
 [Emergency stop](Agents.md#emergency-stop-and-re-enable) disables the app agent

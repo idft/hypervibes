@@ -5,6 +5,7 @@ import type { TradingAuthority } from "./orders/order-service.js";
 import { hvWalletAddresses } from "../db/auth-schema.js";
 import { HttpTransport, InfoClient } from "@nktkas/hyperliquid";
 import { loadAccountStatus } from "./account-status.js";
+import { loadTradingCapacity } from "./trading-capacity.js";
 import type { JournalService } from "./journal-service.js";
 import type { ChartFillRange } from "../charts/trading-contracts.js";
 import { loadAgentDashboard, type AgentDashboard } from "./agent-dashboard.js";
@@ -225,8 +226,14 @@ export class HyperliquidService {
   async agentAccountStatus(userId: string, id: string, signal?: AbortSignal) {
     if (this.stopped) throw new HyperliquidError("Hyperliquid service is closed", 503);
     const address = await this.dashboardAccount(userId, id);
-    const cached = this.started && address ? this.live.snapshot(address) : undefined;
-    return loadAccountStatus(this.transport, address, cached, signal);
+    return loadAccountStatus(this.transport, address, signal);
+  }
+
+  /** Read-only capacity for the host-resolved account; no signer or trading authority. */
+  async agentTradingCapacity(userId: string, id: string, instrument: string, signal?: AbortSignal) {
+    if (this.stopped) throw new HyperliquidError("Hyperliquid service is closed", 503);
+    const address = await this.dashboardAccount(userId, id);
+    return loadTradingCapacity(this.transport, address, instrument, signal);
   }
 
   async agentDashboard(userId: string, id: string) {

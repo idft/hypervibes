@@ -19,7 +19,7 @@ describe("Durable order tool contracts for nested/code-mode calls", () => {
     const list = vi.fn(async () => ({ items: [], source: "open", observedAt: 1, nextOffset: null, coverage: "current snapshot" }));
     const service = { submit, list, executionHandle: async () => undefined } as unknown as OrderService;
     const registry = createRegistry();
-    registry.install(createHyperliquidExtension({ agentAccountStatus: async () => loadAccountStatus(new HttpTransport(), null), marketSnapshot: async () => { throw new Error("Not used in order tests"); } }, "owner", "agent", service));
+    registry.install(createHyperliquidExtension({ agentTradingCapacity: async () => { throw new Error("Not used in order tests"); }, agentAccountStatus: async () => loadAccountStatus(new HttpTransport(), null), marketSnapshot: async () => { throw new Error("Not used in order tests"); } }, "owner", "agent", service));
     const results: NestedToolExecutionResult[] = [];
     registry.install(defineExtension({ name: "program", tools: [defineTool({
       name: "program", parameters: Type.Object({}), description: "Programmatic tool caller, like code mode", replay: "safe",
@@ -46,7 +46,7 @@ describe("Durable order tool contracts for nested/code-mode calls", () => {
       expect(results[1]!.taskId).toBe(results[0]!.taskId);
       expect(results[2]).toMatchObject({ isError: false, structuredOutput: { items: [], source: "open" } });
       expect(results[3]!.isError).toBe(true);
-      expect(results[4]).toMatchObject({ isError: false, structuredOutput: { address: null, spotUsdc: null, sections: { spot: { fresh: false } } } });
+      expect(results[4], JSON.stringify(results[4])).toMatchObject({ isError: false, structuredOutput: { address: null, spotUsdc: null, sections: { spot: { fresh: false } } } });
       expect(results[5]!.isError).toBe(true);
       expect(JSON.stringify(results[5])).toContain('entry_style must be \\"guarded_ioc\\" or \\"limit\\"');
       expect(JSON.stringify(results[5])).toContain('not \\"market\\"');

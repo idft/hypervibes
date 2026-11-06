@@ -7,7 +7,7 @@ import { AgentError, agentName, chatMessage } from "./agent-input.js";
 
 import { candleIntervals } from "./candle-intervals.js";
 export { candleIntervals } from "./candle-intervals.js";
-export const accountToolNames = ["get_account", "prepare_protected_entry", "prepare_position_protection", "get_protection_status", "list_orders", "get_order", "get_order_request", "submit_orders", "cancel_orders", "cancel_all_orders"] as const;
+export const accountToolNames = ["get_account", "get_trading_capacity", "prepare_protected_entry", "prepare_position_protection", "get_protection_status", "list_orders", "get_order", "get_order_request", "submit_orders", "cancel_orders", "cancel_all_orders"] as const;
 export const hyperliquidToolNames = [...accountToolNames, "list_instruments", "get_market_snapshot"] as const;
 export const researchToolNames = ["codemode", "research_candles", "research_journal", "artifact_create", "artifact_list", "artifact_read", "artifact_retention", "artifact_delete"] as const;
 export const indicatorReadToolNames = ["indicator_list", "indicator_get", "indicator_run"] as const;
